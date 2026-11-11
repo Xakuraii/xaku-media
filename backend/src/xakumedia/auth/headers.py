@@ -7,6 +7,24 @@ DEFAULT_USER_AGENT = (
     "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 )
 
+# Some hosts reject browser-spoofing user agents (e.g. Wikimedia's upload CDN)
+# while others reject unknown ones. The browser UA is tried first, then this
+# honest identifier, so downloads work on both kinds of servers.
+IDENTIFYING_USER_AGENT = (
+    "XakuMedia/0.1.0 (media downloader; +https://github.com/xakuraii/xakumedia)"
+)
+
+
+def alternate_user_agent(current: str | None) -> str | None:
+    """Return the other built-in user agent, or None when a custom UA is set."""
+    if not current:
+        return None
+    if current == DEFAULT_USER_AGENT:
+        return IDENTIFYING_USER_AGENT
+    if current == IDENTIFYING_USER_AGENT:
+        return DEFAULT_USER_AGENT
+    return None
+
 DEFAULT_REQUEST_HEADERS = {
     "User-Agent": DEFAULT_USER_AGENT,
     "Accept": "*/*",

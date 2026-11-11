@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from xakumedia.core.config import default_config
+from xakumedia.core.config import AppConfig, default_config
 from xakumedia.db.repository import MediaRepository
 from xakumedia.models.quality import ImageFormat, VideoContainer, VideoResolution
 from xakumedia.server.dispatcher import RpcDispatcher
@@ -21,6 +21,18 @@ def temp_db(tmp_path: Path) -> Path:
 def repo(temp_db: Path) -> MediaRepository:
     """Instantiate MediaRepository against an isolated temporary database."""
     return MediaRepository(temp_db)
+
+
+@pytest.fixture(autouse=True)
+def reset_runtime_config() -> None:
+    """Isolate tests from preferences persisted in the user's real database.
+
+    Importing the repository module applies saved user preferences to the global
+    ``default_config``, so reset it to the documented defaults for each test.
+    """
+    defaults = AppConfig()
+    for field_name in AppConfig.model_fields:
+        setattr(default_config, field_name, getattr(defaults, field_name))
 
 
 def test_default_preferences(repo: MediaRepository) -> None:

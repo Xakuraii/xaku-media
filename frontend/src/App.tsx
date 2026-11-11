@@ -311,10 +311,20 @@ export const App: React.FC = () => {
     if (!deleteConfirm.mediaItem) return;
     setDeleteConfirm((prev) => ({ ...prev, loading: true }));
     const itemId = deleteConfirm.mediaItem.id;
+    const matchingTask = downloadTasks.find(
+      (t) => t.id === itemId || t.media_item?.id === itemId
+    );
     try {
-      if (window.api?.deleteDownloadedMedia) {
-        await window.api.deleteDownloadedMedia(itemId, deleteConfirm.deleteDiskFile);
-      } else if (window.api?.deleteMediaItem) {
+      // The task-scoped delete is the only way to remove the downloaded file,
+      // but it fails for library-only items. Run it only when a task exists,
+      // then always drop the media row so the card disappears from the library.
+      if (matchingTask && window.api?.deleteDownloadedMedia) {
+        await window.api.deleteDownloadedMedia(
+          matchingTask.id,
+          deleteConfirm.deleteDiskFile
+        );
+      }
+      if (window.api?.deleteMediaItem) {
         await window.api.deleteMediaItem(itemId);
       }
       setBookmarkedIds((prev) => {
@@ -1125,25 +1135,19 @@ export const App: React.FC = () => {
                   <div className="flex flex-wrap gap-2 text-xs font-mono">
                     <button
                       type="button"
-                      onClick={() =>
-                        setUrlInput(
-                          "https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=800&q=80"
-                        )
-                      }
+                      onClick={() => setUrlInput("https://picsum.photos/800/600")}
                       className="px-2.5 py-1 bg-brand-black/60 hover:bg-brand-dark border border-brand-dark rounded text-neutral-300 hover:text-white transition-colors"
                     >
-                      Direct Image (Unsplash JPG)
+                      Direct Image (Picsum JPG)
                     </button>
                     <button
                       type="button"
                       onClick={() =>
-                        setUrlInput(
-                          "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
-                        )
+                        setUrlInput("https://www.w3schools.com/html/mov_bbb.mp4")
                       }
                       className="px-2.5 py-1 bg-brand-black/60 hover:bg-brand-dark border border-brand-dark rounded text-neutral-300 hover:text-white transition-colors"
                     >
-                      Direct Video (Google Cloud MP4)
+                      Direct Video (MP4)
                     </button>
                     <button
                       type="button"
@@ -1157,11 +1161,11 @@ export const App: React.FC = () => {
                     <button
                       type="button"
                       onClick={() =>
-                        setUrlInput("https://www.artstation.com/artwork/sample")
+                        setUrlInput("https://commons.wikimedia.org/wiki/Category:Cats")
                       }
                       className="px-2.5 py-1 bg-brand-black/60 hover:bg-brand-dark border border-brand-dark rounded text-neutral-300 hover:text-white transition-colors"
                     >
-                      Gallery Album (ArtStation gallery-dl)
+                      Gallery Album (Wikimedia Category)
                     </button>
                     <button
                       type="button"
@@ -2003,8 +2007,8 @@ export const App: React.FC = () => {
             </div>
           )}
 
-          {/* Media Library & Saved Sources View */}
-          {(activeTab === "library" || activeTab === "saved") && (
+          {/* Media Library & Bookmark View */}
+          {activeTab === "library" && (
             <div className="max-w-4xl mx-auto space-y-6">
               <div className="flex items-center justify-between">
                 <div>
@@ -2628,14 +2632,14 @@ export const App: React.FC = () => {
                             <div className="flex items-center space-x-3 min-w-0">
                               {/* Media Thumbnail */}
                               <div className="w-14 h-14 rounded-lg bg-brand-black/90 border border-brand-dark overflow-hidden flex items-center justify-center shrink-0">
-                                {task.media_item.thumbnail_url ? (
+                                {task.media_item?.thumbnail_url ? (
                                   <img
                                     src={task.media_item.thumbnail_url}
                                     alt={task.media_item.title || "Download"}
                                     loading="lazy"
                                     className="w-full h-full object-cover"
                                   />
-                                ) : task.media_item.media_type === "video" ? (
+                                ) : task.media_item?.media_type === "video" ? (
                                   <Film className="h-6 w-6 text-purple-400" />
                                 ) : (
                                   <ImageIcon className="h-6 w-6 text-emerald-400" />
@@ -2646,12 +2650,13 @@ export const App: React.FC = () => {
                               <div className="space-y-0.5 min-w-0">
                                 <div className="flex items-center space-x-2">
                                   <span className="font-semibold text-sm text-brand-white truncate max-w-md font-sans">
-                                    {task.media_item.title || "Untitled Media"}
+                                    {task.media_item?.title || "Untitled Media"}
                                   </span>
                                   <span className="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-brand-black/80 border border-brand-dark text-neutral-300 shrink-0">
                                     {task.selected_format?.container ||
-                                      task.media_item.available_formats[0]?.container ||
-                                      task.media_item.media_type}
+                                      task.media_item?.available_formats?.[0]?.container ||
+                                      task.media_item?.media_type ||
+                                      "file"}
                                   </span>
                                   {task.selected_format?.resolution && (
                                     <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-purple-950/60 border border-purple-800/40 text-purple-300 shrink-0">
@@ -2660,10 +2665,10 @@ export const App: React.FC = () => {
                                   )}
                                 </div>
                                 <div className="flex items-center space-x-3 text-xs font-mono text-neutral-400">
-                                  <span>Author: {task.media_item.author || "Unknown"}</span>
+                                  <span>Author: {task.media_item?.author || "Unknown"}</span>
                                   <span>·</span>
                                   <span className="truncate max-w-xs">
-                                    {task.media_item.original_url}
+                                    {task.media_item?.original_url}
                                   </span>
                                 </div>
                               </div>
@@ -2749,7 +2754,7 @@ export const App: React.FC = () => {
                                   </button>
                                 </div>
                               )}
-                              {isCompleted && task.destination_path && (
+                              {isCompleted && task.destination_path && task.media_item && (
                                 <div className="flex items-center space-x-1.5">
                                   <button
                                     onClick={() =>
@@ -3249,7 +3254,7 @@ export const App: React.FC = () => {
                       src={
                         previewModal.localPath && window.api?.toMediaLoaderUrl
                           ? window.api.toMediaLoaderUrl(previewModal.localPath)
-                          : previewModal.mediaItem.available_formats.find((f) => f.url)?.url ||
+                          : previewModal.mediaItem.available_formats?.find((f) => f.url)?.url ||
                             previewModal.mediaItem.original_url
                       }
                       className="w-full max-h-[62vh] rounded-xl bg-black object-contain shadow-2xl"

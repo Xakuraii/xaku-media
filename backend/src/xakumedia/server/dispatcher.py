@@ -113,21 +113,32 @@ class RpcDispatcher:
             import gallery_dl.extractor as gdl_extractor
 
             from ..db import default_repository
-            from ..exceptions.base import UnsupportedSourceError
+            from ..exceptions.base import (
+                MediaUnavailableError,
+                NetworkTimeoutError,
+                UnsupportedSourceError,
+            )
             from ..extractors.gallery import extract_gallery_info
             from ..extractors.video import extract_video_info
             from ..scanners.direct import classify_direct_url
 
             classified = None
             media_items = []
+            direct_error: Exception | None = None
 
-            # 1. First probe whether the URL is a direct media file (fast HEAD/Range GET)
+            # 1. First probe whether the URL is a direct media file (fast HEAD/Range GET).
+            # A failed probe (403/404/timeout) must not abort classification: many
+            # gallery/video sites reject HEAD or bot-style probes while gallery-dl
+            # or yt-dlp can still extract their media, so remember the error and
+            # let the fallbacks below run.
             try:
                 classified, direct_item = classify_direct_url(url)
                 if direct_item is not None:
                     media_items = [direct_item]
             except UnsupportedSourceError:
                 pass
+            except (MediaUnavailableError, NetworkTimeoutError) as exc:
+                direct_error = exc
 
             # 2. Check if a gallery-dl extractor recognizes the URL
             if not media_items:
@@ -139,9 +150,19 @@ class RpcDispatcher:
 
             # 3. If not a gallery, attempt platform video extraction via yt-dlp
             if not media_items:
-                classified, video_item = extract_video_info(url)
-                if video_item is not None:
-                    media_items = [video_item]
+                try:
+                    classified, video_item = extract_video_info(url)
+                    if video_item is not None:
+                        media_items = [video_item]
+                except UnsupportedSourceError:
+                    if direct_error is not None:
+                        raise direct_error
+                    raise
+
+            # If no provider produced media, surface the direct-probe failure
+            # (e.g. "HTTP 404") instead of a generic unsupported-source error.
+            if not media_items and direct_error is not None:
+                raise direct_error
 
             # Automatically persist scan event in SQLite database
             scan_id = None

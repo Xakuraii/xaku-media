@@ -7,7 +7,11 @@ from gallery_dl import extractor as gdl_extractor
 from ..core.logging import get_logger
 from ..db import default_repository
 from ..db.repository import MediaRepository
-from ..exceptions.base import UnsupportedSourceError
+from ..exceptions.base import (
+    MediaUnavailableError,
+    NetworkTimeoutError,
+    UnsupportedSourceError,
+)
 from ..extractors.gallery import extract_gallery_info
 from ..extractors.video import extract_video_info
 from ..models.media import MediaItem
@@ -23,12 +27,14 @@ def scan_source_url(url: str) -> tuple[ClassifiedUrl | None, list[MediaItem]]:
     classified: ClassifiedUrl | None = None
     media_items: list[MediaItem] = []
 
-    # 1. Probe for direct media URL
+    # 1. Probe for direct media URL. A failed probe must not abort the rescan:
+    # gallery/video sites often reject HEAD probes while gallery-dl or yt-dlp
+    # can still extract their media.
     try:
         classified, direct_item = classify_direct_url(url)
         if direct_item is not None:
             media_items = [direct_item]
-    except UnsupportedSourceError:
+    except (UnsupportedSourceError, MediaUnavailableError, NetworkTimeoutError):
         pass
 
     # 2. Check gallery-dl extractor

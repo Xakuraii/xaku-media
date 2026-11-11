@@ -116,16 +116,20 @@ function registerIpcHandlers(): void {
     return pythonBridge.getStatus();
   });
 
+  // Extraction calls hit remote sites through gallery-dl/yt-dlp and a page with
+  // many items can legitimately take longer than the 15s request default.
+  const EXTRACTION_TIMEOUT_MS = 120000;
+
   ipcMain.handle("python:classifyUrl", async (_event, url: string) => {
-    return pythonBridge.sendRequest("classify_url", { url });
+    return pythonBridge.sendRequest("classify_url", { url }, EXTRACTION_TIMEOUT_MS);
   });
 
   ipcMain.handle("python:extractVideo", async (_event, url: string) => {
-    return pythonBridge.sendRequest("extract_video", { url });
+    return pythonBridge.sendRequest("extract_video", { url }, EXTRACTION_TIMEOUT_MS);
   });
 
   ipcMain.handle("python:extractGallery", async (_event, url: string) => {
-    return pythonBridge.sendRequest("extract_gallery", { url });
+    return pythonBridge.sendRequest("extract_gallery", { url }, EXTRACTION_TIMEOUT_MS);
   });
 
   // Local SQLite Media Library & Scan History IPC Handlers
@@ -474,11 +478,15 @@ function registerIpcHandlers(): void {
   });
 
   ipcMain.handle("python:rescanSource", async (_event, sourceId: string) => {
-    return pythonBridge.sendRequest("rescan_source", { source_id: sourceId });
+    return pythonBridge.sendRequest("rescan_source", { source_id: sourceId }, EXTRACTION_TIMEOUT_MS);
   });
 
   ipcMain.handle("python:rescanAllSources", async (_event, tag?: string) => {
-    return pythonBridge.sendRequest("rescan_all_sources", tag ? { tag } : {});
+    return pythonBridge.sendRequest(
+      "rescan_all_sources",
+      tag ? { tag } : {},
+      EXTRACTION_TIMEOUT_MS
+    );
   });
 }
 

@@ -6,6 +6,7 @@ from urllib.parse import unquote, urlsplit
 
 import httpx
 
+from ..auth.headers import DEFAULT_USER_AGENT, alternate_user_agent
 from ..core.logging import get_logger
 from ..exceptions.base import (
     MediaUnavailableError,
@@ -44,12 +45,6 @@ VIDEO_MIME_TYPES: dict[str, str] = {
 IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "gif", "avif", "bmp", "tiff", "svg"}
 VIDEO_EXTENSIONS = {"mp4", "webm", "mov", "mkv", "avi", "ogg", "m4v", "ts"}
 
-DEFAULT_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/131.0.0.0 Safari/537.36"
-)
-
 FILENAME_DISPOSITION_PATTERN = re.compile(
     r"""filename\*?=(?:UTF-8''|")?([^";\r\n]+)(?:")?""", re.IGNORECASE
 )
@@ -87,6 +82,7 @@ def probe_direct_url(
     """
     safe_url = validate_url_security(url)
     headers = {"User-Agent": DEFAULT_USER_AGENT, "Accept": "*/*"}
+    alternate = alternate_user_agent(DEFAULT_USER_AGENT)
 
     should_close = False
     if client is None:
@@ -97,12 +93,34 @@ def probe_direct_url(
         # First attempt: HTTP HEAD probe
         response = client.head(safe_url, headers=headers)
 
+        # Some hosts block the browser-spoofing UA but accept a descriptive one.
+        if response.status_code in (401, 403) and alternate:
+            logger.debug(
+                f"HEAD returned {response.status_code}, retrying with alternate UA: {url}"
+            )
+            response = client.head(safe_url, headers={**headers, "User-Agent": alternate})
+
         # Fallback to Range GET if HEAD is rejected (common on CDNs / static servers)
         if response.status_code in (403, 405) or response.status_code >= 500:
             logger.debug(f"HEAD returned {response.status_code}, falling back to Range GET: {url}")
-            range_headers = {**headers, "Range": "bytes=0-1024"}
-            with client.stream("GET", safe_url, headers=range_headers) as stream_resp:
-                return stream_resp.headers, stream_resp.status_code, str(stream_resp.url)
+            ua_candidates = [DEFAULT_USER_AGENT] + ([alternate] if alternate else [])
+            last_result: tuple[httpx.Headers, int, str] | None = None
+            for ua in ua_candidates:
+                range_headers = {
+                    "User-Agent": ua,
+                    "Accept": "*/*",
+                    "Range": "bytes=0-1024",
+                }
+                with client.stream("GET", safe_url, headers=range_headers) as stream_resp:
+                    last_result = (
+                        stream_resp.headers,
+                        stream_resp.status_code,
+                        str(stream_resp.url),
+                    )
+                if last_result[1] not in (401, 403):
+                    break
+            if last_result is not None:
+                return last_result
 
         return response.headers, response.status_code, str(response.url)
 
@@ -121,6 +139,23 @@ def probe_direct_url(
     finally:
         if should_close:
             client.close()
+
+
+def _total_size_from_headers(headers: httpx.Headers) -> int | None:
+    """Return the full media size, accounting for partial (Range) responses.
+
+    A 206 response reports the size of the requested byte range in
+    Content-Length; Content-Range carries the real total ("bytes 0-1024/53596").
+    """
+    content_range = headers.get("content-range", "")
+    if "/" in content_range:
+        total = content_range.rsplit("/", 1)[-1].strip()
+        if total.isdigit():
+            return int(total)
+    content_length = headers.get("content-length")
+    if content_length and content_length.isdigit():
+        return int(content_length)
+    return None
 
 
 def classify_direct_url(
@@ -186,12 +221,7 @@ def classify_direct_url(
     parsed = urlsplit(final_url)
     domain = parsed.netloc
 
-    content_length_str = headers.get("content-length")
-    content_length = (
-        int(content_length_str)
-        if content_length_str and content_length_str.isdigit()
-        else None
-    )
+    content_length = _total_size_from_headers(headers)
 
     filename = extract_filename_from_headers(headers, final_url) or f"media.{extension}"
     title = filename.rsplit(".", 1)[0]

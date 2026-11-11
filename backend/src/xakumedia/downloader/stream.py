@@ -4,11 +4,13 @@ import os
 import shutil
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import httpx
 
+from ..auth.headers import alternate_user_agent
 from ..core.config import default_config
 from ..core.logging import get_logger
 from ..exceptions.base import (
@@ -27,6 +29,31 @@ from ..utils.security import validate_url_security
 from .throttler import BandwidthThrottler
 
 logger = get_logger("downloader.stream")
+
+
+@contextmanager
+def _open_media_stream(
+    client: httpx.Client, url: str, headers: dict[str, str]
+) -> Iterator[httpx.Response]:
+    """Open a GET stream, retrying once with an alternate UA when blocked (403).
+
+    A number of hosts (e.g. Wikimedia's upload CDN) deny browser-spoofing UAs
+    while accepting a descriptive one, so keep the request headers intact and
+    only swap the User-Agent.
+    """
+    with client.stream("GET", url) as response:
+        alternate = alternate_user_agent(headers.get("User-Agent"))
+        if response.status_code != 403 or alternate is None:
+            yield response
+            return
+
+        logger.info(
+            f"HTTP 403 with default user agent, retrying with alternate UA: {url}"
+        )
+        response.read()
+        retry_headers = {**headers, "User-Agent": alternate}
+        with client.stream("GET", url, headers=retry_headers) as retry:
+            yield retry
 
 CHUNK_SIZE = 64 * 1024  # 64 KB streaming buffer
 PROGRESS_EMIT_INTERVAL = 0.15  # Emit progress update every 150ms
@@ -121,7 +148,7 @@ def download_stream(
             headers=req_headers,
             cookies=req_cookies,
         ) as client:
-            with client.stream("GET", url) as response:
+            with _open_media_stream(client, url, req_headers) as response:
                 if response.status_code in (401, 403):
                     raise PrivateMediaError(
                         f"Access denied ({response.status_code}): {response.reason_phrase}"

@@ -131,10 +131,12 @@ const api: DesktopApi = {
   onDownloadCompleted: (
     callback: (task: DownloadTaskRecord) => void
   ): (() => void) => {
+    // The engine wraps completion events as { task: {...} }; unwrap so callers
+    // always receive a full task record (id, media_item, destination_path).
     const handler = (
       _event: Electron.IpcRendererEvent,
-      data: DownloadTaskRecord
-    ) => callback(data);
+      data: { task?: DownloadTaskRecord } | DownloadTaskRecord
+    ) => callback((data as { task?: DownloadTaskRecord }).task ?? (data as DownloadTaskRecord));
     ipcRenderer.on("download:completed", handler);
     return () => {
       ipcRenderer.removeListener("download:completed", handler);
