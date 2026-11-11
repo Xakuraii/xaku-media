@@ -103,3 +103,7 @@ Desktop.ini
 # Local environment and machine-specific configuration
 .python-version.local
 .npmrc.local
+
+# Generated architecture analysis
+.archify/
+graphify-out/
