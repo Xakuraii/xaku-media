@@ -24,7 +24,7 @@ export const Navbar: React.FC = () => {
         <a href="#" className="flex items-center space-x-2.5">
           <span className="grid place-items-center w-7 h-7 rounded-md bg-brand-white">
             <img
-              src="/XakuMedia.svg"
+              src="XakuMedia.svg"
               alt="XakuMedia logo"
               className="w-full h-full"
             />

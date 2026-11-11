@@ -97,6 +97,47 @@ function Test-HttpServer {
     return $false
 }
 
+# Check whether a TCP port is currently listening
+function Test-PortListening {
+    param([int]$PortNumber)
+    try {
+        return ($null -ne (Get-NetTCPConnection -LocalPort $PortNumber -State Listen -ErrorAction SilentlyContinue))
+    } catch {
+        return $false
+    }
+}
+
+# Free the Vite port before starting a new dev server. A stale Vite process
+# from a previous run makes the new server exit on EADDRINUSE (strictPort),
+# while the readiness check below still passes against the OLD server -
+# leaving the Electron window blank.
+function Clear-VitePort {
+    param([int]$PortNumber)
+    if (-not (Test-PortListening $PortNumber)) { return }
+
+    $owners = Get-NetTCPConnection -LocalPort $PortNumber -State Listen -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty OwningProcess -Unique
+    foreach ($ownerPid in $owners) {
+        $procInfo = Get-CimInstance Win32_Process -Filter "ProcessId=$ownerPid" -ErrorAction SilentlyContinue
+        if ($procInfo -and $procInfo.CommandLine -like "*vite*") {
+            Write-Host "[Launcher] Stopping stale Vite process (PID $ownerPid) holding port $PortNumber..." -ForegroundColor Yellow
+            Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
+        } else {
+            $procName = if ($procInfo) { $procInfo.Name } else { "unknown" }
+            Write-Host "[Launcher] ERROR: Port $PortNumber is already used by another program ('$procName', PID $ownerPid)." -ForegroundColor Red
+            Write-Host "         Close that program, or pick a different port:" -ForegroundColor Red
+            Write-Host "         .\scripts\run.ps1 -Port 5174" -ForegroundColor Red
+            exit 1
+        }
+    }
+
+    # Wait until the port is actually released
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    while ((Test-PortListening $PortNumber) -and ([DateTime]::UtcNow -lt $deadline)) {
+        Start-Sleep -Milliseconds 300
+    }
+}
+
 Write-Banner
 
 # -----------------------------------------------------------------------------
@@ -144,6 +185,8 @@ if ($Web) {
     Write-Host ""
     Write-Host "[Launcher] Starting Vite frontend server on port $Port..." -ForegroundColor Cyan
 
+    Clear-VitePort -PortNumber ([int]$Port)
+
     $ViteProcess = Start-Process -FilePath "npm.cmd" -ArgumentList "--prefix", "frontend", "run", "dev" -PassThru -NoNewWindow
     
     # Wait for server to become responsive
@@ -190,6 +233,7 @@ if ($LASTEXITCODE -ne 0) {
 
 # 2. Launch Vite Dev Server
 Write-Host "[2/3] Starting Vite frontend server..." -ForegroundColor Cyan
+Clear-VitePort -PortNumber ([int]$Port)
 $ViteProcess = Start-Process -FilePath "npm.cmd" -ArgumentList "--prefix", "frontend", "run", "dev" -PassThru -NoNewWindow
 
 # 3. Wait for Vite server to become responsive
@@ -197,7 +241,12 @@ Write-Host "[3/3] Waiting for local view ($LocalUrl) to be ready..." -Foreground
 $IsReady = Test-HttpServer -Url $LocalUrl -TimeoutSeconds 25
 
 if (-not $IsReady) {
-    Write-Host "[Launcher] Warning: Timed out waiting for Vite server at $LocalUrl. Proceeding anyway..." -ForegroundColor Yellow
+    Write-Host "[Launcher] Error: Vite dev server did not become ready at $LocalUrl within 25 seconds." -ForegroundColor Red
+    Write-Host "         The desktop window would stay blank without it, so the launcher is stopping." -ForegroundColor Red
+    if ($ViteProcess -and -not $ViteProcess.HasExited) {
+        Stop-Process -Id $ViteProcess.Id -Force -ErrorAction SilentlyContinue
+    }
+    exit 1
 } else {
     Write-Host "[Launcher] Local view is LIVE at $LocalUrl" -ForegroundColor Green
 }
@@ -216,6 +265,17 @@ Write-Host "  Local View URL: $LocalUrl" -ForegroundColor Green
 Write-Host "  Press Ctrl+C in this console to stop all processes and exit" -ForegroundColor Green
 Write-Host "==========================================================================" -ForegroundColor Green
 Write-Host ""
+
+# The desktop shell is single-instance: if an XakuMedia window is already
+# open, the Electron process below exits immediately (the app prints an
+# explanation) instead of opening a second window.
+$existingApp = Get-Process -Name "XakuMedia", "electron" -ErrorAction SilentlyContinue |
+    Where-Object { $_.MainWindowTitle -like "XakuMedia*" }
+if ($existingApp) {
+    Write-Host "[Launcher] NOTE: An XakuMedia window appears to already be open (PID $($existingApp[0].Id))." -ForegroundColor Yellow
+    Write-Host "        The desktop shell is single-instance; close that window first or this launch will exit." -ForegroundColor Yellow
+    Write-Host ""
+}
 
 $env:VITE_DEV_SERVER_URL = $LocalUrl
 

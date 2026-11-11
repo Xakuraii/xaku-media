@@ -39,6 +39,12 @@ pythonBridge.onNotification((method, params) => {
 // Enforce single instance lock
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
+  // Without this message a second launch exits silently, which looks like
+  // the app "shows nothing" while the first instance keeps the lock.
+  console.error(
+    "[desktop] Another XakuMedia instance is already running and holds the single-instance lock. " +
+      "Close the existing XakuMedia window (check the taskbar) and start again."
+  );
   app.quit();
 } else {
   app.on("second-instance", () => {
@@ -50,13 +56,22 @@ if (!gotTheLock) {
 }
 
 function setupSecurityHeaders(): void {
+  // Dev mode serves the renderer from the Vite dev server over http://, and
+  // Vite injects inline scripts there (the @vitejs/plugin-react Fast Refresh
+  // preamble and the pre-paint theme init). A strict "script-src 'self'"
+  // blocks those and leaves the dev window blank, so allow inline scripts
+  // only while developing; production keeps the strict policy.
+  const isDevMode = !app.isPackaged && Boolean(process.env.VITE_DEV_SERVER_URL);
+  const scriptSrcDirective = isDevMode
+    ? "script-src 'self' 'unsafe-inline'; "
+    : "script-src 'self'; ";
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({
       responseHeaders: {
         ...details.responseHeaders,
         "Content-Security-Policy": [
           "default-src 'self'; " +
-            "script-src 'self'; " +
+            scriptSrcDirective +
             "style-src 'self' 'unsafe-inline'; " +
             "img-src 'self' data: https: blob: media-loader:; " +
             "media-src 'self' data: https: blob: media-loader:; " +
@@ -508,6 +523,38 @@ function createWindow(): void {
     if (process.env.ELECTRON_SMOKE_TEST === "1" || process.argv.includes("--smoke-test")) {
       console.log("[smoke-test] Electron window painted and ready-to-show event fired!");
 
+      // Guard against a blank renderer: ready-to-show fires even when the
+      // page painted empty (e.g., bundle 404s under file:// after a base-path
+      // regression). Poll briefly until React mounts visible content.
+      try {
+        const startedAt = Date.now();
+        let rendererState = { rootChildren: 0, textLength: 0 };
+        for (;;) {
+          rendererState = await mainWindow.webContents.executeJavaScript(`(() => {
+            const root = document.getElementById("root");
+            return {
+              rootChildren: root ? root.childElementCount : -1,
+              textLength: document.body.innerText.trim().length,
+            };
+          })()`);
+          if (rendererState.rootChildren > 0 && rendererState.textLength > 20) break;
+          if (Date.now() - startedAt > 5000) break;
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+        if (rendererState.rootChildren <= 0 || rendererState.textLength <= 20) {
+          console.error(
+            `[smoke-test] FAILED: renderer is blank (rootChildren=${rendererState.rootChildren}, textLength=${rendererState.textLength})`
+          );
+          process.exit(1);
+        }
+        console.log(
+          `[smoke-test] Renderer content verified: rootChildren=${rendererState.rootChildren}, textLength=${rendererState.textLength}`
+        );
+      } catch (err) {
+        console.error("[smoke-test] FAILED: renderer content check errored:", err);
+        process.exit(1);
+      }
+
       // Verify Python bridge during smoke test
       const pyStatus = pythonBridge.getStatus();
       console.log(
@@ -627,6 +674,10 @@ function createWindow(): void {
         app.quit();
       }, 500);
     }
+  });
+
+  mainWindow.webContents.on("did-finish-load", () => {
+    console.log("[desktop] Renderer loaded successfully.");
   });
 
   mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription) => {

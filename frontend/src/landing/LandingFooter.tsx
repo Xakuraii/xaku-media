@@ -20,7 +20,7 @@ export const LandingFooter: React.FC = () => {
           <div className="space-y-2">
             <div className="flex items-center gap-2.5">
               <span className="grid place-items-center w-6 h-6 rounded-md bg-brand-white">
-                <img src="/XakuMedia.svg" alt="XakuMedia" className="w-full h-full" />
+                <img src="XakuMedia.svg" alt="XakuMedia" className="w-full h-full" />
               </span>
               <span className="font-display font-semibold text-ink text-sm tracking-tight">
                 XakuMedia

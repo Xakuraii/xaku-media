@@ -128,7 +128,7 @@ export const HeroSection: React.FC = () => {
             <div className="flex items-center justify-between pl-4 pr-3 h-11 bg-band border-b border-hairline">
               <div className="flex items-center gap-2 min-w-0">
                 <span className="grid place-items-center w-4 h-4 rounded-sm bg-brand-white">
-                  <img src="/XakuMedia.svg" alt="" className="w-full h-full" />
+                  <img src="XakuMedia.svg" alt="" className="w-full h-full" />
                 </span>
                 <span className="text-xs font-medium text-muted truncate">
                   XakuMedia — Desktop Media Downloader
