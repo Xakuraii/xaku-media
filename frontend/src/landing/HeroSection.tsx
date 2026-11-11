@@ -4,12 +4,33 @@ import {
   Package,
   ExternalLink,
   Search,
+  Film,
+  Image as ImageIcon,
+  Minus,
+  Square,
+  X,
+  Check,
 } from "lucide-react";
 import {
   RELEASE_CONFIG,
   checkGitHubReleaseStatus,
   GitHubReleaseStatus,
 } from "./downloadConfig";
+
+interface MockMediaItem {
+  name: string;
+  kind: "image" | "video";
+  spec: string;
+  selected: boolean;
+}
+
+/** Illustrative contents of the desktop app's scan results grid. */
+const MOCK_MEDIA: MockMediaItem[] = [
+  { name: "landscape_001.jpg", kind: "image", spec: "3840×2160", selected: true },
+  { name: "landscape_002.jpg", kind: "image", spec: "Original", selected: true },
+  { name: "sunset_clip.mp4", kind: "video", spec: "1080p60 · H.264", selected: true },
+  { name: "night_sky.mp4", kind: "video", spec: "4K · VP9", selected: false },
+];
 
 export const HeroSection: React.FC = () => {
   const [releaseStatus, setReleaseStatus] = useState<GitHubReleaseStatus>({
@@ -25,157 +46,223 @@ export const HeroSection: React.FC = () => {
   }, []);
 
   return (
-    <section id="download" className="relative pt-16 pb-20 overflow-hidden">
-      {/* Subtle ambient light */}
-      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-brand-red/10 blur-[130px] rounded-full pointer-events-none -z-10" />
+    <section id="download" className="relative overflow-hidden">
+      <div className="lc-container pt-14 pb-20 sm:pt-20 sm:pb-24">
+        {/* Intro block */}
+        <div className="max-w-3xl">
+          {/* Version line */}
+          <p className="flex items-center gap-2.5 font-mono text-xs text-faint">
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent" />
+            <span>
+              {RELEASE_CONFIG.latestTag} — released {RELEASE_CONFIG.releaseDate}
+            </span>
+          </p>
 
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-        {/* Version Badge */}
-        <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full border border-neutral-200 dark:border-neutral-800 bg-white/80 dark:bg-neutral-900/60 backdrop-blur-sm text-xs text-neutral-600 dark:text-neutral-400 mb-8 shadow-sm">
-          <span className="w-2 h-2 rounded-full bg-brand-red" />
-          <span className="text-neutral-900 dark:text-neutral-300 font-medium">Version {RELEASE_CONFIG.latestTag} Released</span>
-          <span className="text-neutral-400 dark:text-neutral-600">•</span>
-          <span>Windows 64-bit</span>
-        </div>
+          {/* Headline */}
+          <h1 className="mt-6 font-display text-4xl sm:text-5xl lg:text-6xl font-semibold tracking-tight leading-[1.06] text-ink text-balance">
+            Bulk media downloading, made effortless.
+          </h1>
 
-        {/* Headline */}
-        <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-neutral-900 dark:text-white max-w-4xl mx-auto leading-tight">
-          Bulk media downloading,{" "}
-          <span className="text-brand-red">made effortless.</span>
-        </h1>
+          {/* Subtitle */}
+          <p className="mt-6 text-base sm:text-lg text-muted leading-relaxed max-w-xl">
+            A local-first Windows desktop app to discover, inspect, and batch-download
+            videos and image galleries. No accounts, no cloud tracking, no subscriptions.
+          </p>
 
-        {/* Subtitle */}
-        <p className="mt-5 text-base sm:text-lg text-neutral-600 dark:text-neutral-400 max-w-2xl mx-auto leading-relaxed">
-          A clean, local-first Windows desktop app to discover, inspect, and batch-download videos and image galleries. No cloud tracking, no accounts, and no subscriptions.
-        </p>
+          {/* Download actions */}
+          <div className="mt-9 flex flex-col sm:flex-row sm:items-center gap-3">
+            {releaseStatus.isPublished || releaseStatus.assetsAvailable ? (
+              <>
+                {/* Primary installer */}
+                <a href={RELEASE_CONFIG.installer.downloadUrl} className="btn-accent w-full sm:w-auto">
+                  <Download className="w-4 h-4" />
+                  <span>Download for Windows</span>
+                  <span className="font-mono font-normal text-xs opacity-75">
+                    {RELEASE_CONFIG.installer.sizeFormatted}
+                  </span>
+                </a>
 
-        {/* Clean, Simple Download Actions */}
-        <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
-          {releaseStatus.isPublished || releaseStatus.assetsAvailable ? (
-            <>
-              {/* Primary Installer */}
+                {/* Secondary portable */}
+                <a href={RELEASE_CONFIG.portable.downloadUrl} className="btn-ghost w-full sm:w-auto">
+                  <Package className="w-4 h-4 text-muted" />
+                  <span>Portable .exe</span>
+                  <span className="font-mono font-normal text-xs text-faint">
+                    {RELEASE_CONFIG.portable.sizeFormatted}
+                  </span>
+                </a>
+              </>
+            ) : (
               <a
-                href={RELEASE_CONFIG.installer.downloadUrl}
-                className="w-full sm:w-auto flex items-center justify-center space-x-2.5 px-6 py-3.5 rounded-xl bg-brand-red hover:bg-brand-accent text-white font-semibold text-sm shadow-lg shadow-brand-red/25 hover:shadow-brand-red/40 hover:-translate-y-0.5 active:translate-y-0 transition-all"
+                href={RELEASE_CONFIG.releasesUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn-accent w-full sm:w-auto"
               >
                 <Download className="w-4 h-4" />
-                <span>Download for Windows</span>
-                <span className="text-xs font-normal text-white/80">({RELEASE_CONFIG.installer.sizeFormatted})</span>
+                <span>Get {RELEASE_CONFIG.latestTag} on GitHub</span>
+                <ExternalLink className="w-3.5 h-3.5 opacity-80" />
               </a>
+            )}
+          </div>
 
-              {/* Secondary Portable */}
+          {/* Trust row */}
+          <ul className="mt-7 flex flex-wrap gap-x-5 gap-y-2 font-mono text-xs text-faint">
+            <li>Windows 10 / 11 · 64-bit</li>
+            <li>Python &amp; FFmpeg bundled</li>
+            <li>100% local storage</li>
+            <li>
               <a
-                href={RELEASE_CONFIG.portable.downloadUrl}
-                className="w-full sm:w-auto flex items-center justify-center space-x-2 px-5 py-3.5 rounded-xl bg-white hover:bg-neutral-100 dark:bg-neutral-900/80 dark:hover:bg-neutral-800 border border-neutral-300 dark:border-neutral-800 text-neutral-800 dark:text-neutral-200 text-sm font-medium hover:-translate-y-0.5 active:translate-y-0 shadow-sm transition-all"
+                href="#installation"
+                className="underline underline-offset-2 hover:text-accent transition-colors duration-150"
               >
-                <Package className="w-4 h-4 text-neutral-500 dark:text-neutral-400" />
-                <span>Portable .exe</span>
-                <span className="text-xs text-neutral-500 font-normal">({RELEASE_CONFIG.portable.sizeFormatted})</span>
+                SmartScreen guide
               </a>
-            </>
-          ) : (
-            <a
-              href={RELEASE_CONFIG.releasesUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center space-x-2 px-6 py-3.5 rounded-xl bg-brand-red hover:bg-brand-accent text-white font-semibold text-sm shadow-lg shadow-brand-red/25 transition-all"
-            >
-              <Download className="w-4 h-4" />
-              <span>Get v0.1.0 on GitHub</span>
-              <ExternalLink className="w-3.5 h-3.5 ml-1 opacity-80" />
-            </a>
-          )}
+            </li>
+          </ul>
         </div>
 
-        {/* Small trust indicators */}
-        <div className="mt-4 flex flex-wrap items-center justify-center gap-x-5 gap-y-1.5 text-xs text-neutral-500 font-sans">
-          <span>Windows 10 / 11 (64-bit)</span>
-          <span>•</span>
-          <span>Python & FFmpeg Bundled</span>
-          <span>•</span>
-          <span>100% Local Storage</span>
-          <span>•</span>
-          <a
-            href="#installation"
-            className="text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white transition-colors underline underline-offset-2"
-          >
-            SmartScreen Guide
-          </a>
-        </div>
-
-        {/* Streamlined Desktop App Window Showcase */}
-        <div className="mt-14 max-w-4xl mx-auto text-left">
-          <div className="rounded-2xl border border-neutral-200 dark:border-neutral-800/80 bg-white dark:bg-neutral-950 shadow-xl shadow-neutral-200/50 dark:shadow-2xl overflow-hidden backdrop-blur-xl">
+        {/* Desktop app window showcase (illustrative preview) */}
+        <div className="mt-14 sm:mt-16">
+          <div className="rounded-2xl border border-hairline bg-surface shadow-pop overflow-hidden">
             {/* Titlebar */}
-            <div className="flex items-center justify-between px-4 py-3 bg-neutral-100/80 dark:bg-neutral-900/40 border-b border-neutral-200 dark:border-neutral-800/60">
-              <div className="flex items-center space-x-2">
-                <span className="w-3 h-3 rounded-full bg-neutral-300 dark:bg-neutral-700 inline-block" />
-                <span className="w-3 h-3 rounded-full bg-neutral-300 dark:bg-neutral-700 inline-block" />
-                <span className="w-3 h-3 rounded-full bg-neutral-300 dark:bg-neutral-700 inline-block" />
-                <span className="ml-3 text-xs text-neutral-600 dark:text-neutral-400 font-medium">
+            <div className="flex items-center justify-between pl-4 pr-3 h-11 bg-band border-b border-hairline">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="grid place-items-center w-4 h-4 rounded-sm bg-brand-white">
+                  <img src="/XakuMedia.svg" alt="" className="w-full h-full" />
+                </span>
+                <span className="text-xs font-medium text-muted truncate">
                   XakuMedia — Desktop Media Downloader
                 </span>
               </div>
-              <span className="text-[11px] text-neutral-500 font-mono">v0.1.0</span>
+              <div className="flex items-center text-faint">
+                <span className="grid place-items-center w-8 h-8 rounded-md hover:bg-raised transition-colors">
+                  <Minus className="w-3 h-3" />
+                </span>
+                <span className="grid place-items-center w-8 h-8 rounded-md hover:bg-raised transition-colors">
+                  <Square className="w-3 h-3" />
+                </span>
+                <span className="grid place-items-center w-8 h-8 rounded-md hover:text-accent hover:bg-raised transition-colors">
+                  <X className="w-3.5 h-3.5" />
+                </span>
+              </div>
             </div>
 
-            {/* Clean App Body Preview */}
-            <div className="p-6 space-y-6">
-              {/* Clean URL Input Bar */}
-              <div className="flex items-center space-x-3 p-3 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900/60">
-                <Search className="w-4 h-4 text-neutral-400 flex-shrink-0" />
-                <div className="w-full text-xs text-neutral-700 dark:text-neutral-300 font-mono truncate">
+            {/* App body */}
+            <div className="p-4 sm:p-6 space-y-4">
+              {/* URL scan bar */}
+              <div className="flex items-center gap-3 rounded-lg border border-hairline bg-band px-3.5 py-2.5">
+                <Search className="w-4 h-4 text-faint shrink-0" />
+                <span className="flex-1 truncate font-mono text-xs text-muted">
                   https://example.com/gallery/landscape-collection-2026
-                </div>
-                <span className="px-3 py-1.5 rounded-lg bg-brand-red text-white text-xs font-semibold flex-shrink-0">
+                </span>
+                <span className="shrink-0 rounded-md bg-accent text-on-accent px-3 py-1.5 text-xs font-semibold">
                   Scan URL
                 </span>
               </div>
 
-              {/* Two Column Clean Preview */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                {/* Detected Media Card */}
-                <div className="p-4 rounded-xl border border-neutral-200 dark:border-neutral-800/80 bg-neutral-50/70 dark:bg-neutral-900/30 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-neutral-900 dark:text-white">Discovered Collection</span>
-                    <span className="px-2 py-0.5 rounded text-[11px] bg-brand-red/10 text-brand-red font-medium">
-                      24 Items
+              <div className="grid lg:grid-cols-[1.6fr_1fr] gap-4">
+                {/* Discovered media grid */}
+                <div className="rounded-lg border border-hairline overflow-hidden">
+                  <div className="flex items-center justify-between px-4 py-2.5 bg-band border-b border-hairline">
+                    <span className="text-xs font-semibold text-ink">
+                      Discovered collection
                     </span>
+                    <span className="font-mono text-xs text-faint">24 items</span>
                   </div>
-                  <p className="text-neutral-600 dark:text-neutral-400 text-xs">
-                    Album detected with native 4K resolutions and lossless image streams.
-                  </p>
-                  <div className="flex flex-wrap gap-2 pt-1">
-                    <span className="px-2 py-1 rounded bg-white dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 text-neutral-700 dark:text-neutral-300 text-[11px]">
-                      4K UHD (3840×2160)
-                    </span>
-                    <span className="px-2 py-1 rounded bg-white dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 text-neutral-700 dark:text-neutral-300 text-[11px]">
-                      MP4 / H.264
-                    </span>
-                    <span className="px-2 py-1 rounded bg-white dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 text-neutral-700 dark:text-neutral-300 text-[11px]">
-                      Original Photos
-                    </span>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4 gap-px bg-hairline">
+                    {MOCK_MEDIA.map((item) => (
+                      <div key={item.name} className="bg-surface p-3 space-y-2.5">
+                        <div className="relative aspect-[4/3] rounded-md bg-band grid place-items-center">
+                          {item.kind === "video" ? (
+                            <Film className="w-5 h-5 text-faint" />
+                          ) : (
+                            <ImageIcon className="w-5 h-5 text-faint" />
+                          )}
+                          <span
+                            className={`absolute top-2 right-2 grid place-items-center w-[18px] h-[18px] rounded-[4px] border transition-colors ${
+                              item.selected
+                                ? "bg-accent border-accent text-on-accent"
+                                : "border-hairline-strong bg-surface/60 text-transparent"
+                            }`}
+                            aria-hidden="true"
+                          >
+                            <Check className="w-3 h-3" />
+                          </span>
+                        </div>
+                        <div>
+                          <div className="font-mono text-[11px] text-ink truncate">
+                            {item.name}
+                          </div>
+                          <div className="font-mono text-[11px] text-faint mt-0.5">
+                            {item.spec}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
 
-                {/* Live Download Status Card */}
-                <div className="p-4 rounded-xl border border-neutral-200 dark:border-neutral-800/80 bg-neutral-50/70 dark:bg-neutral-900/30 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-neutral-900 dark:text-white">Batch Download</span>
-                    <span className="text-brand-red font-mono text-[11px]">18.4 MB/s</span>
+                {/* Download queue */}
+                <div className="rounded-lg border border-hairline overflow-hidden flex flex-col">
+                  <div className="flex items-center justify-between px-4 py-2.5 bg-band border-b border-hairline">
+                    <span className="text-xs font-semibold text-ink">Download queue</span>
+                    <span className="font-mono text-xs text-faint">4 workers</span>
                   </div>
-                  {/* Progress Bar */}
-                  <div className="w-full bg-neutral-200 dark:bg-neutral-800 h-2 rounded-full overflow-hidden">
-                    <div className="bg-brand-red h-full rounded-full" style={{ width: "76%" }} />
+
+                  <div className="p-4 space-y-5 flex-1">
+                    {/* Active item */}
+                    <div>
+                      <div className="flex items-center justify-between font-mono text-[11px]">
+                        <span className="text-ink truncate">landscape_001.jpg</span>
+                        <span className="text-accent shrink-0 ml-3">18.4 MB/s</span>
+                      </div>
+                      <div className="mt-2 h-1.5 rounded-full bg-raised overflow-hidden">
+                        <div
+                          className="h-full w-[76%] origin-left rounded-full bg-accent"
+                          style={{ animation: "queue-progress 1.8s cubic-bezier(0.22, 0.61, 0.36, 1) both" }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Completed item */}
+                    <div>
+                      <div className="flex items-center justify-between font-mono text-[11px]">
+                        <span className="text-muted truncate">landscape_002.jpg</span>
+                        <span className="text-faint shrink-0 ml-3 flex items-center gap-1.5">
+                          <Check className="w-3 h-3" />
+                          Done
+                        </span>
+                      </div>
+                      <div className="mt-2 h-1.5 rounded-full bg-raised overflow-hidden">
+                        <div className="h-full rounded-full bg-faint/50" style={{ width: "100%" }} />
+                      </div>
+                    </div>
+
+                    {/* Queued item */}
+                    <div>
+                      <div className="flex items-center justify-between font-mono text-[11px]">
+                        <span className="text-muted truncate">night_sky.mp4</span>
+                        <span className="text-faint shrink-0 ml-3">Queued</span>
+                      </div>
+                      <div className="mt-2 h-1.5 rounded-full bg-raised overflow-hidden">
+                        <div className="h-full w-0 rounded-full bg-accent" />
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex items-center justify-between text-neutral-500 dark:text-neutral-400 text-[11px]">
+
+                  {/* Status bar */}
+                  <div className="flex items-center justify-between px-4 py-2.5 bg-band border-t border-hairline font-mono text-[11px] text-faint">
                     <span>18 of 24 completed</span>
-                    <span>Range Resumption Active</span>
+                    <span>Range resumption active</span>
                   </div>
                 </div>
               </div>
             </div>
           </div>
+
+          <p className="mt-4 text-center font-mono text-xs text-faint">
+            Illustrative preview of the desktop app
+          </p>
         </div>
       </div>
     </section>

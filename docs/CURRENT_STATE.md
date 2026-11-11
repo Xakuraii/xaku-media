@@ -1,8 +1,8 @@
 # XakuMedia — Current Project State
 
-**Last Updated:** October 24, 2026  
-**Active Milestone:** Milestone 23 — Final Release Review  
-**Overall Status:** Complete — v0.1.0 Production Release Ready (All 24 Milestones Completed & Verified)  
+**Last Updated:** November 11, 2026  
+**Active Milestone:** Milestone 25 — Landing Page UI Refresh & Dual-Theme System  
+**Overall Status:** Complete — v0.1.0 Production Release Ready (All 24 Roadmap Milestones Completed & Verified; Post-Release Landing Page Refinement)  
 
 ---
 
@@ -46,6 +46,7 @@ The system relies on a secure 3-tier desktop architecture:
 | **Milestone 22** | Automated Testing & Regression Review | **Completed** | Full regression test suite (`test_regression.py`) covering mid-stream socket drops, HTTP 416 range resumption, corrupted Netscape cookies, permission denials, intermediate staging recovery, and provider error mapping; 140 pytest tests passing in 7.41s; 0 ruff errors; frontend typecheck clean; desktop Electron smoke test passing. |
 | **Milestone 23** | Final Release Review | **Completed** | Full UAT verification, comprehensive documentation audit (`README.md`, `docs/DATABASE.md`, `docs/IPC_API.md`, `docs/RELEASE_NOTES.md`, `docs/ARCHITECTURE.md`, `docs/SETUP.md`), distribution package validation (NSIS installer, portable executable), and project sign-off. |
 | **Milestone 24** | Public Product Website & Vercel Deployment | **Completed** | Responsive black, white, and red landing page (`frontend/src/landing/`) decoupled from desktop runtime; verified v0.1.0 NSIS installer (167 MB) and portable (148 MB) GitHub Release download buttons with pre-release status check; interactive desktop UI preview; transparent SmartScreen notice guide; Vercel deployment configuration (`vercel.json`, `docs/DEPLOYMENT.md`); frontend typecheck and desktop smoke test passing. |
+| **Milestone 25** | Landing Page UI Refresh & Dual-Theme System | **Completed** | Redesigned landing page around a "precision tool" direction: self-hosted variable fonts via `@fontsource-variable` (Space Grotesk display, Inter body, JetBrains Mono for technical data); semantic CSS-variable color tokens in `frontend/src/index.css` flipped by the `.dark` class (Tailwind utilities adapt to both themes without `dark:` duplication); full light/dark theme system in `useTheme.ts` — OS `prefers-color-scheme` default for browsers, forced dark for the Electron desktop shell, `localStorage` persistence of explicit toggles, pre-paint init script in `index.html`, and `meta theme-color` sync; rebuilt hero with animated app-window mock, hairline spec-sheet grids, numbered workflow rail, inverted brand-black security band, and document-style FAQ accordion with `aria-expanded`/`aria-controls`; desktop app runtime behavior preserved (system fonts, own dark styles, no `.dark` dependency). Fixed a Tailwind token collision by renaming the `base` color utility to `page` (restores `text-base` to pure font-size, also used by desktop app views). Integrated the user's logo (`frontend/public/XakuMedia.svg`/`.ico`): navbar, hero titlebar mock, and footer brand marks render `XakuMedia.svg` on a brand-white rounded tile (keeps the dark-red logo legible in dark mode; imperceptible in light mode); browser favicon switched to `XakuMedia.ico`; generated a 1200×630 `og-image.png` social preview card from the logo via an Electron offscreen render (light background chosen from measured logo luminance) and upgraded `twitter:card` to `summary_large_image`. Verification: frontend typecheck clean; production build clean; Electron offscreen WCAG contrast audit — all sampled text pairs pass AA in both themes (e.g. section lead 7.35 light / 8.23 dark); no horizontal overflow at 390px; functional browser checks confirmed toggle, accordion ARIA states, and console free of errors; logo `<img>` load and tile styling verified in both themes; built `dist/index.html` favicon/og meta tags verified. |
 
 ---
 

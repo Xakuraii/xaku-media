@@ -16,11 +16,7 @@ export const LandingPage: React.FC = () => {
 
   useEffect(() => {
     const handleScroll = () => {
-      if (window.scrollY > 400) {
-        setShowScrollTop(true);
-      } else {
-        setShowScrollTop(false);
-      }
+      setShowScrollTop(window.scrollY > 400);
     };
 
     window.addEventListener("scroll", handleScroll, { passive: true });
@@ -32,49 +28,57 @@ export const LandingPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-white dark:bg-brand-black text-neutral-900 dark:text-brand-white font-sans selection:bg-brand-red selection:text-white antialiased transition-colors">
-      {/* Top Navigation */}
+    <div className="min-h-screen bg-page text-ink font-sans antialiased transition-colors duration-300">
+      {/* Keyboard users can jump past the navigation */}
+      <a
+        href="#content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[60] focus:px-4 focus:py-2 focus:rounded-lg focus:bg-accent focus:text-on-accent focus:text-sm focus:font-semibold"
+      >
+        Skip to content
+      </a>
+
+      {/* Top navigation */}
       <Navbar />
 
-      {/* Main Sections */}
-      <main>
-        {/* 1. Hero & Download Section */}
+      {/* Main sections */}
+      <main id="content">
+        {/* 1. Hero & download */}
         <HeroSection />
 
-        {/* 2. Key Features */}
+        {/* 2. Key features */}
         <FeaturesSection />
 
-        {/* 3. Workflow - How it works */}
+        {/* 3. Workflow - how it works */}
         <WorkflowSection />
 
-        {/* 4. Windows System Requirements */}
+        {/* 4. Windows system requirements */}
         <RequirementsSection />
 
-        {/* 5. Installation & Troubleshooting */}
+        {/* 5. Installation & troubleshooting */}
         <InstallationSection />
 
-        {/* 6. Security, Privacy & Limits */}
+        {/* 6. Security, privacy & limits */}
         <SecurityPrivacySection />
 
-        {/* 7. Current Version & Changelog */}
+        {/* 7. Current version & changelog */}
         <ReleaseChangelogSection />
 
-        {/* 8. Frequently Asked Questions */}
+        {/* 8. Frequently asked questions */}
         <FaqSection />
       </main>
 
       {/* Footer */}
       <LandingFooter />
 
-      {/* Floating Scroll to Top Button */}
+      {/* Floating scroll-to-top button */}
       {showScrollTop && (
         <button
           type="button"
           onClick={scrollToTop}
-          className="fixed bottom-6 right-6 p-3 rounded-full bg-white/90 dark:bg-neutral-900/90 border border-neutral-300 dark:border-neutral-700/80 text-neutral-700 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800 shadow-lg backdrop-blur-md transition-all z-40 group hover:scale-110 active:scale-95"
+          className="fixed bottom-6 right-6 z-40 grid place-items-center w-11 h-11 rounded-full border border-hairline bg-surface/90 text-muted shadow-pop backdrop-blur-md transition-all duration-200 hover:text-ink hover:scale-105 active:scale-95"
           aria-label="Scroll to top"
         >
-          <ChevronUp className="w-5 h-5 group-hover:-translate-y-0.5 transition-transform" />
+          <ChevronUp className="w-5 h-5" />
         </button>
       )}
     </div>

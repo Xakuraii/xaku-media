@@ -13,34 +13,34 @@ export const ReleaseChangelogSection: React.FC = () => {
   ];
 
   return (
-    <section id="changelog" className="py-20 border-t border-neutral-200 dark:border-neutral-900 bg-white dark:bg-brand-black relative transition-colors">
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="text-center max-w-2xl mx-auto mb-14 space-y-2">
-          <h2 className="text-2xl sm:text-3xl font-bold text-neutral-900 dark:text-white tracking-tight">
-            Release Notes
-          </h2>
-          <p className="text-sm sm:text-base text-neutral-600 dark:text-neutral-400">
+    <section id="changelog" className="border-t border-hairline bg-band transition-colors duration-300">
+      <div className="lc-container py-16 sm:py-24">
+        <div className="max-w-xl">
+          <h2 className="section-title">Release notes</h2>
+          <p className="section-lead">
             Current version capabilities and architectural highlights.
           </p>
         </div>
 
-        {/* Clean Release Card */}
-        <div className="p-6 sm:p-8 rounded-2xl border border-neutral-200/80 dark:border-neutral-800/80 bg-neutral-50 dark:bg-neutral-900/30 shadow-sm space-y-6">
-          <div className="flex flex-wrap items-center justify-between gap-3 pb-5 border-b border-neutral-200 dark:border-neutral-800/60">
-            <div className="flex items-center space-x-3">
-              <div className="p-2 rounded-xl bg-brand-red/10 text-brand-red">
-                <Tag className="w-5 h-5" />
-              </div>
+        {/* Release document */}
+        <div className="mt-10 sm:mt-14 max-w-4xl rounded-2xl border border-hairline bg-page overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-6 sm:px-8 py-5 border-b border-hairline bg-band">
+            <div className="flex items-center gap-3.5">
+              <span className="grid place-items-center w-9 h-9 rounded-lg bg-brand-red/10 text-accent">
+                <Tag className="w-[18px] h-[18px]" aria-hidden="true" />
+              </span>
               <div>
-                <div className="flex items-center space-x-2">
-                  <h3 className="text-lg font-bold text-neutral-900 dark:text-white">XakuMedia {RELEASE_CONFIG.latestTag}</h3>
-                  <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-brand-red/20 text-brand-red font-medium">
+                <div className="flex items-center gap-2.5">
+                  <h3 className="font-display text-base font-semibold text-ink">
+                    XakuMedia {RELEASE_CONFIG.latestTag}
+                  </h3>
+                  <span className="rounded-full bg-brand-red/10 text-accent px-2.5 py-0.5 font-mono text-[10px] font-medium">
                     Latest
                   </span>
                 </div>
-                <div className="text-xs text-neutral-500 font-mono mt-0.5">
-                  Published {RELEASE_CONFIG.releaseDate} • Windows 64-bit
-                </div>
+                <p className="mt-1 font-mono text-xs text-faint">
+                  Released {RELEASE_CONFIG.releaseDate} · Windows 64-bit
+                </p>
               </div>
             </div>
 
@@ -48,22 +48,21 @@ export const ReleaseChangelogSection: React.FC = () => {
               href={RELEASE_CONFIG.releasesUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 text-neutral-700 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white text-xs font-mono shadow-sm transition-colors"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-hairline bg-page text-xs font-medium text-muted hover:text-ink transition-colors duration-150"
             >
               <span>GitHub Releases</span>
               <ExternalLink className="w-3.5 h-3.5" />
             </a>
           </div>
 
-          {/* Clean Highlights */}
-          <div className="space-y-3">
+          <ul className="px-6 sm:px-8 py-6 space-y-3.5">
             {highlights.map((item) => (
-              <div key={item} className="flex items-start space-x-3 text-xs sm:text-sm text-neutral-700 dark:text-neutral-300">
-                <Check className="w-4 h-4 text-brand-red flex-shrink-0 mt-0.5" />
-                <span>{item}</span>
-              </div>
+              <li key={item} className="flex items-start gap-3 text-sm text-muted">
+                <Check className="w-4 h-4 text-accent shrink-0 mt-0.5" aria-hidden="true" />
+                <span className="leading-relaxed">{item}</span>
+              </li>
             ))}
-          </div>
+          </ul>
         </div>
       </div>
     </section>

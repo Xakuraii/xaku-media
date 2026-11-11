@@ -5,49 +5,50 @@ export const SecurityPrivacySection: React.FC = () => {
   const pillars = [
     {
       icon: ServerOff,
-      title: "100% Local-First Storage",
+      title: "100% local-first storage",
       desc: "All metadata, history, and queue records are stored exclusively in your local SQLite database. No external cloud backend or remote servers.",
     },
     {
       icon: EyeOff,
-      title: "Zero Cloud Telemetry",
+      title: "Zero cloud telemetry",
       desc: "XakuMedia has no tracking pixels, analytics SDKs, or remote diagnostic pings. Your media collection and activity remain strictly private.",
     },
     {
       icon: ShieldCheck,
-      title: "Network Defense & Boundaries",
+      title: "Network defense & boundaries",
       desc: "Includes built-in SSRF protection against internal IP probing. Strictly respects content boundaries without cracking DRM or bypassing paywalls.",
     },
   ];
 
   return (
-    <section id="security" className="py-20 border-t border-neutral-200 dark:border-neutral-900 bg-neutral-100/50 dark:bg-neutral-950/40 relative transition-colors">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="text-center max-w-2xl mx-auto mb-14 space-y-2">
-          <h2 className="text-2xl sm:text-3xl font-bold text-neutral-900 dark:text-white tracking-tight">
-            Privacy & Trust
+    // Inverted band: brand black in light mode, elevated surface in dark mode.
+    <section
+      id="security"
+      className="border-t-2 border-brand-red bg-brand-black text-brand-white dark:bg-surface dark:border-t-2 dark:border-hairline transition-colors duration-300"
+    >
+      <div className="lc-container py-16 sm:py-24">
+        <div className="max-w-xl">
+          <h2 className="font-display text-2xl sm:text-3xl font-semibold tracking-tight text-white">
+            Privacy &amp; trust
           </h2>
-          <p className="text-sm sm:text-base text-neutral-600 dark:text-neutral-400">
+          <p className="mt-3 max-w-2xl text-sm sm:text-base text-white/60 leading-relaxed">
             Engineered to respect your privacy and protect your local system.
           </p>
         </div>
 
-        {/* 3 Pillars Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+        {/* Pillars */}
+        <div className="mt-10 sm:mt-14 grid grid-cols-1 sm:grid-cols-3 gap-8 sm:gap-0 sm:divide-x sm:divide-white/10">
           {pillars.map((item) => {
             const Icon = item.icon;
             return (
-              <div
-                key={item.title}
-                className="p-6 rounded-2xl border border-neutral-200/80 dark:border-neutral-800/60 bg-white dark:bg-neutral-900/20 shadow-sm space-y-3 transition-all"
-              >
-                <div className="w-10 h-10 rounded-xl bg-neutral-100 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 flex items-center justify-center text-brand-red">
-                  <Icon className="w-5 h-5" />
+              <div key={item.title} className="sm:px-7 first:sm:pl-0 last:sm:pr-0">
+                <div className="grid place-items-center w-10 h-10 rounded-lg bg-brand-red/15 text-brand-accent">
+                  <Icon className="w-5 h-5" aria-hidden="true" />
                 </div>
-                <h3 className="text-base font-semibold text-neutral-900 dark:text-white">{item.title}</h3>
-                <p className="text-xs sm:text-sm text-neutral-600 dark:text-neutral-400 leading-relaxed font-sans">
-                  {item.desc}
-                </p>
+                <h3 className="mt-4 font-display text-base font-semibold text-white">
+                  {item.title}
+                </h3>
+                <p className="mt-2 text-sm text-white/60 leading-relaxed">{item.desc}</p>
               </div>
             );
           })}

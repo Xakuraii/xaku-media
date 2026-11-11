@@ -33,61 +33,75 @@ export const FaqSection: React.FC = () => {
   ];
 
   return (
-    <section id="faq" className="py-20 border-t border-neutral-200 dark:border-neutral-900 bg-neutral-100/50 dark:bg-neutral-950/40 relative transition-colors">
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="text-center max-w-2xl mx-auto mb-14 space-y-2">
-          <h2 className="text-2xl sm:text-3xl font-bold text-neutral-900 dark:text-white tracking-tight">
-            Frequently Asked Questions
-          </h2>
-          <p className="text-sm sm:text-base text-neutral-600 dark:text-neutral-400">
+    <section id="faq" className="border-t border-hairline bg-page transition-colors duration-300">
+      <div className="lc-container py-16 sm:py-24">
+        <div className="max-w-xl">
+          <h2 className="section-title">Frequently asked questions</h2>
+          <p className="section-lead">
             Quick answers about installation, privacy, and media downloading.
           </p>
         </div>
 
-        {/* Clean Accordion List */}
-        <div className="space-y-3">
+        {/* Document-style accordion list */}
+        <div className="mt-10 sm:mt-14 max-w-3xl divide-y divide-hairline border-y border-hairline">
           {faqs.map((faq, idx) => {
             const isOpen = openIndex === idx;
+            const panelId = `faq-panel-${idx}`;
             return (
-              <div
-                key={faq.q}
-                className="rounded-xl border border-neutral-200/80 dark:border-neutral-800/60 bg-white dark:bg-neutral-900/30 shadow-sm overflow-hidden transition-all"
-              >
+              <div key={faq.q}>
                 <button
                   type="button"
                   onClick={() => setOpenIndex(isOpen ? null : idx)}
-                  className="w-full flex items-center justify-between p-4 sm:p-5 text-left text-sm font-semibold text-neutral-900 dark:text-white hover:text-brand-red transition-colors"
+                  aria-expanded={isOpen}
+                  aria-controls={panelId}
+                  className="group w-full flex items-center justify-between gap-4 py-5 text-left"
                 >
-                  <span>{faq.q}</span>
-                  <ChevronDown
-                    className={`w-4 h-4 text-neutral-400 transition-transform duration-200 ml-4 flex-shrink-0 ${
-                      isOpen ? "rotate-180 text-brand-red" : ""
+                  <span
+                    className={`text-sm sm:text-[15px] font-medium transition-colors duration-150 ${
+                      isOpen ? "text-accent" : "text-ink group-hover:text-accent"
                     }`}
+                  >
+                    {faq.q}
+                  </span>
+                  <ChevronDown
+                    className={`w-4 h-4 shrink-0 transition-transform duration-200 ${
+                      isOpen ? "rotate-180 text-accent" : "text-faint"
+                    }`}
+                    aria-hidden="true"
                   />
                 </button>
-                {isOpen && (
-                  <div className="px-4 pb-4 sm:px-5 sm:pb-5 text-xs sm:text-sm text-neutral-600 dark:text-neutral-400 leading-relaxed border-t border-neutral-100 dark:border-neutral-800/40 pt-3">
-                    {faq.a}
+                {/* Height animation via grid-template-rows; falls back to an
+                    instant toggle where that property is not animatable. */}
+                <div
+                  id={panelId}
+                  className={`grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none ${
+                    isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+                  }`}
+                >
+                  <div className="overflow-hidden">
+                    <p className="pb-5 pr-6 sm:pr-10 text-sm text-muted leading-relaxed">
+                      {faq.a}
+                    </p>
                   </div>
-                )}
+                </div>
               </div>
             );
           })}
         </div>
 
-        {/* Support Link */}
-        <div className="mt-8 text-center text-xs text-neutral-500">
+        {/* Support link */}
+        <p className="mt-8 text-sm text-muted">
           Need more help?{" "}
           <a
             href={`https://github.com/${RELEASE_CONFIG.githubOwner}/${RELEASE_CONFIG.githubRepo}/issues`}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-neutral-700 dark:text-neutral-300 hover:text-brand-red dark:hover:text-white underline underline-offset-2 inline-flex items-center space-x-1"
+            className="text-accent underline underline-offset-4 decoration-1 hover:decoration-2 transition-all inline-flex items-center gap-1"
           >
             <span>Ask a question on GitHub Issues</span>
-            <ExternalLink className="w-3 h-3 ml-0.5" />
+            <ExternalLink className="w-3 h-3" />
           </a>
-        </div>
+        </p>
       </div>
     </section>
   );

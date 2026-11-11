@@ -8,20 +8,35 @@
       name="description"
       content="XakuMedia is a local-first Windows desktop bulk media downloader with stream-level precision, multi-worker queue management, lossless FFmpeg merging, and zero cloud tracking."
     />
-    <link rel="icon" type="image/png" href="/icon.png" />
+    <link rel="icon" href="/XakuMedia.ico" sizes="any" />
     <meta name="theme-color" content="#0b0c10" />
 
-    <!-- Initial Theme Detection Script -->
+    <!-- Initial theme resolution (runs before first paint to avoid a flash):
+         1. A saved choice from a previous visit always wins.
+         2. The Electron desktop shell is authored dark.
+         3. Otherwise follow the visitor's OS preference. -->
     <script>
-      (function() {
+      (function () {
         try {
-          const theme = localStorage.getItem('xakumedia_theme');
-          if (theme === 'light') {
-            document.documentElement.classList.remove('dark');
+          var saved = localStorage.getItem("xakumedia_theme");
+          var dark;
+          if (saved === "light" || saved === "dark") {
+            dark = saved === "dark";
+          } else if (window.api) {
+            dark = true;
           } else {
-            document.documentElement.classList.add('dark');
+            dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
           }
-        } catch (e) {}
+          var root = document.documentElement;
+          root.classList.toggle("dark", dark);
+          root.classList.toggle("light", !dark);
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) {
+            meta.setAttribute("content", dark ? "#0b0c10" : "#ffffff");
+          }
+        } catch (e) {
+          document.documentElement.classList.add("dark");
+        }
       })();
     </script>
 
@@ -32,18 +47,18 @@
       property="og:description"
       content="Local-first desktop application with stream-level precision, multi-worker queue, and lossless FFmpeg merging. Zero cloud telemetry."
     />
-    <meta property="og:image" content="/icon.png" />
+    <meta property="og:image" content="/og-image.png" />
 
     <!-- Twitter -->
-    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="XakuMedia — Windows Bulk Media Downloader" />
     <meta
       name="twitter:description"
       content="Local-first desktop application with stream-level precision, multi-worker queue, and lossless FFmpeg merging. Zero cloud telemetry."
     />
-    <meta name="twitter:image" content="/icon.png" />
+    <meta name="twitter:image" content="/og-image.png" />
   </head>
-  <body class="bg-neutral-50 text-neutral-900 dark:bg-brand-black dark:text-brand-white antialiased">
+  <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
