@@ -25,24 +25,24 @@ export interface ReleaseAssetInfo {
 
 export const RELEASE_CONFIG: ReleaseAssetInfo = {
   version: "0.1.0",
-  releaseDate: "October 2026",
-  githubOwner: "Laykimhoung",
-  githubRepo: "xakumedia-downloader",
-  releasesUrl: "https://github.com/Laykimhoung/xakumedia-downloader/releases",
+  releaseDate: "12 November 2026",
+  githubOwner: "Xakuraii",
+  githubRepo: "xaku-media",
+  releasesUrl: "https://github.com/Xakuraii/xaku-media/releases",
   latestTag: "v0.1.0",
   installer: {
     filename: "XakuMedia-Setup-0.1.0.exe",
-    sizeFormatted: "167 MB",
-    sizeBytes: 175267056,
+    sizeFormatted: "168 MB",
+    sizeBytes: 176812943,
     downloadUrl:
-      "https://github.com/Laykimhoung/xakumedia-downloader/releases/download/v0.1.0/XakuMedia-Setup-0.1.0.exe",
+      "https://github.com/Xakuraii/xaku-media/releases/download/v0.1.0/XakuMedia-Setup-0.1.0.exe",
   },
   portable: {
     filename: "XakuMedia-Portable-0.1.0.exe",
-    sizeFormatted: "148 MB",
-    sizeBytes: 155239572,
+    sizeFormatted: "149 MB",
+    sizeBytes: 156697488,
     downloadUrl:
-      "https://github.com/Laykimhoung/xakumedia-downloader/releases/download/v0.1.0/XakuMedia-Portable-0.1.0.exe",
+      "https://github.com/Xakuraii/xaku-media/releases/download/v0.1.0/XakuMedia-Portable-0.1.0.exe",
   },
 };
 

@@ -78,7 +78,7 @@ gh release create v0.1.0 `
 
 ### Publishing via GitHub Web Interface
 
-1. Navigate to: `https://github.com/Laykimhoung/xakumedia-downloader/releases/new`
+1. Navigate to: `https://github.com/Xakuraii/xaku-media/releases/new`
 2. Set **Tag version:** `v0.1.0` (create tag on publish).
 3. Set **Release title:** `XakuMedia v0.1.0 — Production Release`.
 4. Copy the contents of `docs/RELEASE_NOTES.md` into the release description.
