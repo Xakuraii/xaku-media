@@ -525,9 +525,17 @@ function createWindow(): void {
     },
   });
 
+  // Open maximized by default: the workspace is dense (sidebar + queue + previews)
+  // and benefits from the full screen. The explicit width/height above are kept
+  // as the restore bounds when the user un-maximizes the window.
+
   // Show window smoothly when initial frame is painted
   mainWindow.once("ready-to-show", async () => {
+    // Maximize right before showing so the first painted frame fills the screen
+    // and the window still has sensible restore bounds.
+    mainWindow?.maximize();
     mainWindow?.show();
+    console.log("[desktop] Main window maximized:", mainWindow?.isMaximized());
     if (process.env.ELECTRON_SMOKE_TEST === "1" || process.argv.includes("--smoke-test")) {
       console.log("[smoke-test] Electron window painted and ready-to-show event fired!");
 

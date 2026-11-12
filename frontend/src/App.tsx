@@ -1,14 +1,11 @@
 import React, { useEffect, useState, useRef, useMemo } from "react";
 import {
-  LayoutDashboard,
   Search,
   FolderArchive,
   Download,
   Bookmark,
   History,
   Settings,
-  ShieldCheck,
-  Radio,
   ExternalLink,
   Film,
   Image as ImageIcon,
@@ -41,6 +38,8 @@ import {
   Gauge,
   ChevronLeft,
   ChevronRight,
+  Sun,
+  Moon,
 } from "lucide-react";
 import type {
   ClassifyUrlResult,
@@ -59,9 +58,12 @@ import type {
 } from "../../desktop/shared/types";
 import { SettingsView } from "./components/SettingsView";
 import { SavedSourcesView } from "./components/SavedSourcesView";
+import { useDesktopTheme } from "./desktop/theme";
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<string>("scan");
+  const { preference: themePreference, resolved: resolvedTheme, setPreference: setThemePreference } =
+    useDesktopTheme();
   const [ipcStatus, setIpcStatus] = useState<string>("Checking IPC...");
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
   const [pythonStatus, setPythonStatus] = useState<PythonBridgeStatus | null>(null);
@@ -258,6 +260,16 @@ export const App: React.FC = () => {
   };
 
   const handleOpenExportModal = async (item: DiscoveredMediaItem) => {
+    const fallbackMetadata = (note?: string) => ({
+      media_item: item,
+      download_task:
+        downloadTasks.find(
+          (t) => t.media_item.id === item.id || t.id === item.id
+        ) ?? null,
+      exported_at: new Date().toISOString(),
+      ...(note ? { note } : {}),
+    });
+
     setExportModal({
       isOpen: true,
       mediaItem: item,
@@ -267,23 +279,33 @@ export const App: React.FC = () => {
     });
     try {
       if (window.api?.exportMediaMetadata) {
-        const res = await window.api.exportMediaMetadata(item.id);
-        setExportModal((prev) => ({
-          ...prev,
-          metadata: res,
-          loading: false,
-        }));
-      } else {
-        setExportModal((prev) => ({
-          ...prev,
-          metadata: {
-            media_item: item,
-            download_task: null,
-            exported_at: new Date().toISOString(),
-          },
-          loading: false,
-        }));
+        try {
+          const res = await window.api.exportMediaMetadata(item.id);
+          setExportModal((prev) => ({
+            ...prev,
+            metadata: res,
+            loading: false,
+          }));
+          return;
+        } catch (err) {
+          // Library-only rows live in SQLite; download-task snapshots may not be
+          // saved to the library yet, so fall back to what the renderer already
+          // knows instead of showing an empty JSON viewer.
+          console.warn(
+            "Full metadata export unavailable, using task snapshot:",
+            err
+          );
+        }
       }
+      setExportModal((prev) => ({
+        ...prev,
+        metadata: fallbackMetadata(
+          window.api?.exportMediaMetadata
+            ? "Media item is not stored in the library; exported from the in-memory task snapshot."
+            : undefined
+        ),
+        loading: false,
+      }));
     } catch (err) {
       console.error("Failed to export metadata:", err);
       setExportModal((prev) => ({ ...prev, loading: false }));
@@ -948,164 +970,230 @@ export const App: React.FC = () => {
     }
   }, [activeTab, savedMediaFilter, libraryContainer, librarySort]);
 
-  const navItems = [
-    { id: "overview", label: "Overview", icon: LayoutDashboard },
-    { id: "scan", label: "Scan Media", icon: Search },
-    { id: "library", label: "Media Library", icon: FolderArchive },
-    { id: "downloads", label: "Downloads", icon: Download },
-    { id: "saved", label: "Saved Sources", icon: Bookmark },
-    { id: "history", label: "Scan History", icon: History },
-    { id: "settings", label: "Settings", icon: Settings },
+  const navGroups = [
+    {
+      label: "Workspace",
+      items: [
+        { id: "scan", label: "Scan Media", icon: Search },
+        { id: "library", label: "Media Library", icon: FolderArchive },
+        { id: "downloads", label: "Downloads", icon: Download },
+      ],
+    },
+    {
+      label: "Sources",
+      items: [
+        { id: "saved", label: "Saved Sources", icon: Bookmark },
+        { id: "history", label: "Scan History", icon: History },
+      ],
+    },
+    {
+      label: "System",
+      items: [{ id: "settings", label: "Settings", icon: Settings }],
+    },
   ];
+  const currentTabLabel =
+    navGroups.flatMap((group) => group.items).find((item) => item.id === activeTab)?.label ??
+    "Workspace";
 
   return (
-    <div className="flex h-screen w-screen bg-brand-black text-brand-white select-none overflow-hidden font-sans">
+    <div className="d-app flex h-screen w-screen select-none overflow-hidden bg-page font-sans text-ink">
       {/* Persistent Left Sidebar */}
-      <aside className="w-64 border-r border-brand-dark bg-brand-black/90 flex flex-col justify-between p-4">
+      <aside className="d-sidebar flex w-60 shrink-0 flex-col justify-between p-3">
         <div>
-          {/* Identity Header */}
-          <div className="flex items-center space-x-3 px-2 py-3 mb-6">
-            <div className="h-4 w-4 rounded-full bg-brand-red shadow-sm shadow-brand-red/50 animate-pulse" />
-            <div>
-              <span className="font-extrabold tracking-wider text-sm uppercase text-brand-white">
+          {/* Brand */}
+          <div className="mb-5 flex items-center gap-3 px-2 py-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-hairline bg-surface shadow-sm">
+              <img
+                src="./XakuMedia.svg"
+                alt="XakuMedia logo"
+                className="h-6 w-6"
+                draggable={false}
+              />
+            </div>
+            <div className="min-w-0">
+              <span className="block truncate text-[13px] font-semibold tracking-tight text-ink">
                 XakuMedia
               </span>
-              <span className="block text-[10px] text-neutral-400 font-mono tracking-widest uppercase">
-                by XAKURAII
+              <span className="block truncate font-mono text-[10px] uppercase tracking-[0.16em] text-faint">
+                Local media toolkit
               </span>
             </div>
           </div>
 
           {/* Navigation Links */}
-          <nav className="space-y-1">
-            {navItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = activeTab === item.id;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => setActiveTab(item.id)}
-                  className={`w-full flex items-center justify-between px-3 py-2.5 rounded-md text-sm font-medium transition-all ${
-                    isActive
-                      ? "bg-brand-red text-white shadow-md shadow-brand-red/20 font-semibold"
-                      : "text-neutral-400 hover:text-brand-white hover:bg-brand-dark/50"
-                  }`}
-                >
-                  <div className="flex items-center space-x-3">
-                    <Icon className="h-4 w-4" />
-                    <span>{item.label}</span>
-                  </div>
-                  {item.id === "downloads" && activeTaskCount > 0 && (
-                    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-white text-brand-red animate-pulse">
-                      {activeTaskCount}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
+          <nav className="space-y-5">
+            {navGroups.map((group) => (
+              <div key={group.label} className="space-y-1">
+                <p className="d-label px-3 pb-1">{group.label}</p>
+                {group.items.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = activeTab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => setActiveTab(item.id)}
+                      aria-current={isActive ? "page" : undefined}
+                      className={`group flex w-full items-center justify-between gap-2 rounded-xl border px-3 py-2 text-[13px] font-medium transition-colors ${
+                        isActive
+                          ? "border-hairline bg-surface text-ink shadow-sm"
+                          : "border-transparent text-muted hover:bg-surface/60 hover:text-ink"
+                      }`}
+                    >
+                      <span className="flex min-w-0 items-center gap-2.5">
+                        <Icon
+                          className={`h-4 w-4 shrink-0 ${
+                            isActive ? "text-accent" : "text-faint group-hover:text-muted"
+                          }`}
+                        />
+                        <span className="truncate">{item.label}</span>
+                      </span>
+                      {item.id === "downloads" && activeTaskCount > 0 && (
+                        <span className="rounded-full bg-accent px-1.5 py-0.5 font-mono text-[10px] font-bold text-on-accent">
+                          {activeTaskCount}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
           </nav>
         </div>
 
-        {/* Runtime Diagnostics Footer */}
-        <div className="border-t border-brand-dark/80 pt-4 px-2 space-y-2 text-xs font-mono text-neutral-400">
-          <div className="flex items-center space-x-2 text-[11px]">
-            <Radio
-              className={`h-3 w-3 ${
-                window.api ? "text-emerald-500" : "text-amber-500"
+        {/* Runtime status */}
+        <div className="mt-4 space-y-2 border-t border-hairline px-3 pt-3">
+          <div className="flex items-center gap-2 font-mono text-[10px] text-muted">
+            <span
+              className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                window.api ? "bg-emerald-500" : "bg-amber-500"
               }`}
             />
-            <span className="truncate">{ipcStatus}</span>
+            <span className="truncate" title={ipcStatus}>
+              {ipcStatus}
+            </span>
           </div>
-          <div className="flex items-center space-x-2 text-[11px]">
-            <Radio
-              className={`h-3 w-3 ${
-                pythonStatus?.connected ? "text-emerald-500" : "text-amber-500"
+          <div className="flex items-center gap-2 font-mono text-[10px] text-muted">
+            <span
+              className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                pythonStatus?.connected ? "bg-emerald-500" : "bg-amber-500"
               }`}
             />
             <span className="truncate">
               {pythonStatus?.connected
-                ? `Python Engine (PID: ${pythonStatus.pid})`
-                : "Python: Connecting..."}
+                ? `Python engine · PID ${pythonStatus.pid}`
+                : "Python engine starting…"}
             </span>
           </div>
           {systemInfo && (
-            <div className="text-[10px] text-neutral-400">
-              Platform: {systemInfo.platform} ({systemInfo.arch}) · v
-              {systemInfo.version}
-            </div>
+            <p className="truncate font-mono text-[10px] text-faint">
+              {systemInfo.platform} · v{systemInfo.version}
+            </p>
           )}
         </div>
       </aside>
 
       {/* Main Workspace Area */}
-      <main className="flex-1 flex flex-col bg-brand-black/50 overflow-hidden">
+      <main className="flex flex-1 flex-col overflow-hidden">
         {/* Top App Header */}
-        <header className="h-14 border-b border-brand-dark flex items-center justify-between px-8 bg-brand-black/30">
-          <div className="flex items-center space-x-2">
-            <span className="text-xs uppercase tracking-wider text-neutral-400 font-mono">
-              Milestone 18 / Saved Sources &amp; Incremental Rescan
+        <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-hairline bg-band/70 px-6 backdrop-blur">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-faint">
+              Workspace
             </span>
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-faint/60" />
+            <span className="truncate text-[13px] font-semibold text-ink">{currentTabLabel}</span>
           </div>
-          <div className="flex items-center space-x-3">
+          <div className="flex shrink-0 items-center gap-2">
+            <div
+              className="flex items-center rounded-full border border-hairline bg-surface p-0.5 shadow-sm"
+              role="group"
+              aria-label="Theme"
+              title={`Theme: ${themePreference}`}
+            >
+              <button
+                type="button"
+                onClick={() => setThemePreference("light")}
+                aria-pressed={resolvedTheme === "light"}
+                aria-label="Use light theme"
+                className={`rounded-full p-1.5 transition-colors ${
+                  resolvedTheme === "light"
+                    ? "bg-accent text-on-accent"
+                    : "text-muted hover:text-ink"
+                }`}
+              >
+                <Sun className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setThemePreference("dark")}
+                aria-pressed={resolvedTheme === "dark"}
+                aria-label="Use dark theme"
+                className={`rounded-full p-1.5 transition-colors ${
+                  resolvedTheme === "dark"
+                    ? "bg-accent text-on-accent"
+                    : "text-muted hover:text-ink"
+                }`}
+              >
+                <Moon className="h-3.5 w-3.5" />
+              </button>
+            </div>
             {activeTaskCount > 0 && (
               <button
                 type="button"
                 onClick={() => setActiveTab("downloads")}
-                className="flex items-center space-x-2 text-xs text-brand-red bg-red-950/40 hover:bg-red-900/50 px-3 py-1 rounded-full border border-red-800/60 transition-colors"
+                className="flex items-center gap-2 rounded-full border border-red-500/30 bg-red-500/10 px-3 py-1 text-[11px] text-red-700 transition-colors hover:bg-red-500/20 dark:text-red-300"
               >
-                <span className="h-2 w-2 rounded-full bg-brand-red animate-ping" />
+                <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse" />
                 <span className="font-mono font-medium">
-                  {activeTaskCount} Active {activeTaskCount === 1 ? "Download" : "Downloads"}
+                  {activeTaskCount} active
                 </span>
               </button>
             )}
-            <div className="flex items-center space-x-1.5 text-xs text-neutral-300 bg-brand-dark/60 px-3 py-1 rounded-full border border-brand-dark">
-              <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
-              <span>Context Isolation</span>
-            </div>
             {pythonStatus?.connected && (
-              <div className="flex items-center space-x-1.5 text-xs text-emerald-300 bg-emerald-950/40 px-3 py-1 rounded-full border border-emerald-800/50">
-                <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-                <span>Python IPC</span>
+              <div className="hidden items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-[11px] text-emerald-700 lg:flex dark:text-emerald-300">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                <span className="font-mono">Python IPC</span>
               </div>
             )}
             {ffmpegInfo?.installed ? (
-              <div className="flex items-center space-x-1.5 text-xs text-purple-300 bg-purple-950/40 px-3 py-1 rounded-full border border-purple-800/50">
-                <Sparkles className="h-3.5 w-3.5 text-purple-400" />
-                <span>FFmpeg {ffmpegInfo.version?.split("-")[0] || "Active"}</span>
+              <div className="hidden items-center gap-1.5 rounded-full border border-purple-500/30 bg-purple-500/10 px-3 py-1 text-[11px] text-purple-700 lg:flex dark:text-purple-300">
+                <Sparkles className="h-3 w-3 text-purple-600 dark:text-purple-400" />
+                <span className="font-mono">
+                  FFmpeg {ffmpegInfo.version?.split("-")[0] || "Active"}
+                </span>
               </div>
             ) : (
-              <div className="flex items-center space-x-1.5 text-xs text-amber-300 bg-amber-950/40 px-3 py-1 rounded-full border border-amber-800/50">
-                <AlertCircle className="h-3.5 w-3.5 text-amber-400" />
-                <span>FFmpeg Not Detected</span>
+              <div className="hidden items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-[11px] text-amber-700 lg:flex dark:text-amber-300">
+                <AlertCircle className="h-3 w-3 text-amber-600 dark:text-amber-400" />
+                <span className="font-mono">No FFmpeg</span>
               </div>
             )}
           </div>
         </header>
 
         {/* Main View Content */}
-        <div className="flex-1 p-8 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto px-8 py-7">
           {activeTab === "scan" && (
             <div className="max-w-4xl mx-auto space-y-6">
               <div>
-                <h1 className="text-2xl font-bold tracking-tight text-brand-white">
+                <h1 className="text-2xl font-bold tracking-tight text-ink">
                   Scan Media
                 </h1>
-                <p className="text-sm text-neutral-400 mt-1">
+                <p className="text-sm text-muted mt-1">
                   Discover, preview, and classify direct images and video streams from URLs.
                 </p>
               </div>
 
               {/* URL Input Form */}
-              <div className="bg-brand-dark/40 border border-brand-dark p-5 rounded-xl shadow-lg space-y-4">
+              <div className="bg-surface border border-hairline p-5 rounded-xl shadow-lg space-y-4">
                 <form onSubmit={handleScanUrl} className="flex gap-2">
                   <div className="relative flex-1">
                     <input
                       type="text"
                       value={urlInput}
                       onChange={(e) => setUrlInput(e.target.value)}
-                      placeholder="Paste direct media, video, or gallery URL (e.g. YouTube, Vimeo, Imgur, ArtStation, .mp4, .jpg)..."
-                      className="w-full bg-brand-black/80 border border-brand-dark rounded-lg px-4 py-3 text-sm text-brand-white placeholder-neutral-400 focus:outline-none focus:border-brand-red focus:ring-1 focus:ring-brand-red font-mono"
+                      placeholder="Paste a direct media, video, or gallery URL…"
+                      className="w-full bg-page border border-hairline rounded-lg px-4 py-3 text-sm text-ink placeholder-faint focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent font-mono"
                     />
                   </div>
                   <button
@@ -1113,8 +1201,8 @@ export const App: React.FC = () => {
                     disabled={!urlInput.trim() || isScanning}
                     className={`px-6 py-3 rounded-lg text-sm font-medium flex items-center space-x-2 transition-all ${
                       urlInput.trim() && !isScanning
-                        ? "bg-brand-red text-white hover:bg-red-700 shadow-md shadow-brand-red/25 cursor-pointer"
-                        : "bg-brand-red/40 text-white/50 cursor-not-allowed"
+                        ? "bg-accent text-on-accent hover:bg-accent-vivid shadow-md shadow-accent/25 cursor-pointer"
+                        : "bg-raised text-faint border border-hairline cursor-not-allowed"
                     }`}
                   >
                     {isScanning ? (
@@ -1128,15 +1216,15 @@ export const App: React.FC = () => {
 
                 {/* Quick Presets for User Testing */}
                 <div className="space-y-1.5 pt-1">
-                  <div className="text-[11px] text-neutral-400 font-mono flex items-center space-x-1.5">
-                    <Sparkles className="h-3 w-3 text-amber-400" />
+                  <div className="text-[11px] text-muted font-mono flex items-center space-x-1.5">
+                    <Sparkles className="h-3 w-3 text-amber-600 dark:text-amber-400" />
                     <span>Quick Test Samples:</span>
                   </div>
                   <div className="flex flex-wrap gap-2 text-xs font-mono">
                     <button
                       type="button"
                       onClick={() => setUrlInput("https://picsum.photos/800/600")}
-                      className="px-2.5 py-1 bg-brand-black/60 hover:bg-brand-dark border border-brand-dark rounded text-neutral-300 hover:text-white transition-colors"
+                      className="px-2.5 py-1 bg-raised hover:bg-raised border border-hairline rounded text-ink/80 hover:text-ink transition-colors"
                     >
                       Direct Image (Picsum JPG)
                     </button>
@@ -1145,7 +1233,7 @@ export const App: React.FC = () => {
                       onClick={() =>
                         setUrlInput("https://www.w3schools.com/html/mov_bbb.mp4")
                       }
-                      className="px-2.5 py-1 bg-brand-black/60 hover:bg-brand-dark border border-brand-dark rounded text-neutral-300 hover:text-white transition-colors"
+                      className="px-2.5 py-1 bg-raised hover:bg-raised border border-hairline rounded text-ink/80 hover:text-ink transition-colors"
                     >
                       Direct Video (MP4)
                     </button>
@@ -1154,7 +1242,7 @@ export const App: React.FC = () => {
                       onClick={() =>
                         setUrlInput("https://www.youtube.com/watch?v=aqz-KE-bpKQ")
                       }
-                      className="px-2.5 py-1 bg-brand-black/60 hover:bg-brand-dark border border-brand-dark rounded text-neutral-300 hover:text-white transition-colors"
+                      className="px-2.5 py-1 bg-raised hover:bg-raised border border-hairline rounded text-ink/80 hover:text-ink transition-colors"
                     >
                       Platform Video (YouTube yt-dlp)
                     </button>
@@ -1163,30 +1251,30 @@ export const App: React.FC = () => {
                       onClick={() =>
                         setUrlInput("https://commons.wikimedia.org/wiki/Category:Cats")
                       }
-                      className="px-2.5 py-1 bg-brand-black/60 hover:bg-brand-dark border border-brand-dark rounded text-neutral-300 hover:text-white transition-colors"
+                      className="px-2.5 py-1 bg-raised hover:bg-raised border border-hairline rounded text-ink/80 hover:text-ink transition-colors"
                     >
                       Gallery Album (Wikimedia Category)
                     </button>
                     <button
                       type="button"
                       onClick={() => setUrlInput("http://127.0.0.1/private_camera.mp4")}
-                      className="px-2.5 py-1 bg-red-950/30 hover:bg-red-900/40 border border-red-800/40 rounded text-red-300 hover:text-red-200 transition-colors"
+                      className="px-2.5 py-1 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded text-red-700 dark:text-red-300 hover:text-red-600 dark:hover:text-red-300 transition-colors"
                     >
                       SSRF Defense (Blocked 127.0.0.1)
                     </button>
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between text-xs text-neutral-400 border-t border-brand-dark/50 pt-3">
+                <div className="flex items-center justify-between text-xs text-muted border-t border-hairline pt-3">
                   <div className="flex items-center space-x-3 text-[11px]">
-                    <span className="text-neutral-400">Supported in M8:</span>
-                    <span className="text-emerald-400 font-medium">Direct Files</span>
+                    <span className="text-muted">Supported in M8:</span>
+                    <span className="text-emerald-600 dark:text-emerald-400 font-medium">Direct Files</span>
                     <span>·</span>
-                    <span className="text-emerald-400 font-medium">Video Platforms (yt-dlp)</span>
+                    <span className="text-emerald-600 dark:text-emerald-400 font-medium">Video Platforms (yt-dlp)</span>
                     <span>·</span>
-                    <span className="text-emerald-400 font-medium">Image Galleries (gallery-dl)</span>
+                    <span className="text-emerald-600 dark:text-emerald-400 font-medium">Image Galleries (gallery-dl)</span>
                   </div>
-                  <span className="text-neutral-400 font-mono text-[11px]">
+                  <span className="text-muted font-mono text-[11px]">
                     SSRF & Path Traversal Guards Active
                   </span>
                 </div>
@@ -1194,11 +1282,11 @@ export const App: React.FC = () => {
 
               {/* Error Message Card */}
               {scanError && (
-                <div className="bg-red-950/30 border border-red-800/60 rounded-xl p-4 flex items-start space-x-3 text-red-200">
-                  <AlertCircle className="h-5 w-5 text-red-400 shrink-0 mt-0.5" />
+                <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 flex items-start space-x-3 text-red-700 dark:text-red-300">
+                  <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
                   <div className="text-xs space-y-1">
-                    <div className="font-semibold text-red-300">Scan Rejected or Failed</div>
-                    <div className="font-mono text-[11px] leading-relaxed text-red-200/90">
+                    <div className="font-semibold text-red-700 dark:text-red-300">Scan Rejected or Failed</div>
+                    <div className="font-mono text-[11px] leading-relaxed text-red-700 dark:text-red-300">
                       {scanError}
                     </div>
                   </div>
@@ -1210,22 +1298,22 @@ export const App: React.FC = () => {
                 <div
                   className={`p-3 rounded-xl border text-xs font-mono flex items-center justify-between transition-all shadow-md ${
                     savedSourceStatus.isError
-                      ? "bg-red-950/40 border-red-800/60 text-red-200"
-                      : "bg-emerald-950/40 border-emerald-800/60 text-emerald-200"
+                      ? "bg-red-500/10 border-red-500/30 text-red-700 dark:text-red-300"
+                      : "bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300"
                   }`}
                 >
                   <div className="flex items-center space-x-2">
                     {savedSourceStatus.isError ? (
-                      <AlertCircle className="h-4 w-4 text-red-400 shrink-0" />
+                      <AlertCircle className="h-4 w-4 text-red-600 dark:text-red-400 shrink-0" />
                     ) : (
-                      <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+                      <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
                     )}
                     <span>{savedSourceStatus.message}</span>
                   </div>
                   <button
                     type="button"
                     onClick={() => setActiveTab("saved")}
-                    className="px-2.5 py-1 bg-brand-dark hover:bg-neutral-800 rounded border border-brand-dark text-[11px] text-white flex items-center space-x-1"
+                    className="px-2.5 py-1 bg-raised hover:bg-hairline/70 rounded border border-hairline text-[11px] text-ink flex items-center space-x-1"
                   >
                     <span>View Saved Sources</span>
                     <span>→</span>
@@ -1235,29 +1323,29 @@ export const App: React.FC = () => {
 
               {/* Discovered Multi-Item Gallery Card */}
               {scanResult && scanResult.media_items && scanResult.media_items.length > 1 && (
-                <div className="bg-brand-dark/30 border border-brand-dark rounded-xl p-5 shadow-xl space-y-4">
-                  <div className="flex items-center justify-between border-b border-brand-dark/60 pb-3">
+                <div className="bg-surface border border-hairline rounded-xl p-5 shadow-xl space-y-4">
+                  <div className="flex items-center justify-between border-b border-hairline pb-3">
                     <div className="flex items-center space-x-2.5">
-                      <span className="px-2.5 py-1 bg-sky-950/80 border border-sky-600/50 text-sky-300 text-xs font-mono font-semibold rounded-md flex items-center space-x-1.5">
+                      <span className="px-2.5 py-1 bg-sky-500/10 border border-sky-500/30 text-sky-700 dark:text-sky-300 text-xs font-mono font-semibold rounded-md flex items-center space-x-1.5">
                         <Layers className="h-3.5 w-3.5" />
                         <span>GALLERY ALBUM ({scanResult.media_items.length} ITEMS)</span>
                       </span>
-                      <span className="text-xs font-mono text-neutral-400">
+                      <span className="text-xs font-mono text-muted">
                         {scanResult.classified_url.platform || scanResult.classified_url.domain}
                       </span>
                     </div>
 
                     <div className="flex items-center space-x-2">
-                      <span className="px-2 py-0.5 rounded bg-brand-dark/80 border border-brand-dark text-xs font-mono text-neutral-300">
-                        <span className="text-brand-red font-semibold">{selectedGalleryIds.size}</span> / {scanResult.media_items.length} Selected
+                      <span className="px-2 py-0.5 rounded bg-raised border border-hairline text-xs font-mono text-ink/80">
+                        <span className="text-accent font-semibold">{selectedGalleryIds.size}</span> / {scanResult.media_items.length} Selected
                       </span>
                       <button
                         type="button"
                         onClick={handleSaveCurrentScanAsSource}
-                        className="px-2.5 py-1.5 bg-brand-dark/80 hover:bg-neutral-800 text-neutral-300 hover:text-white border border-brand-dark text-xs font-mono font-medium rounded-md flex items-center space-x-1.5 transition-all"
+                        className="px-2.5 py-1.5 bg-raised hover:bg-hairline/70 text-ink/80 hover:text-ink border border-hairline text-xs font-mono font-medium rounded-md flex items-center space-x-1.5 transition-all"
                         title="Bookmark this gallery source to track uploads and run incremental rescans"
                       >
-                        <Bookmark className="h-3.5 w-3.5 text-amber-400" />
+                        <Bookmark className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
                         <span>Bookmark Source</span>
                       </button>
                       <button
@@ -1269,7 +1357,7 @@ export const App: React.FC = () => {
                           handleStartBatchDownload(selected);
                         }}
                         disabled={batchDownloading || selectedGalleryIds.size === 0}
-                        className="px-3 py-1.5 bg-brand-red hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-mono font-semibold rounded-md flex items-center space-x-1.5 transition-all shadow-sm shadow-brand-red/30"
+                        className="px-3 py-1.5 bg-accent hover:bg-accent-vivid disabled:opacity-50 disabled:cursor-not-allowed text-on-accent text-xs font-mono font-semibold rounded-md flex items-center space-x-1.5 transition-all shadow-sm shadow-accent/30"
                       >
                         {batchDownloading ? (
                           <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1287,14 +1375,14 @@ export const App: React.FC = () => {
 
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                     <div className="space-y-0.5">
-                      <h3 className="text-base font-bold text-brand-white font-sans truncate">
+                      <h3 className="text-base font-bold text-ink font-sans truncate">
                         {scanResult.classified_url.title_hint ||
                           scanResult.media_items[0]?.title ||
                           "Gallery Collection"}
                       </h3>
-                      <p className="text-xs font-mono text-neutral-400">
+                      <p className="text-xs font-mono text-muted">
                         Author:{" "}
-                        <span className="text-neutral-200">
+                        <span className="text-ink/90">
                           {scanResult.classified_url.author_hint || "gallery"}
                         </span>{" "}
                         · Source: {scanResult.classified_url.domain}
@@ -1310,14 +1398,14 @@ export const App: React.FC = () => {
                             new Set(scanResult.media_items!.map((i) => i.id))
                           )
                         }
-                        className="px-2 py-1 bg-brand-dark/70 hover:bg-neutral-800 border border-brand-dark rounded text-[11px] font-mono text-neutral-300 transition-colors"
+                        className="px-2 py-1 bg-raised hover:bg-hairline/70 border border-hairline rounded text-[11px] font-mono text-ink/80 transition-colors"
                       >
                         Select All
                       </button>
                       <button
                         type="button"
                         onClick={() => setSelectedGalleryIds(new Set())}
-                        className="px-2 py-1 bg-brand-dark/70 hover:bg-neutral-800 border border-brand-dark rounded text-[11px] font-mono text-neutral-300 transition-colors"
+                        className="px-2 py-1 bg-raised hover:bg-hairline/70 border border-hairline rounded text-[11px] font-mono text-ink/80 transition-colors"
                       >
                         Deselect All
                       </button>
@@ -1330,7 +1418,7 @@ export const App: React.FC = () => {
                           });
                           setSelectedGalleryIds(next);
                         }}
-                        className="px-2 py-1 bg-brand-dark/70 hover:bg-neutral-800 border border-brand-dark rounded text-[11px] font-mono text-neutral-300 transition-colors"
+                        className="px-2 py-1 bg-raised hover:bg-hairline/70 border border-hairline rounded text-[11px] font-mono text-ink/80 transition-colors"
                       >
                         Invert
                       </button>
@@ -1368,11 +1456,11 @@ export const App: React.FC = () => {
                                 }}
                                 className={`rounded-lg p-2 flex flex-col space-y-2 cursor-pointer transition-all ${
                                   isSelected
-                                    ? "bg-brand-red/10 border border-brand-red/80 ring-1 ring-brand-red/40"
-                                    : "bg-brand-black/70 border border-brand-dark hover:border-brand-dark/90"
+                                    ? "bg-accent/10 border border-accent/40 ring-1 ring-accent/40"
+                                    : "bg-raised border border-hairline hover:border-hairline-strong"
                                 }`}
                               >
-                                <div className="w-full h-24 rounded bg-brand-black/90 border border-brand-dark/60 overflow-hidden flex items-center justify-center relative">
+                                <div className="w-full h-24 rounded bg-band border border-hairline overflow-hidden flex items-center justify-center relative">
                                   {item.thumbnail_url ? (
                                     <img
                                       src={item.thumbnail_url}
@@ -1381,9 +1469,9 @@ export const App: React.FC = () => {
                                       className="w-full h-full object-cover"
                                     />
                                   ) : item.media_type === "video" ? (
-                                    <Film className="h-6 w-6 text-neutral-400" />
+                                    <Film className="h-6 w-6 text-muted" />
                                   ) : (
-                                    <ImageIcon className="h-6 w-6 text-neutral-400" />
+                                    <ImageIcon className="h-6 w-6 text-muted" />
                                   )}
                                   <button
                                     type="button"
@@ -1398,8 +1486,8 @@ export const App: React.FC = () => {
                                     }}
                                     className={`absolute top-1 left-1 p-1 rounded-md transition-all ${
                                       isSelected
-                                        ? "bg-brand-red text-white"
-                                        : "bg-black/60 text-neutral-400 hover:text-white"
+                                        ? "bg-accent text-on-accent"
+                                        : "bg-black/60 text-muted hover:text-ink"
                                     }`}
                                     title={isSelected ? "Deselect item" : "Select item"}
                                   >
@@ -1417,8 +1505,8 @@ export const App: React.FC = () => {
                                     }}
                                     className={`absolute top-1 right-8 p-1 rounded-md transition-all ${
                                       bookmarkedIds.has(item.id)
-                                        ? "bg-brand-red text-white shadow-sm shadow-brand-red/40"
-                                        : "bg-black/60 text-neutral-300 hover:text-white"
+                                        ? "bg-accent text-on-accent shadow-sm shadow-accent/40"
+                                        : "bg-black/60 text-ink/80 hover:text-ink"
                                     }`}
                                     title={
                                       bookmarkedIds.has(item.id)
@@ -1438,7 +1526,7 @@ export const App: React.FC = () => {
                                       e.stopPropagation();
                                       handleOpenPreview(item);
                                     }}
-                                    className="absolute top-1 right-1 p-1 rounded-md bg-black/60 hover:bg-black/90 text-neutral-300 hover:text-white transition-all shadow-sm"
+                                    className="absolute top-1 right-1 p-1 rounded-md bg-black/60 hover:bg-black/90 text-ink/80 hover:text-ink transition-all shadow-sm"
                                     title="Preview item"
                                   >
                                     <Eye className="h-3 w-3" />
@@ -1450,24 +1538,24 @@ export const App: React.FC = () => {
                                       handleStartDownload(item);
                                     }}
                                     disabled={downloadingIds.has(item.id)}
-                                    className="absolute bottom-1 left-1 p-1 rounded-md bg-black/70 hover:bg-brand-red text-neutral-300 hover:text-white transition-all shadow-sm"
+                                    className="absolute bottom-1 left-1 p-1 rounded-md bg-black/70 hover:bg-accent-vivid text-ink/80 hover:text-ink transition-all shadow-sm"
                                     title="Download single item"
                                   >
                                     {downloadingIds.has(item.id) ? (
-                                      <Loader2 className="h-3 w-3 animate-spin text-white" />
+                                      <Loader2 className="h-3 w-3 animate-spin text-ink" />
                                     ) : (
                                       <Download className="h-3 w-3" />
                                     )}
                                   </button>
-                                  <span className="absolute bottom-1 right-1 px-1.5 py-0.5 bg-black/80 rounded text-[9px] font-mono text-neutral-300">
+                                  <span className="absolute bottom-1 right-1 px-1.5 py-0.5 bg-black/80 rounded text-[9px] font-mono text-ink/80">
                                     #{globalIdx + 1}
                                   </span>
                                 </div>
                                 <div className="text-[11px] font-mono space-y-0.5">
-                                  <p className="truncate text-brand-white font-medium">
+                                  <p className="truncate text-ink font-medium">
                                     {item.title || `Item ${globalIdx + 1}`}
                                   </p>
-                                  <div className="flex items-center justify-between text-[10px] text-neutral-400">
+                                  <div className="flex items-center justify-between text-[11px] text-muted">
                                     <span className="uppercase">
                                       {item.available_formats[0]?.container || "IMG"}
                                     </span>
@@ -1480,8 +1568,8 @@ export const App: React.FC = () => {
                         </div>
 
                         {totalGalleryPages > 1 && (
-                          <div className="flex items-center justify-between border-t border-brand-dark/50 pt-3 text-xs font-mono">
-                            <span className="text-neutral-400">
+                          <div className="flex items-center justify-between border-t border-hairline pt-3 text-xs font-mono">
+                            <span className="text-muted">
                               Showing {(galleryPage - 1) * GALLERY_PAGE_SIZE + 1}–
                               {Math.min(
                                 galleryPage * GALLERY_PAGE_SIZE,
@@ -1494,12 +1582,12 @@ export const App: React.FC = () => {
                                 type="button"
                                 disabled={galleryPage <= 1}
                                 onClick={() => setGalleryPage((p) => Math.max(1, p - 1))}
-                                className="px-2.5 py-1 bg-brand-dark/80 hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed border border-brand-dark rounded text-neutral-300 flex items-center space-x-1 transition-all"
+                                className="px-2.5 py-1 bg-raised hover:bg-hairline/70 disabled:opacity-40 disabled:cursor-not-allowed border border-hairline rounded text-ink/80 flex items-center space-x-1 transition-all"
                               >
                                 <ChevronLeft className="h-3.5 w-3.5" />
                                 <span>Prev</span>
                               </button>
-                              <span className="px-2.5 py-1 bg-brand-black/80 border border-brand-dark rounded text-neutral-200">
+                              <span className="px-2.5 py-1 bg-page border border-hairline rounded text-ink/90">
                                 Page {galleryPage} / {totalGalleryPages}
                               </span>
                               <button
@@ -1510,7 +1598,7 @@ export const App: React.FC = () => {
                                     Math.min(totalGalleryPages, p + 1)
                                   )
                                 }
-                                className="px-2.5 py-1 bg-brand-dark/80 hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed border border-brand-dark rounded text-neutral-300 flex items-center space-x-1 transition-all"
+                                className="px-2.5 py-1 bg-raised hover:bg-hairline/70 disabled:opacity-40 disabled:cursor-not-allowed border border-hairline rounded text-ink/80 flex items-center space-x-1 transition-all"
                               >
                                 <span>Next</span>
                                 <ChevronRight className="h-3.5 w-3.5" />
@@ -1522,11 +1610,11 @@ export const App: React.FC = () => {
                     );
                   })()}
 
-                  <div className="flex items-center justify-between border-t border-brand-dark/50 pt-2 text-[11px] font-mono">
-                    <span className="text-neutral-400">
+                  <div className="flex items-center justify-between border-t border-hairline pt-2 text-[11px] font-mono">
+                    <span className="text-muted">
                       Total {scanResult.media_items.length} items enumerated without downloading
                     </span>
-                    <span className="text-emerald-400 font-medium">
+                    <span className="text-emerald-600 dark:text-emerald-400 font-medium">
                       Multi-item batch queue active
                     </span>
                   </div>
@@ -1536,26 +1624,26 @@ export const App: React.FC = () => {
               {/* Discovered Single Media Card */}
               {scanResult?.media_item &&
                 (!scanResult.media_items || scanResult.media_items.length <= 1) && (
-                  <div className="bg-brand-dark/30 border border-brand-dark rounded-xl p-5 shadow-xl space-y-4">
-                    <div className="flex items-center justify-between border-b border-brand-dark/60 pb-3">
+                  <div className="bg-surface border border-hairline rounded-xl p-5 shadow-xl space-y-4">
+                    <div className="flex items-center justify-between border-b border-hairline pb-3">
                     <div className="flex items-center space-x-2.5">
                       {scanResult.media_item.media_type === "image" ? (
-                        <span className="px-2.5 py-1 bg-emerald-950/80 border border-emerald-600/50 text-emerald-300 text-xs font-mono font-semibold rounded-md flex items-center space-x-1.5">
+                        <span className="px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-xs font-mono font-semibold rounded-md flex items-center space-x-1.5">
                           <ImageIcon className="h-3.5 w-3.5" />
                           <span>DIRECT IMAGE</span>
                         </span>
                       ) : scanResult.classified_url.category === "direct_video" ? (
-                        <span className="px-2.5 py-1 bg-purple-950/80 border border-purple-600/50 text-purple-300 text-xs font-mono font-semibold rounded-md flex items-center space-x-1.5">
+                        <span className="px-2.5 py-1 bg-purple-500/10 border border-purple-500/30 text-purple-700 dark:text-purple-300 text-xs font-mono font-semibold rounded-md flex items-center space-x-1.5">
                           <Film className="h-3.5 w-3.5" />
                           <span>DIRECT VIDEO</span>
                         </span>
                       ) : (
-                        <span className="px-2.5 py-1 bg-indigo-950/80 border border-indigo-600/50 text-indigo-300 text-xs font-mono font-semibold rounded-md flex items-center space-x-1.5">
+                        <span className="px-2.5 py-1 bg-indigo-500/10 border border-indigo-500/30 text-indigo-700 dark:text-indigo-300 text-xs font-mono font-semibold rounded-md flex items-center space-x-1.5">
                           <Film className="h-3.5 w-3.5" />
                           <span>PLATFORM VIDEO (yt-dlp)</span>
                         </span>
                       )}
-                      <span className="text-xs font-mono text-neutral-400">
+                      <span className="text-xs font-mono text-muted">
                         {scanResult.classified_url.domain}
                       </span>
                     </div>
@@ -1564,10 +1652,10 @@ export const App: React.FC = () => {
                       <button
                         type="button"
                         onClick={handleSaveCurrentScanAsSource}
-                        className="px-2.5 py-1 rounded text-xs font-mono font-medium flex items-center space-x-1.5 transition-all bg-brand-black/80 hover:bg-neutral-800 text-neutral-300 border border-brand-dark"
+                        className="px-2.5 py-1 rounded text-xs font-mono font-medium flex items-center space-x-1.5 transition-all bg-page hover:bg-hairline/70 text-ink/80 border border-hairline"
                         title="Bookmark this source URL to track uploads and run incremental rescans"
                       >
-                        <Bookmark className="h-3.5 w-3.5 text-amber-400" />
+                        <Bookmark className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
                         <span>Bookmark Source</span>
                       </button>
                       <button
@@ -1575,8 +1663,8 @@ export const App: React.FC = () => {
                         onClick={() => handleToggleBookmark(scanResult.media_item!)}
                         className={`px-2.5 py-1 rounded text-xs font-mono font-medium flex items-center space-x-1.5 transition-all ${
                           bookmarkedIds.has(scanResult.media_item.id)
-                            ? "bg-brand-red text-white shadow-sm shadow-brand-red/30"
-                            : "bg-brand-black/80 hover:bg-neutral-800 text-neutral-300 border border-brand-dark"
+                            ? "bg-accent text-on-accent shadow-sm shadow-accent/30"
+                            : "bg-page hover:bg-hairline/70 text-ink/80 border border-hairline"
                         }`}
                       >
                         <Bookmark
@@ -1590,7 +1678,7 @@ export const App: React.FC = () => {
                             : "Bookmark to Library"}
                         </span>
                       </button>
-                      <div className="flex items-center space-x-1 text-xs text-emerald-400 font-mono">
+                      <div className="flex items-center space-x-1 text-xs text-emerald-600 dark:text-emerald-400 font-mono">
                         <CheckCircle2 className="h-4 w-4" />
                         <span>Classified Successfully</span>
                       </div>
@@ -1599,7 +1687,7 @@ export const App: React.FC = () => {
 
                   <div className="flex gap-5">
                     {/* Visual Preview / Thumbnail */}
-                    <div className="w-48 h-32 rounded-lg bg-brand-black/80 border border-brand-dark overflow-hidden flex items-center justify-center shrink-0">
+                    <div className="w-48 h-32 rounded-lg bg-page border border-hairline overflow-hidden flex items-center justify-center shrink-0">
                       {scanResult.media_item.thumbnail_url ? (
                         <img
                           src={scanResult.media_item.thumbnail_url}
@@ -1607,9 +1695,9 @@ export const App: React.FC = () => {
                           className="w-full h-full object-cover"
                         />
                       ) : (
-                        <div className="flex flex-col items-center justify-center text-neutral-400 space-y-2">
-                          <Film className="h-8 w-8 text-neutral-400" />
-                          <span className="text-[10px] font-mono">Video Stream</span>
+                        <div className="flex flex-col items-center justify-center text-muted space-y-2">
+                          <Film className="h-8 w-8 text-muted" />
+                          <span className="text-[11px] font-mono">Video Stream</span>
                         </div>
                       )}
                     </div>
@@ -1617,30 +1705,30 @@ export const App: React.FC = () => {
                     {/* Metadata Column */}
                     <div className="flex-1 flex flex-col justify-between text-xs font-mono space-y-2">
                       <div>
-                        <h3 className="text-base font-bold text-brand-white font-sans truncate">
+                        <h3 className="text-base font-bold text-ink font-sans truncate">
                           {scanResult.media_item.title || "Untitled Media"}
                         </h3>
-                        <p className="text-[11px] text-neutral-400 truncate mt-0.5">
+                        <p className="text-[11px] text-muted truncate mt-0.5">
                           {scanResult.media_item.original_url}
                         </p>
                       </div>
 
-                      <div className="grid grid-cols-3 gap-2 bg-brand-black/60 p-2.5 rounded-lg border border-brand-dark text-[11px]">
+                      <div className="grid grid-cols-3 gap-2 bg-raised p-2.5 rounded-lg border border-hairline text-[11px]">
                         <div>
-                          <span className="text-neutral-400 block">File Size:</span>
-                          <span className="text-brand-white font-semibold">
+                          <span className="text-muted block">File Size:</span>
+                          <span className="text-ink font-semibold">
                             {formatBytes(scanResult.media_item.filesize_bytes)}
                           </span>
                         </div>
                         <div>
-                          <span className="text-neutral-400 block">Container:</span>
-                          <span className="text-brand-white uppercase font-semibold">
+                          <span className="text-muted block">Container:</span>
+                          <span className="text-ink uppercase font-semibold">
                             {scanResult.media_item.available_formats[0]?.container || "Unknown"}
                           </span>
                         </div>
                         <div>
-                          <span className="text-neutral-400 block">Stream Type:</span>
-                          <span className="text-emerald-400 font-semibold">
+                          <span className="text-muted block">Stream Type:</span>
+                          <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
                             {scanResult.classified_url.category === "direct_video" ||
                             scanResult.classified_url.category === "direct_image"
                               ? "Direct Source"
@@ -1652,10 +1740,10 @@ export const App: React.FC = () => {
                       {/* Detected Formats Chips */}
                       {scanResult.media_item.available_formats.length > 1 && (
                         <div className="space-y-1">
-                          <div className="flex items-center justify-between text-[10px] text-neutral-400">
+                          <div className="flex items-center justify-between text-[11px] text-muted">
                             <span>Available Streams ({scanResult.media_item.available_formats.length} formats):</span>
                             {selectedFormat && (
-                              <span className="text-purple-300 font-semibold">
+                              <span className="text-purple-700 dark:text-purple-300 font-semibold">
                                 Selected: {selectedFormat.resolution || selectedFormat.format_id} ({selectedFormat.container})
                                 {selectedFormat.requires_merge && " [FFmpeg Merge]"}
                               </span>
@@ -1669,19 +1757,19 @@ export const App: React.FC = () => {
                                   type="button"
                                   key={fmt.format_id}
                                   onClick={() => setSelectedFormat(fmt)}
-                                  className={`px-2 py-0.5 rounded text-[10px] flex items-center space-x-1 font-mono transition-all ${
+                                  className={`px-2 py-0.5 rounded text-[11px] flex items-center space-x-1 font-mono transition-all ${
                                     isSelected
-                                      ? "bg-purple-900/60 border border-purple-500 text-white shadow-sm shadow-purple-900/40"
-                                      : "bg-brand-black/80 hover:bg-neutral-800 border border-brand-dark text-neutral-300"
+                                      ? "bg-purple-500/15 border border-purple-500 text-ink shadow-sm shadow-purple-900/40"
+                                      : "bg-page hover:bg-hairline/70 border border-hairline text-ink/80"
                                   }`}
                                 >
                                   <span className="font-medium">{fmt.resolution || fmt.format_id}</span>
                                   {fmt.container && (
-                                    <span className="text-neutral-400 text-[9px]">({fmt.container})</span>
+                                    <span className="text-muted text-[9px]">({fmt.container})</span>
                                   )}
                                   {fmt.requires_merge && (
-                                    <span className="text-purple-300 text-[9px] px-1 bg-purple-950/80 rounded border border-purple-800/60 flex items-center space-x-0.5">
-                                      <Sparkles className="h-2 w-2 text-purple-400" />
+                                    <span className="text-purple-700 dark:text-purple-300 text-[9px] px-1 bg-purple-500/10 rounded border border-purple-500/30 flex items-center space-x-0.5">
+                                      <Sparkles className="h-2 w-2 text-purple-600 dark:text-purple-400" />
                                       <span>merge</span>
                                     </span>
                                   )}
@@ -1692,15 +1780,15 @@ export const App: React.FC = () => {
                         </div>
                       )}
 
-                      <div className="flex items-center justify-between text-[11px] pt-2 border-t border-brand-dark/50">
-                        <span className="text-neutral-400 font-mono">
+                      <div className="flex items-center justify-between text-[11px] pt-2 border-t border-hairline">
+                        <span className="text-muted font-mono">
                           Discovered at: {new Date(scanResult.media_item.created_at).toLocaleTimeString()}
                         </span>
                         <div className="flex items-center space-x-2">
                           <button
                             type="button"
                             onClick={() => handleOpenPreview(scanResult.media_item!)}
-                            className="px-3.5 py-1.5 bg-brand-dark hover:bg-neutral-800 border border-brand-dark text-white rounded-lg text-xs font-mono font-medium flex items-center space-x-1.5 transition-all cursor-pointer"
+                            className="px-3.5 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline text-ink rounded-lg text-xs font-mono font-medium flex items-center space-x-1.5 transition-all cursor-pointer"
                           >
                             <Eye className="h-3.5 w-3.5" />
                             <span>Preview</span>
@@ -1709,7 +1797,7 @@ export const App: React.FC = () => {
                             type="button"
                             onClick={() => handleStartDownload(scanResult.media_item!, selectedFormat)}
                             disabled={downloadingIds.has(scanResult.media_item.id)}
-                            className="px-4 py-1.5 bg-brand-red hover:bg-red-700 text-white rounded-lg text-xs font-mono font-medium flex items-center space-x-2 transition-all shadow-md shadow-brand-red/30 cursor-pointer"
+                            className="px-4 py-1.5 bg-accent hover:bg-accent-vivid text-on-accent rounded-lg text-xs font-mono font-medium flex items-center space-x-2 transition-all shadow-md shadow-accent/30 cursor-pointer"
                           >
                             {downloadingIds.has(scanResult.media_item.id) ? (
                               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1730,45 +1818,45 @@ export const App: React.FC = () => {
               )}
 
               {/* Verification & Architecture Status Grid */}
-              <div className="border border-brand-dark bg-brand-dark/20 rounded-xl p-6 space-y-4">
+              <div className="border border-hairline bg-surface rounded-xl p-6 space-y-4">
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2 text-brand-white font-semibold text-sm">
-                    <ExternalLink className="h-4 w-4 text-brand-red" />
+                  <div className="flex items-center space-x-2 text-ink font-semibold text-sm">
+                    <ExternalLink className="h-4 w-4 text-accent" />
                     <span>3-Tier Architecture Verification Status</span>
                   </div>
                   <button
                     onClick={pingPythonEngine}
                     disabled={isPinging}
-                    className="px-3 py-1 bg-brand-dark hover:bg-neutral-800 border border-brand-dark text-xs text-brand-white rounded-md transition-colors font-mono"
+                    className="px-3 py-1 bg-raised hover:bg-hairline/70 border border-hairline text-xs text-ink rounded-md transition-colors font-mono"
                   >
                     {isPinging ? "Pinging..." : "Ping Python Engine"}
                   </button>
                 </div>
 
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs font-mono">
-                  <div className="bg-brand-black/60 p-3 rounded-lg border border-brand-dark">
-                    <span className="text-neutral-400 block mb-1">Desktop Shell:</span>
-                    <span className="text-emerald-400">Electron 33 (Isolated)</span>
+                  <div className="bg-raised p-3 rounded-lg border border-hairline">
+                    <span className="text-muted block mb-1">Desktop Shell:</span>
+                    <span className="text-emerald-600 dark:text-emerald-400">Electron 33 (Isolated)</span>
                   </div>
-                  <div className="bg-brand-black/60 p-3 rounded-lg border border-brand-dark">
-                    <span className="text-neutral-400 block mb-1">Renderer:</span>
-                    <span className="text-emerald-400">React 18 + Vite 5 + Tailwind</span>
+                  <div className="bg-raised p-3 rounded-lg border border-hairline">
+                    <span className="text-muted block mb-1">Renderer:</span>
+                    <span className="text-emerald-600 dark:text-emerald-400">React 18 + Vite 5 + Tailwind</span>
                   </div>
-                  <div className="bg-brand-black/60 p-3 rounded-lg border border-brand-dark">
-                    <span className="text-neutral-400 block mb-1">Preload Bridge:</span>
-                    <span className="text-emerald-400">{ipcStatus}</span>
+                  <div className="bg-raised p-3 rounded-lg border border-hairline">
+                    <span className="text-muted block mb-1">Preload Bridge:</span>
+                    <span className="text-emerald-600 dark:text-emerald-400">{ipcStatus}</span>
                   </div>
-                  <div className="bg-brand-black/60 p-3 rounded-lg border border-brand-dark">
-                    <span className="text-neutral-400 block mb-1">Python Engine:</span>
-                    <span className={pythonStatus?.connected ? "text-emerald-400" : "text-amber-400"}>
+                  <div className="bg-raised p-3 rounded-lg border border-hairline">
+                    <span className="text-muted block mb-1">Python Engine:</span>
+                    <span className={pythonStatus?.connected ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}>
                       {pythonStatus?.connected
                         ? `Connected (${pythonLatency ?? 0}ms)`
                         : "Disconnected"}
                     </span>
                   </div>
-                  <div className="bg-brand-black/60 p-3 rounded-lg border border-brand-dark">
-                    <span className="text-neutral-400 block mb-1">FFmpeg Processor:</span>
-                    <span className={ffmpegInfo?.installed ? "text-purple-400" : "text-amber-400"}>
+                  <div className="bg-raised p-3 rounded-lg border border-hairline">
+                    <span className="text-muted block mb-1">FFmpeg Processor:</span>
+                    <span className={ffmpegInfo?.installed ? "text-purple-600 dark:text-purple-400" : "text-amber-600 dark:text-amber-400"}>
                       {ffmpegInfo?.installed
                         ? `Ready (${ffmpegInfo.version?.split("-")[0] || "Active"})`
                         : "Not Installed"}
@@ -1778,42 +1866,42 @@ export const App: React.FC = () => {
 
                 {/* Python Child-Process Engine Diagnostics */}
                 {pythonStatus?.info && (
-                  <div className="bg-brand-black/40 border border-brand-dark/60 rounded-lg p-3 text-xs font-mono space-y-1.5 text-neutral-300">
-                    <div className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold mb-2">
+                  <div className="bg-raised/60 border border-hairline rounded-lg p-3 text-xs font-mono space-y-1.5 text-ink/80">
+                    <div className="text-[11px] uppercase tracking-wider text-muted font-semibold mb-2">
                       Python Engine Runtime (JSON-RPC over Stdio)
                     </div>
                     <div className="grid grid-cols-2 gap-2 text-[11px]">
                       <div>
-                        <span className="text-neutral-400">Engine Version: </span>
-                        <span className="text-brand-white font-medium">
+                        <span className="text-muted">Engine Version: </span>
+                        <span className="text-ink font-medium">
                           v{pythonPing?.version || pythonStatus.info.engine_version}
                         </span>
                       </div>
                       <div>
-                        <span className="text-neutral-400">Python Runtime: </span>
-                        <span className="text-brand-white font-medium">{pythonStatus.info.python_version}</span>
+                        <span className="text-muted">Python Runtime: </span>
+                        <span className="text-ink font-medium">{pythonStatus.info.python_version}</span>
                       </div>
                       <div>
-                        <span className="text-neutral-400">Process PID: </span>
-                        <span className="text-emerald-400 font-medium">{pythonStatus.pid}</span>
+                        <span className="text-muted">Process PID: </span>
+                        <span className="text-emerald-600 dark:text-emerald-400 font-medium">{pythonStatus.pid}</span>
                       </div>
                       <div>
-                        <span className="text-neutral-400">Round-trip Ping: </span>
-                        <span className="text-emerald-400 font-medium">
+                        <span className="text-muted">Round-trip Ping: </span>
+                        <span className="text-emerald-600 dark:text-emerald-400 font-medium">
                           {pythonLatency !== null ? `${pythonLatency}ms (${pythonPing?.message || "pong"})` : "—"}
                         </span>
                       </div>
                       <div className="col-span-2 truncate">
-                        <span className="text-neutral-400">Download Dir: </span>
-                        <span className="text-neutral-300">{pythonStatus.info.download_dir}</span>
+                        <span className="text-muted">Download Dir: </span>
+                        <span className="text-ink/80">{pythonStatus.info.download_dir}</span>
                       </div>
                       <div className="col-span-2 truncate">
-                        <span className="text-neutral-400">Data Dir: </span>
-                        <span className="text-neutral-300">{pythonStatus.info.data_dir}</span>
+                        <span className="text-muted">Data Dir: </span>
+                        <span className="text-ink/80">{pythonStatus.info.data_dir}</span>
                       </div>
                       <div className="col-span-2 truncate">
-                        <span className="text-neutral-400">FFmpeg Binary: </span>
-                        <span className="text-purple-300 font-mono text-[10px]">
+                        <span className="text-muted">FFmpeg Binary: </span>
+                        <span className="text-purple-700 dark:text-purple-300 font-mono text-[11px]">
                           {ffmpegInfo?.ffmpeg_path || "Not detected in PATH"}
                         </span>
                       </div>
@@ -1829,10 +1917,10 @@ export const App: React.FC = () => {
             <div className="max-w-4xl mx-auto space-y-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <h1 className="text-2xl font-bold tracking-tight text-brand-white">
+                  <h1 className="text-2xl font-bold tracking-tight text-ink">
                     Scan History
                   </h1>
-                  <p className="text-sm text-neutral-400 mt-1">
+                  <p className="text-sm text-muted mt-1">
                     Local audit log of all URL scans and discovered media sources stored in SQLite.
                   </p>
                 </div>
@@ -1840,7 +1928,7 @@ export const App: React.FC = () => {
                   <button
                     onClick={fetchScanHistory}
                     disabled={scanHistoryLoading}
-                    className="px-3 py-1.5 bg-brand-dark hover:bg-neutral-800 border border-brand-dark rounded-md text-xs font-mono text-neutral-300 flex items-center space-x-1.5 transition-colors"
+                    className="px-3 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline rounded-md text-xs font-mono text-ink/80 flex items-center space-x-1.5 transition-colors"
                   >
                     <RefreshCw className={`h-3.5 w-3.5 ${scanHistoryLoading ? "animate-spin" : ""}`} />
                     <span>Refresh</span>
@@ -1848,7 +1936,7 @@ export const App: React.FC = () => {
                   {scanHistory.length > 0 && (
                     <button
                       onClick={handleClearHistory}
-                      className="px-3 py-1.5 bg-red-950/40 hover:bg-red-900/60 border border-red-800/60 rounded-md text-xs font-mono text-red-300 flex items-center space-x-1.5 transition-colors"
+                      className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded-md text-xs font-mono text-red-700 dark:text-red-300 flex items-center space-x-1.5 transition-colors"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                       <span>Clear History</span>
@@ -1858,20 +1946,20 @@ export const App: React.FC = () => {
               </div>
 
               {scanHistoryLoading && scanHistory.length === 0 ? (
-                <div className="py-20 flex flex-col items-center justify-center space-y-3 text-neutral-400">
-                  <Loader2 className="h-6 w-6 animate-spin text-brand-red" />
+                <div className="py-20 flex flex-col items-center justify-center space-y-3 text-muted">
+                  <Loader2 className="h-6 w-6 animate-spin text-accent" />
                   <span className="text-xs font-mono">Loading scan history from SQLite...</span>
                 </div>
               ) : scanHistory.length === 0 ? (
-                <div className="py-20 flex flex-col items-center justify-center space-y-3 bg-brand-dark/20 border border-brand-dark/60 rounded-xl text-center p-8">
-                  <History className="h-10 w-10 text-neutral-400 stroke-1" />
-                  <h3 className="text-sm font-semibold text-brand-white">No Scan History</h3>
-                  <p className="text-xs text-neutral-400 max-w-sm">
+                <div className="py-20 flex flex-col items-center justify-center space-y-3 bg-surface border border-hairline rounded-xl text-center p-8">
+                  <History className="h-10 w-10 text-muted stroke-1" />
+                  <h3 className="text-sm font-semibold text-ink">No Scan History</h3>
+                  <p className="text-xs text-muted max-w-sm">
                     Scanned URLs and discovered media collections are automatically recorded here.
                   </p>
                   <button
                     onClick={() => setActiveTab("scan")}
-                    className="mt-2 px-4 py-2 bg-brand-red hover:bg-red-700 text-white rounded-lg text-xs font-medium transition-colors"
+                    className="mt-2 px-4 py-2 bg-accent hover:bg-accent-vivid text-on-accent rounded-lg text-xs font-medium transition-colors"
                   >
                     Scan a URL
                   </button>
@@ -1881,12 +1969,12 @@ export const App: React.FC = () => {
                   {scanHistory.map((scan) => (
                     <div
                       key={scan.id}
-                      className="bg-brand-dark/30 border border-brand-dark rounded-xl p-4 flex flex-col space-y-3 hover:border-brand-dark/90 transition-all"
+                      className="bg-surface border border-hairline rounded-xl p-4 flex flex-col space-y-3 hover:border-hairline-strong transition-all"
                     >
                       <div className="flex items-center justify-between">
                         <div className="flex items-center space-x-3 min-w-0">
                           {/* Thumbnail / Category Icon */}
-                          <div className="w-12 h-12 rounded-lg bg-brand-black/90 border border-brand-dark overflow-hidden flex items-center justify-center shrink-0">
+                          <div className="w-12 h-12 rounded-lg bg-band border border-hairline overflow-hidden flex items-center justify-center shrink-0">
                             {scan.preview_thumbnail ? (
                               <img
                                 src={scan.preview_thumbnail}
@@ -1894,27 +1982,27 @@ export const App: React.FC = () => {
                                 className="w-full h-full object-cover"
                               />
                             ) : scan.category === "direct_video" || scan.category === "channel" ? (
-                              <Film className="h-5 w-5 text-purple-400" />
+                              <Film className="h-5 w-5 text-purple-600 dark:text-purple-400" />
                             ) : (
-                              <ImageIcon className="h-5 w-5 text-emerald-400" />
+                              <ImageIcon className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
                             )}
                           </div>
 
                           <div className="space-y-0.5 min-w-0">
                             <div className="flex items-center space-x-2">
-                              <span className="font-semibold text-sm text-brand-white truncate max-w-md">
+                              <span className="font-semibold text-sm text-ink truncate max-w-md">
                                 {scan.title_hint || scan.domain || scan.raw_url}
                               </span>
-                              <span className="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-brand-black/80 border border-brand-dark text-neutral-300 shrink-0">
+                              <span className="px-2 py-0.5 rounded text-[11px] font-mono uppercase bg-page border border-hairline text-ink/80 shrink-0">
                                 {scan.category.replace("_", " ")}
                               </span>
                               {scan.item_count > 0 && (
-                                <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-sky-950/70 border border-sky-800/50 text-sky-300 shrink-0">
+                                <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-sky-500/10 border border-sky-500/30 text-sky-700 dark:text-sky-300 shrink-0">
                                   {scan.item_count} items
                                 </span>
                               )}
                             </div>
-                            <div className="flex items-center space-x-3 text-xs font-mono text-neutral-400">
+                            <div className="flex items-center space-x-3 text-xs font-mono text-muted">
                               <span className="truncate max-w-sm">{scan.raw_url}</span>
                               <span>·</span>
                               <span>{new Date(scan.scanned_at).toLocaleString()}</span>
@@ -1925,14 +2013,14 @@ export const App: React.FC = () => {
                         <div className="flex items-center space-x-2 shrink-0">
                           <button
                             onClick={() => handleInspectScan(scan)}
-                            className="px-3 py-1.5 bg-brand-black/80 hover:bg-neutral-800 border border-brand-dark rounded-md text-xs font-mono text-neutral-300 flex items-center space-x-1.5 transition-colors"
+                            className="px-3 py-1.5 bg-page hover:bg-hairline/70 border border-hairline rounded-md text-xs font-mono text-ink/80 flex items-center space-x-1.5 transition-colors"
                           >
                             <Eye className="h-3.5 w-3.5" />
                             <span>Inspect</span>
                           </button>
                           <button
                             onClick={() => handleReScan(scan.raw_url)}
-                            className="px-3 py-1.5 bg-brand-red/90 hover:bg-brand-red rounded-md text-xs font-mono text-white flex items-center space-x-1.5 transition-colors shadow-sm shadow-brand-red/20"
+                            className="px-3 py-1.5 bg-accent/90 hover:bg-accent-vivid rounded-md text-xs font-mono text-on-accent flex items-center space-x-1.5 transition-colors shadow-sm shadow-accent/20"
                           >
                             <RefreshCw className="h-3 w-3" />
                             <span>Rescan</span>
@@ -1942,19 +2030,19 @@ export const App: React.FC = () => {
 
                       {/* Expanded items list if this scan is inspected */}
                       {selectedScanDetail?.scan.id === scan.id && (
-                        <div className="border-t border-brand-dark/60 pt-3 space-y-3">
-                          <div className="flex items-center justify-between text-xs font-mono text-neutral-400">
+                        <div className="border-t border-hairline pt-3 space-y-3">
+                          <div className="flex items-center justify-between text-xs font-mono text-muted">
                             <span>Discovered Items in this Scan ({selectedScanDetail.items.length})</span>
                             <button
                               onClick={() => setSelectedScanDetail(null)}
-                              className="text-neutral-400 hover:text-white"
+                              className="text-muted hover:text-ink"
                             >
                               Close
                             </button>
                           </div>
                           {selectedScanDetail.loading ? (
-                            <div className="py-6 flex items-center justify-center space-x-2 text-xs font-mono text-neutral-400">
-                              <Loader2 className="h-4 w-4 animate-spin text-brand-red" />
+                            <div className="py-6 flex items-center justify-center space-x-2 text-xs font-mono text-muted">
+                              <Loader2 className="h-4 w-4 animate-spin text-accent" />
                               <span>Loading scan items from database...</span>
                             </div>
                           ) : (
@@ -1962,9 +2050,9 @@ export const App: React.FC = () => {
                               {selectedScanDetail.items.map((it, idx) => (
                                 <div
                                   key={it.id || idx}
-                                  className="bg-brand-black/80 border border-brand-dark/70 rounded-lg p-2 flex flex-col space-y-2 relative"
+                                  className="bg-page border border-hairline rounded-lg p-2 flex flex-col space-y-2 relative"
                                 >
-                                  <div className="w-full h-20 rounded bg-brand-black border border-brand-dark/50 overflow-hidden flex items-center justify-center relative">
+                                  <div className="w-full h-20 rounded bg-page border border-hairline overflow-hidden flex items-center justify-center relative">
                                     {it.thumbnail_url ? (
                                       <img
                                         src={it.thumbnail_url}
@@ -1972,9 +2060,9 @@ export const App: React.FC = () => {
                                         className="w-full h-full object-cover"
                                       />
                                     ) : it.media_type === "video" ? (
-                                      <Film className="h-5 w-5 text-neutral-400" />
+                                      <Film className="h-5 w-5 text-muted" />
                                     ) : (
-                                      <ImageIcon className="h-5 w-5 text-neutral-400" />
+                                      <ImageIcon className="h-5 w-5 text-muted" />
                                     )}
                                     <button
                                       type="button"
@@ -1984,14 +2072,14 @@ export const App: React.FC = () => {
                                       }}
                                       className={`absolute top-1 right-1 p-1 rounded transition-all ${
                                         bookmarkedIds.has(it.id)
-                                          ? "bg-brand-red text-white shadow-sm shadow-brand-red/40"
-                                          : "bg-black/60 text-neutral-300 hover:text-white"
+                                          ? "bg-accent text-on-accent shadow-sm shadow-accent/40"
+                                          : "bg-black/60 text-ink/80 hover:text-ink"
                                       }`}
                                     >
                                       <Bookmark className={`h-3 w-3 ${bookmarkedIds.has(it.id) ? "fill-current" : ""}`} />
                                     </button>
                                   </div>
-                                  <div className="text-[10px] font-mono truncate text-brand-white">
+                                  <div className="text-[11px] font-mono truncate text-ink">
                                     {it.title || `Item #${idx + 1}`}
                                   </div>
                                 </div>
@@ -2012,10 +2100,10 @@ export const App: React.FC = () => {
             <div className="max-w-4xl mx-auto space-y-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <h1 className="text-2xl font-bold tracking-tight text-brand-white">
+                  <h1 className="text-2xl font-bold tracking-tight text-ink">
                     Media Library &amp; Bookmarks
                   </h1>
-                  <p className="text-sm text-neutral-400 mt-1">
+                  <p className="text-sm text-muted mt-1">
                     Saved media items stored in your local SQLite library. Search, filter, inspect, and preview.
                   </p>
                 </div>
@@ -2031,7 +2119,7 @@ export const App: React.FC = () => {
                       )
                     }
                     disabled={savedMediaLoading}
-                    className="px-3 py-1.5 bg-brand-dark hover:bg-neutral-800 border border-brand-dark rounded-md text-xs font-mono text-neutral-300 flex items-center space-x-1.5 transition-colors"
+                    className="px-3 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline rounded-md text-xs font-mono text-ink/80 flex items-center space-x-1.5 transition-colors"
                   >
                     <RefreshCw
                       className={`h-3.5 w-3.5 ${
@@ -2044,11 +2132,11 @@ export const App: React.FC = () => {
               </div>
 
               {/* Search & Filter Toolbar */}
-              <div className="bg-brand-dark/30 border border-brand-dark p-3.5 rounded-xl space-y-3">
+              <div className="bg-surface border border-hairline p-3.5 rounded-xl space-y-3">
                 <div className="flex flex-col sm:flex-row gap-2.5">
                   {/* Search Bar */}
                   <div className="relative flex-1">
-                    <Search className="h-4 w-4 text-neutral-400 absolute left-3 top-2.5" />
+                    <Search className="h-4 w-4 text-muted absolute left-3 top-2.5" />
                     <input
                       type="text"
                       value={libraryQuery}
@@ -2062,7 +2150,7 @@ export const App: React.FC = () => {
                         );
                       }}
                       placeholder="Search title, author, URL in library..."
-                      className="w-full bg-brand-black/80 border border-brand-dark rounded-lg pl-9 pr-8 py-2 text-xs text-brand-white placeholder-neutral-400 focus:outline-none focus:border-brand-red font-mono"
+                      className="w-full bg-page border border-hairline rounded-lg pl-9 pr-8 py-2 text-xs text-ink placeholder-faint focus:outline-none focus:border-accent font-mono"
                     />
                     {libraryQuery && (
                       <button
@@ -2075,7 +2163,7 @@ export const App: React.FC = () => {
                             librarySort
                           );
                         }}
-                        className="absolute right-2.5 top-2.5 text-neutral-400 hover:text-white"
+                        className="absolute right-2.5 top-2.5 text-muted hover:text-ink"
                       >
                         <X className="h-3.5 w-3.5" />
                       </button>
@@ -2083,29 +2171,29 @@ export const App: React.FC = () => {
                   </div>
 
                   {/* Container Format Filter Dropdown */}
-                  <div className="flex items-center space-x-1.5 bg-brand-black/80 border border-brand-dark rounded-lg px-2.5 py-1.5 shrink-0">
-                    <Filter className="h-3.5 w-3.5 text-neutral-400" />
+                  <div className="flex items-center space-x-1.5 bg-page border border-hairline rounded-lg px-2.5 py-1.5 shrink-0">
+                    <Filter className="h-3.5 w-3.5 text-muted" />
                     <select
                       value={libraryContainer}
                       onChange={(e) => setLibraryContainer(e.target.value)}
-                      className="bg-transparent text-xs font-mono text-neutral-200 focus:outline-none cursor-pointer"
+                      className="bg-transparent text-xs font-mono text-ink/90 focus:outline-none cursor-pointer"
                     >
-                      <option value="all" className="bg-brand-black">All Containers</option>
-                      <option value="mp4" className="bg-brand-black">MP4 Video</option>
-                      <option value="webm" className="bg-brand-black">WEBM Video</option>
-                      <option value="mkv" className="bg-brand-black">MKV Video</option>
-                      <option value="jpg" className="bg-brand-black">JPG / JPEG Image</option>
-                      <option value="png" className="bg-brand-black">PNG Image</option>
-                      <option value="webp" className="bg-brand-black">WEBP Image</option>
-                      <option value="gif" className="bg-brand-black">GIF Image</option>
-                      <option value="mp3" className="bg-brand-black">MP3 Audio</option>
-                      <option value="m4a" className="bg-brand-black">M4A Audio</option>
+                      <option value="all" className="bg-page">All Containers</option>
+                      <option value="mp4" className="bg-page">MP4 Video</option>
+                      <option value="webm" className="bg-page">WEBM Video</option>
+                      <option value="mkv" className="bg-page">MKV Video</option>
+                      <option value="jpg" className="bg-page">JPG / JPEG Image</option>
+                      <option value="png" className="bg-page">PNG Image</option>
+                      <option value="webp" className="bg-page">WEBP Image</option>
+                      <option value="gif" className="bg-page">GIF Image</option>
+                      <option value="mp3" className="bg-page">MP3 Audio</option>
+                      <option value="m4a" className="bg-page">M4A Audio</option>
                     </select>
                   </div>
 
                   {/* Sort Order Dropdown */}
-                  <div className="flex items-center space-x-1.5 bg-brand-black/80 border border-brand-dark rounded-lg px-2.5 py-1.5 shrink-0">
-                    <ArrowUpDown className="h-3.5 w-3.5 text-neutral-400" />
+                  <div className="flex items-center space-x-1.5 bg-page border border-hairline rounded-lg px-2.5 py-1.5 shrink-0">
+                    <ArrowUpDown className="h-3.5 w-3.5 text-muted" />
                     <select
                       value={librarySort}
                       onChange={(e) =>
@@ -2113,19 +2201,19 @@ export const App: React.FC = () => {
                           e.target.value as typeof librarySort
                         )
                       }
-                      className="bg-transparent text-xs font-mono text-neutral-200 focus:outline-none cursor-pointer"
+                      className="bg-transparent text-xs font-mono text-ink/90 focus:outline-none cursor-pointer"
                     >
-                      <option value="newest" className="bg-brand-black">Newest First</option>
-                      <option value="oldest" className="bg-brand-black">Oldest First</option>
-                      <option value="title" className="bg-brand-black">Title (A-Z)</option>
-                      <option value="size_desc" className="bg-brand-black">Size (Largest)</option>
-                      <option value="size_asc" className="bg-brand-black">Size (Smallest)</option>
+                      <option value="newest" className="bg-page">Newest First</option>
+                      <option value="oldest" className="bg-page">Oldest First</option>
+                      <option value="title" className="bg-page">Title (A-Z)</option>
+                      <option value="size_desc" className="bg-page">Size (Largest)</option>
+                      <option value="size_asc" className="bg-page">Size (Smallest)</option>
                     </select>
                   </div>
                 </div>
 
                 {/* Filter Pills */}
-                <div className="flex items-center justify-between pt-1 border-t border-brand-dark/50">
+                <div className="flex items-center justify-between pt-1 border-t border-hairline">
                   <div className="flex items-center space-x-2">
                     {(["all", "video", "image", "audio"] as const).map((filter) => (
                       <button
@@ -2133,30 +2221,30 @@ export const App: React.FC = () => {
                         onClick={() => setSavedMediaFilter(filter)}
                         className={`px-3 py-1 rounded-md text-xs font-mono uppercase tracking-wider transition-all ${
                           savedMediaFilter === filter
-                            ? "bg-brand-red text-white font-semibold shadow-sm shadow-brand-red/30"
-                            : "bg-brand-dark/40 text-neutral-400 hover:text-white hover:bg-brand-dark"
+                            ? "bg-accent text-on-accent font-semibold shadow-sm shadow-accent/30"
+                            : "bg-surface text-muted hover:text-ink hover:bg-raised"
                         }`}
                       >
                         {filter === "all" ? "All Types" : `${filter}s`}
                       </button>
                     ))}
                   </div>
-                  <span className="text-xs font-mono text-neutral-400">
+                  <span className="text-xs font-mono text-muted">
                     {savedMediaItems.length} {savedMediaItems.length === 1 ? "item" : "items"} found
                   </span>
                 </div>
               </div>
 
               {savedMediaLoading && savedMediaItems.length === 0 ? (
-                <div className="py-20 flex flex-col items-center justify-center space-y-3 text-neutral-400">
-                  <Loader2 className="h-6 w-6 animate-spin text-brand-red" />
+                <div className="py-20 flex flex-col items-center justify-center space-y-3 text-muted">
+                  <Loader2 className="h-6 w-6 animate-spin text-accent" />
                   <span className="text-xs font-mono">Loading saved library from SQLite...</span>
                 </div>
               ) : savedMediaItems.length === 0 ? (
-                <div className="py-20 flex flex-col items-center justify-center space-y-3 bg-brand-dark/20 border border-brand-dark/60 rounded-xl text-center p-8">
-                  <FolderArchive className="h-10 w-10 text-neutral-400 stroke-1" />
-                  <h3 className="text-sm font-semibold text-brand-white">No Matching Media Items</h3>
-                  <p className="text-xs text-neutral-400 max-w-sm">
+                <div className="py-20 flex flex-col items-center justify-center space-y-3 bg-surface border border-hairline rounded-xl text-center p-8">
+                  <FolderArchive className="h-10 w-10 text-muted stroke-1" />
+                  <h3 className="text-sm font-semibold text-ink">No Matching Media Items</h3>
+                  <p className="text-xs text-muted max-w-sm">
                     {libraryQuery || libraryContainer !== "all" || savedMediaFilter !== "all"
                       ? "No saved media match your current search and filter criteria."
                       : "Bookmark media items while scanning URLs to save them to your local collection."}
@@ -2169,14 +2257,14 @@ export const App: React.FC = () => {
                         setSavedMediaFilter("all");
                         fetchSavedMedia("all", "", "all", librarySort);
                       }}
-                      className="mt-2 px-4 py-2 bg-brand-dark hover:bg-neutral-800 text-white rounded-lg text-xs font-mono transition-colors"
+                      className="mt-2 px-4 py-2 bg-raised hover:bg-hairline/70 text-ink rounded-lg text-xs font-mono transition-colors"
                     >
                       Reset Filters
                     </button>
                   ) : (
                     <button
                       onClick={() => setActiveTab("scan")}
-                      className="mt-2 px-4 py-2 bg-brand-red hover:bg-red-700 text-white rounded-lg text-xs font-medium transition-colors"
+                      className="mt-2 px-4 py-2 bg-accent hover:bg-accent-vivid text-on-accent rounded-lg text-xs font-medium transition-colors"
                     >
                       Discover Media in Scanner
                     </button>
@@ -2191,7 +2279,7 @@ export const App: React.FC = () => {
                     return (
                       <div
                         key={item.id}
-                        className="bg-brand-dark/30 border border-brand-dark rounded-xl p-3.5 flex flex-col justify-between space-y-3 hover:border-brand-dark/90 transition-all group"
+                        className="bg-surface border border-hairline rounded-xl p-3.5 flex flex-col justify-between space-y-3 hover:border-hairline-strong transition-all group"
                       >
                         <div className="space-y-2.5">
                           {/* Card Thumbnail with Overlay */}
@@ -2199,7 +2287,7 @@ export const App: React.FC = () => {
                             onClick={() =>
                               handleOpenPreview(item, completedDl?.destination_path)
                             }
-                            className="w-full h-36 rounded-lg bg-brand-black/90 border border-brand-dark overflow-hidden flex items-center justify-center relative cursor-pointer group/thumb"
+                            className="w-full h-36 rounded-lg bg-band border border-hairline overflow-hidden flex items-center justify-center relative cursor-pointer group/thumb"
                           >
                             {item.thumbnail_url ? (
                               <img
@@ -2209,34 +2297,34 @@ export const App: React.FC = () => {
                                 className="w-full h-full object-cover group-hover/thumb:scale-105 transition-transform duration-300"
                               />
                             ) : item.media_type === "video" ? (
-                              <Film className="h-8 w-8 text-purple-400" />
+                              <Film className="h-8 w-8 text-purple-600 dark:text-purple-400" />
                             ) : item.media_type === "audio" ? (
-                              <Music className="h-8 w-8 text-pink-400" />
+                              <Music className="h-8 w-8 text-pink-600 dark:text-pink-400" />
                             ) : (
-                              <ImageIcon className="h-8 w-8 text-emerald-400" />
+                              <ImageIcon className="h-8 w-8 text-emerald-600 dark:text-emerald-400" />
                             )}
 
                             {/* Hover Preview Overlay */}
                             <div className="absolute inset-0 bg-black/50 opacity-0 group-hover/thumb:opacity-100 flex items-center justify-center space-x-2 transition-opacity">
-                              <span className="p-2.5 rounded-full bg-brand-red/90 text-white shadow-lg shadow-brand-red/40 flex items-center justify-center">
+                              <span className="p-2.5 rounded-full bg-accent/90 text-on-accent shadow-lg shadow-accent/40 flex items-center justify-center">
                                 {item.media_type === "image" ? (
                                   <ZoomIn className="h-4 w-4" />
                                 ) : (
                                   <Play className="h-4 w-4 fill-current ml-0.5" />
                                 )}
                               </span>
-                              <span className="text-[11px] font-mono text-white font-semibold">
+                              <span className="text-[11px] font-mono text-ink font-semibold">
                                 Preview
                               </span>
                             </div>
 
                             {/* Tags */}
                             <div className="absolute top-2 left-2 flex items-center space-x-1.5">
-                              <span className="px-2 py-0.5 bg-black/80 rounded text-[10px] font-mono uppercase text-neutral-200">
+                              <span className="px-2 py-0.5 bg-black/80 rounded text-[11px] font-mono uppercase text-ink/90">
                                 {item.media_type}
                               </span>
                               {isDownloaded && (
-                                <span className="px-1.5 py-0.5 bg-emerald-950/80 border border-emerald-600/60 rounded text-[9px] font-mono text-emerald-300">
+                                <span className="px-1.5 py-0.5 bg-emerald-500/10 border border-emerald-500/30 rounded text-[9px] font-mono text-emerald-700 dark:text-emerald-300">
                                   Saved to Disk
                                 </span>
                               )}
@@ -2248,7 +2336,7 @@ export const App: React.FC = () => {
                                 e.stopPropagation();
                                 handleToggleBookmark(item);
                               }}
-                              className="absolute top-2 right-2 p-1.5 rounded bg-brand-red text-white shadow-md shadow-brand-red/40 hover:bg-red-700 transition-colors"
+                              className="absolute top-2 right-2 p-1.5 rounded bg-accent text-on-accent shadow-md shadow-accent/40 hover:bg-accent-vivid transition-colors"
                               title="Remove from saved library"
                             >
                               <Bookmark className="h-3.5 w-3.5 fill-current" />
@@ -2257,7 +2345,7 @@ export const App: React.FC = () => {
 
                           <div className="space-y-1">
                             <h4
-                              className="text-xs font-bold text-brand-white truncate font-sans cursor-pointer hover:text-brand-red transition-colors"
+                              className="text-xs font-bold text-ink truncate font-sans cursor-pointer hover:text-accent transition-colors"
                               title={item.title || ""}
                               onClick={() =>
                                 handleOpenPreview(item, completedDl?.destination_path)
@@ -2265,13 +2353,13 @@ export const App: React.FC = () => {
                             >
                               {item.title || "Untitled Item"}
                             </h4>
-                            <p className="text-[11px] font-mono text-neutral-400 truncate">
+                            <p className="text-[11px] font-mono text-muted truncate">
                               Author:{" "}
-                              <span className="text-neutral-200">
+                              <span className="text-ink/90">
                                 {item.author || "Unknown"}
                               </span>
                             </p>
-                            <div className="flex items-center justify-between text-[10px] font-mono text-neutral-400 pt-1">
+                            <div className="flex items-center justify-between text-[11px] font-mono text-muted pt-1">
                               <span>{formatBytes(item.filesize_bytes)}</span>
                               <span>{new Date(item.created_at).toLocaleDateString()}</span>
                             </div>
@@ -2279,13 +2367,13 @@ export const App: React.FC = () => {
                         </div>
 
                         {/* Card Actions Bar */}
-                        <div className="border-t border-brand-dark/60 pt-2 flex items-center justify-between text-xs font-mono">
+                        <div className="border-t border-hairline pt-2 flex items-center justify-between text-xs font-mono">
                           <div className="flex items-center space-x-2">
                             <button
                               onClick={() =>
                                 handleOpenPreview(item, completedDl?.destination_path)
                               }
-                              className="text-neutral-300 hover:text-white flex items-center space-x-1"
+                              className="text-ink/80 hover:text-ink flex items-center space-x-1"
                               title="Preview media"
                             >
                               <Eye className="h-3 w-3" />
@@ -2295,7 +2383,7 @@ export const App: React.FC = () => {
                             <button
                               onClick={() => handleStartDownload(item)}
                               disabled={downloadingIds.has(item.id)}
-                              className="text-emerald-400 hover:text-emerald-300 flex items-center space-x-1"
+                              className="text-emerald-600 dark:text-emerald-400 hover:text-emerald-600 dark:hover:text-emerald-300 flex items-center space-x-1"
                               title={isDownloaded ? "Redownload media" : "Download media"}
                             >
                               {downloadingIds.has(item.id) ? (
@@ -2308,7 +2396,7 @@ export const App: React.FC = () => {
 
                             <button
                               onClick={() => handleOpenExportModal(item)}
-                              className="text-purple-400 hover:text-purple-300 flex items-center space-x-1"
+                              className="text-purple-600 dark:text-purple-400 hover:text-purple-600 dark:hover:text-purple-300 flex items-center space-x-1"
                               title="Export metadata JSON"
                             >
                               <FileJson className="h-3 w-3" />
@@ -2320,7 +2408,7 @@ export const App: React.FC = () => {
                             onClick={() =>
                               handlePromptDelete(item, completedDl?.destination_path)
                             }
-                            className="text-red-400/80 hover:text-red-400 flex items-center space-x-1"
+                            className="text-red-600 dark:text-red-400 hover:text-red-600 dark:hover:text-red-400 flex items-center space-x-1"
                             title="Delete item"
                           >
                             <Trash2 className="h-3 w-3" />
@@ -2337,29 +2425,29 @@ export const App: React.FC = () => {
           {/* Download Manager View */}
           {activeTab === "downloads" && (
             <div className="max-w-4xl mx-auto space-y-6">
-              <div className="flex items-center justify-between">
+              <div className="space-y-4">
                 <div>
-                  <h1 className="text-2xl font-bold tracking-tight text-brand-white">
+                  <h1 className="text-2xl font-bold tracking-tight text-ink">
                     Download Manager
                   </h1>
-                  <p className="text-sm text-neutral-400 mt-1">
+                  <p className="text-sm text-muted mt-1">
                     Chunked HTTP/HTTPS streaming, atomic .part renaming, real-time speed &amp; ETA telemetry.
                   </p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
                   {/* Concurrency Selector */}
-                  <div className="flex items-center space-x-1.5 bg-brand-dark/70 border border-brand-dark px-2.5 py-1 rounded-md text-xs font-mono">
-                    <SlidersHorizontal className="h-3.5 w-3.5 text-neutral-400" />
-                    <span className="text-neutral-400">Slots:</span>
+                  <div className="flex items-center space-x-1.5 bg-raised border border-hairline px-2.5 py-1 rounded-md text-xs font-mono">
+                    <SlidersHorizontal className="h-3.5 w-3.5 text-muted" />
+                    <span className="text-muted">Slots:</span>
                     {[1, 2, 3, 5, 8].map((num) => (
                       <button
                         key={num}
                         onClick={() => handleSetConcurrency(num)}
                         className={`px-1.5 py-0.5 rounded text-[11px] transition-colors ${
                           concurrency === num
-                            ? "bg-brand-red text-white font-bold"
-                            : "text-neutral-400 hover:text-white"
+                            ? "bg-accent text-on-accent font-bold"
+                            : "text-muted hover:text-ink"
                         }`}
                         title={`Set max concurrent active downloads to ${num}`}
                       >
@@ -2367,16 +2455,16 @@ export const App: React.FC = () => {
                       </button>
                     ))}
                     {queueState && (
-                      <span className="text-[10px] text-neutral-400 border-l border-brand-dark/80 pl-1.5">
+                      <span className="text-[11px] text-muted border-l border-hairline pl-1.5">
                         {queueState.active_count} active / {queueState.pending_count} queued
                       </span>
                     )}
                   </div>
 
                   {/* Quick Bandwidth Speed Limit Selector */}
-                  <div className="flex items-center space-x-1.5 bg-brand-dark/70 border border-brand-dark px-2.5 py-1 rounded-md text-xs font-mono">
-                    <Gauge className="h-3.5 w-3.5 text-cyan-400" />
-                    <span className="text-neutral-400">Limit:</span>
+                  <div className="flex items-center space-x-1.5 bg-raised border border-hairline px-2.5 py-1 rounded-md text-xs font-mono">
+                    <Gauge className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" />
+                    <span className="text-muted">Limit:</span>
                     {[
                       { label: "∞", val: 0, title: "Unlimited speed" },
                       { label: "500K", val: 500, title: "500 KB/s limit" },
@@ -2390,8 +2478,8 @@ export const App: React.FC = () => {
                         onClick={() => handleSetSpeedLimit(item.val)}
                         className={`px-1.5 py-0.5 rounded text-[11px] transition-colors ${
                           speedLimitKbps === item.val
-                            ? "bg-cyan-600 text-white font-bold"
-                            : "text-neutral-400 hover:text-white"
+                            ? "bg-cyan-700 text-white font-bold"
+                            : "text-muted hover:text-ink"
                         }`}
                         title={item.title}
                       >
@@ -2400,7 +2488,7 @@ export const App: React.FC = () => {
                     ))}
                     {speedLimitKbps > 0 &&
                       ![500, 1024, 2048, 5120, 10240].includes(speedLimitKbps) && (
-                        <span className="px-1.5 py-0.5 rounded text-[11px] bg-cyan-600 text-white font-bold">
+                        <span className="px-1.5 py-0.5 rounded text-[11px] bg-cyan-700 text-white font-bold">
                           {speedLimitKbps >= 1024
                             ? `${(speedLimitKbps / 1024).toFixed(1)}M`
                             : `${speedLimitKbps}K`}
@@ -2412,7 +2500,7 @@ export const App: React.FC = () => {
                   <div className="flex items-center space-x-1.5">
                     <button
                       onClick={handlePauseAll}
-                      className="px-2.5 py-1.5 bg-brand-dark hover:bg-neutral-800 border border-brand-dark rounded-md text-xs font-mono text-blue-300 flex items-center space-x-1 transition-colors"
+                      className="px-2.5 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline rounded-md text-xs font-mono text-blue-700 dark:text-blue-300 flex items-center space-x-1 transition-colors"
                       title="Pause all running & queued downloads"
                     >
                       <Pause className="h-3 w-3" />
@@ -2420,7 +2508,7 @@ export const App: React.FC = () => {
                     </button>
                     <button
                       onClick={handleResumeAll}
-                      className="px-2.5 py-1.5 bg-brand-dark hover:bg-neutral-800 border border-brand-dark rounded-md text-xs font-mono text-emerald-300 flex items-center space-x-1 transition-colors"
+                      className="px-2.5 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline rounded-md text-xs font-mono text-emerald-700 dark:text-emerald-300 flex items-center space-x-1 transition-colors"
                       title="Resume all paused downloads"
                     >
                       <Play className="h-3 w-3" />
@@ -2428,7 +2516,7 @@ export const App: React.FC = () => {
                     </button>
                     <button
                       onClick={handleCancelAll}
-                      className="px-2.5 py-1.5 bg-brand-dark hover:bg-neutral-800 border border-brand-dark rounded-md text-xs font-mono text-amber-300 flex items-center space-x-1 transition-colors"
+                      className="px-2.5 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline rounded-md text-xs font-mono text-amber-700 dark:text-amber-300 flex items-center space-x-1 transition-colors"
                       title="Cancel all active & queued downloads"
                     >
                       <XCircle className="h-3 w-3" />
@@ -2436,7 +2524,7 @@ export const App: React.FC = () => {
                     </button>
                     <button
                       onClick={handleClearCompleted}
-                      className="px-2.5 py-1.5 bg-brand-dark hover:bg-neutral-800 border border-brand-dark rounded-md text-xs font-mono text-neutral-400 hover:text-red-300 flex items-center space-x-1 transition-colors"
+                      className="px-2.5 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline rounded-md text-xs font-mono text-muted hover:text-red-600 dark:hover:text-red-300 flex items-center space-x-1 transition-colors"
                       title="Clear completed, failed & cancelled tasks from list"
                     >
                       <Trash2 className="h-3 w-3" />
@@ -2447,7 +2535,7 @@ export const App: React.FC = () => {
                   {pythonStatus?.info?.download_dir && (
                     <button
                       onClick={() => handleOpenFileOrFolder(pythonStatus.info?.download_dir)}
-                      className="px-3 py-1.5 bg-brand-dark hover:bg-neutral-800 border border-brand-dark rounded-md text-xs font-mono text-neutral-300 flex items-center space-x-1.5 transition-colors"
+                      className="px-3 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline rounded-md text-xs font-mono text-ink/80 flex items-center space-x-1.5 transition-colors"
                       title={`Open ${pythonStatus.info.download_dir}`}
                     >
                       <FolderOpen className="h-3.5 w-3.5" />
@@ -2460,7 +2548,7 @@ export const App: React.FC = () => {
                       fetchQueueState();
                     }}
                     disabled={downloadTasksLoading}
-                    className="px-3 py-1.5 bg-brand-dark hover:bg-neutral-800 border border-brand-dark rounded-md text-xs font-mono text-neutral-300 flex items-center space-x-1.5 transition-colors"
+                    className="px-3 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline rounded-md text-xs font-mono text-ink/80 flex items-center space-x-1.5 transition-colors"
                     title="Refresh download queue"
                   >
                     <RefreshCw className={`h-3.5 w-3.5 ${downloadTasksLoading ? "animate-spin" : ""}`} />
@@ -2468,10 +2556,10 @@ export const App: React.FC = () => {
                   <button
                     onClick={() => handleRecoverTasks(true)}
                     disabled={isRecovering}
-                    className="px-3 py-1.5 bg-brand-dark hover:bg-neutral-800 border border-brand-dark rounded-md text-xs font-mono text-amber-300 flex items-center space-x-1.5 transition-colors"
+                    className="px-3 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline rounded-md text-xs font-mono text-amber-700 dark:text-amber-300 flex items-center space-x-1.5 transition-colors"
                     title="Scan and recover interrupted download tasks from disk & database"
                   >
-                    <RefreshCw className={`h-3.5 w-3.5 ${isRecovering ? "animate-spin text-amber-400" : ""}`} />
+                    <RefreshCw className={`h-3.5 w-3.5 ${isRecovering ? "animate-spin text-amber-600 dark:text-amber-400" : ""}`} />
                     <span>Recover</span>
                   </button>
                 </div>
@@ -2479,26 +2567,26 @@ export const App: React.FC = () => {
 
               {/* Interrupted Tasks Crash Recovery Banner */}
               {recoveryBanner && (
-                <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 flex items-center justify-between gap-4 text-amber-200">
+                <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 flex items-center justify-between gap-4 text-amber-700 dark:text-amber-300">
                   <div className="flex items-center gap-3">
-                    <RefreshCw className="w-5 h-5 text-amber-400 flex-shrink-0 animate-pulse" />
+                    <RefreshCw className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 animate-pulse" />
                     <div>
-                      <p className="text-sm font-semibold text-white">Session Recovery</p>
-                      <p className="text-xs text-amber-300/80 mt-0.5">{recoveryBanner.message}</p>
+                      <p className="text-sm font-semibold text-ink">Session Recovery</p>
+                      <p className="text-xs text-amber-700 dark:text-amber-300 mt-0.5">{recoveryBanner.message}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
                     {recoveryBanner.paused_count > 0 && (
                       <button
                         onClick={handleResumeAll}
-                        className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-semibold shadow-md transition"
+                        className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-black rounded-lg text-xs font-semibold shadow-md transition"
                       >
                         Resume All ({recoveryBanner.paused_count})
                       </button>
                     )}
                     <button
                       onClick={() => setRecoveryBanner(null)}
-                      className="px-2.5 py-1.5 text-neutral-400 hover:text-white rounded-lg text-xs transition"
+                      className="px-2.5 py-1.5 text-muted hover:text-ink rounded-lg text-xs transition"
                     >
                       Dismiss
                     </button>
@@ -2507,7 +2595,7 @@ export const App: React.FC = () => {
               )}
 
               {/* Filter Pills */}
-              <div className="flex items-center space-x-2 border-b border-brand-dark/60 pb-3">
+              <div className="flex items-center space-x-2 border-b border-hairline pb-3">
                 {[
                   { id: "all", label: "All Tasks", count: downloadTasks.length },
                   {
@@ -2546,20 +2634,20 @@ export const App: React.FC = () => {
                     }}
                     className={`px-3 py-1 rounded-md text-xs font-mono uppercase tracking-wider transition-all flex items-center space-x-1.5 ${
                       downloadFilter === tab.id
-                        ? "bg-brand-red text-white font-semibold shadow-sm shadow-brand-red/30"
-                        : "bg-brand-dark/40 text-neutral-400 hover:text-white hover:bg-brand-dark"
+                        ? "bg-accent text-on-accent font-semibold shadow-sm shadow-accent/30"
+                        : "bg-surface text-muted hover:text-ink hover:bg-raised"
                     }`}
                   >
                     <span>{tab.label}</span>
-                    <span className="text-[10px] opacity-75">({tab.count})</span>
+                    <span className="text-[11px] opacity-75">({tab.count})</span>
                   </button>
                 ))}
               </div>
 
               {/* Task List */}
               {downloadTasksLoading && downloadTasks.length === 0 ? (
-                <div className="py-20 flex flex-col items-center justify-center space-y-3 text-neutral-400">
-                  <Loader2 className="h-6 w-6 animate-spin text-brand-red" />
+                <div className="py-20 flex flex-col items-center justify-center space-y-3 text-muted">
+                  <Loader2 className="h-6 w-6 animate-spin text-accent" />
                   <span className="text-xs font-mono">Loading download tasks from SQLite...</span>
                 </div>
               ) : (() => {
@@ -2585,19 +2673,19 @@ export const App: React.FC = () => {
 
                 if (filtered.length === 0) {
                   return (
-                    <div className="py-20 flex flex-col items-center justify-center space-y-3 bg-brand-dark/20 border border-brand-dark/60 rounded-xl text-center p-8">
-                      <Download className="h-10 w-10 text-neutral-400 stroke-1" />
-                      <h3 className="text-sm font-semibold text-brand-white">
+                    <div className="py-20 flex flex-col items-center justify-center space-y-3 bg-surface border border-hairline rounded-xl text-center p-8">
+                      <Download className="h-10 w-10 text-muted stroke-1" />
+                      <h3 className="text-sm font-semibold text-ink">
                         {downloadFilter === "all"
                           ? "No Downloads Queued"
                           : `No ${downloadFilter} downloads`}
                       </h3>
-                      <p className="text-xs text-neutral-400 max-w-sm">
+                      <p className="text-xs text-muted max-w-sm">
                         Scan media from any supported URL or pick an item from your library to start streaming to disk.
                       </p>
                       <button
                         onClick={() => setActiveTab("scan")}
-                        className="mt-2 px-4 py-2 bg-brand-red hover:bg-red-700 text-white rounded-lg text-xs font-medium transition-colors"
+                        className="mt-2 px-4 py-2 bg-accent hover:bg-accent-vivid text-on-accent rounded-lg text-xs font-medium transition-colors"
                       >
                         Go to Scanner
                       </button>
@@ -2626,12 +2714,12 @@ export const App: React.FC = () => {
                       return (
                         <div
                           key={task.id}
-                          className="bg-brand-dark/30 border border-brand-dark rounded-xl p-4 flex flex-col space-y-3 hover:border-brand-dark/90 transition-all"
+                          className="bg-surface border border-hairline rounded-xl p-4 flex flex-col space-y-3 hover:border-hairline-strong transition-all"
                         >
                           <div className="flex items-center justify-between">
                             <div className="flex items-center space-x-3 min-w-0">
                               {/* Media Thumbnail */}
-                              <div className="w-14 h-14 rounded-lg bg-brand-black/90 border border-brand-dark overflow-hidden flex items-center justify-center shrink-0">
+                              <div className="w-14 h-14 rounded-lg bg-band border border-hairline overflow-hidden flex items-center justify-center shrink-0">
                                 {task.media_item?.thumbnail_url ? (
                                   <img
                                     src={task.media_item.thumbnail_url}
@@ -2640,31 +2728,31 @@ export const App: React.FC = () => {
                                     className="w-full h-full object-cover"
                                   />
                                 ) : task.media_item?.media_type === "video" ? (
-                                  <Film className="h-6 w-6 text-purple-400" />
+                                  <Film className="h-6 w-6 text-purple-600 dark:text-purple-400" />
                                 ) : (
-                                  <ImageIcon className="h-6 w-6 text-emerald-400" />
+                                  <ImageIcon className="h-6 w-6 text-emerald-600 dark:text-emerald-400" />
                                 )}
                               </div>
 
                               {/* Meta info */}
                               <div className="space-y-0.5 min-w-0">
                                 <div className="flex items-center space-x-2">
-                                  <span className="font-semibold text-sm text-brand-white truncate max-w-md font-sans">
+                                  <span className="font-semibold text-sm text-ink truncate max-w-md font-sans">
                                     {task.media_item?.title || "Untitled Media"}
                                   </span>
-                                  <span className="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-brand-black/80 border border-brand-dark text-neutral-300 shrink-0">
+                                  <span className="px-2 py-0.5 rounded text-[11px] font-mono uppercase bg-page border border-hairline text-ink/80 shrink-0">
                                     {task.selected_format?.container ||
                                       task.media_item?.available_formats?.[0]?.container ||
                                       task.media_item?.media_type ||
                                       "file"}
                                   </span>
                                   {task.selected_format?.resolution && (
-                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-purple-950/60 border border-purple-800/40 text-purple-300 shrink-0">
+                                    <span className="px-1.5 py-0.5 rounded text-[11px] font-mono bg-purple-500/10 border border-purple-500/30 text-purple-700 dark:text-purple-300 shrink-0">
                                       {task.selected_format.resolution}
                                     </span>
                                   )}
                                 </div>
-                                <div className="flex items-center space-x-3 text-xs font-mono text-neutral-400">
+                                <div className="flex items-center space-x-3 text-xs font-mono text-muted">
                                   <span>Author: {task.media_item?.author || "Unknown"}</span>
                                   <span>·</span>
                                   <span className="truncate max-w-xs">
@@ -2677,38 +2765,38 @@ export const App: React.FC = () => {
                             {/* Status Badge & Actions */}
                             <div className="flex items-center space-x-2 shrink-0">
                               {task.status === "merging" && (
-                                <span className="px-2.5 py-1 rounded-md text-xs font-mono uppercase bg-purple-950/70 border border-purple-700/80 text-purple-300 flex items-center space-x-1.5 animate-pulse shadow-sm shadow-purple-900/40">
-                                  <Sparkles className="h-3 w-3 animate-spin text-purple-400" />
+                                <span className="px-2.5 py-1 rounded-md text-xs font-mono uppercase bg-purple-500/10 border border-purple-500/30 text-purple-700 dark:text-purple-300 flex items-center space-x-1.5 animate-pulse shadow-sm shadow-purple-900/40">
+                                  <Sparkles className="h-3 w-3 animate-spin text-purple-600 dark:text-purple-400" />
                                   <span>FFmpeg Merging</span>
                                 </span>
                               )}
                               {(task.status === "downloading" || task.status === "queued") && (
-                                <span className="px-2.5 py-1 rounded-md text-xs font-mono uppercase bg-amber-950/60 border border-amber-800/60 text-amber-300 flex items-center space-x-1.5">
-                                  <Loader2 className="h-3 w-3 animate-spin text-amber-400" />
+                                <span className="px-2.5 py-1 rounded-md text-xs font-mono uppercase bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-300 flex items-center space-x-1.5">
+                                  <Loader2 className="h-3 w-3 animate-spin text-amber-600 dark:text-amber-400" />
                                   <span>{task.status}</span>
                                 </span>
                               )}
                               {task.status === "paused" && (
-                                <span className="px-2.5 py-1 rounded-md text-xs font-mono uppercase bg-blue-950/70 border border-blue-700/80 text-blue-300 flex items-center space-x-1.5 shadow-sm shadow-blue-900/40">
-                                  <Pause className="h-3.5 w-3.5 text-blue-400" />
+                                <span className="px-2.5 py-1 rounded-md text-xs font-mono uppercase bg-blue-500/10 border border-blue-500/30 text-blue-700 dark:text-blue-300 flex items-center space-x-1.5 shadow-sm shadow-blue-900/40">
+                                  <Pause className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
                                   <span>Paused</span>
                                 </span>
                               )}
                               {isCompleted && (
-                                <span className="px-2.5 py-1 rounded-md text-xs font-mono uppercase bg-emerald-950/60 border border-emerald-800/60 text-emerald-300 flex items-center space-x-1.5">
-                                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+                                <span className="px-2.5 py-1 rounded-md text-xs font-mono uppercase bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 flex items-center space-x-1.5">
+                                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
                                   <span>Completed</span>
                                 </span>
                               )}
                               {isFailed && (
-                                <span className="px-2.5 py-1 rounded-md text-xs font-mono uppercase bg-red-950/60 border border-red-800/60 text-red-300 flex items-center space-x-1.5">
-                                  <AlertCircle className="h-3.5 w-3.5 text-red-400" />
+                                <span className="px-2.5 py-1 rounded-md text-xs font-mono uppercase bg-red-500/10 border border-red-500/30 text-red-700 dark:text-red-300 flex items-center space-x-1.5">
+                                  <AlertCircle className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
                                   <span>Failed</span>
                                 </span>
                               )}
                               {isCancelled && (
-                                <span className="px-2.5 py-1 rounded-md text-xs font-mono uppercase bg-neutral-900 border border-neutral-700 text-neutral-400 flex items-center space-x-1.5">
-                                  <XCircle className="h-3.5 w-3.5 text-neutral-400" />
+                                <span className="px-2.5 py-1 rounded-md text-xs font-mono uppercase bg-raised border border-hairline-strong text-muted flex items-center space-x-1.5">
+                                  <XCircle className="h-3.5 w-3.5 text-muted" />
                                   <span>Cancelled</span>
                                 </span>
                               )}
@@ -2718,7 +2806,7 @@ export const App: React.FC = () => {
                                 <div className="flex items-center space-x-1.5">
                                   <button
                                     onClick={() => handlePauseDownload(task.id)}
-                                    className="px-2.5 py-1.5 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 rounded-md text-xs font-mono text-blue-300 flex items-center space-x-1 transition-colors"
+                                    className="px-2.5 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline-strong rounded-md text-xs font-mono text-blue-700 dark:text-blue-300 flex items-center space-x-1 transition-colors"
                                     title="Pause active download"
                                   >
                                     <Pause className="h-3.5 w-3.5" />
@@ -2726,7 +2814,7 @@ export const App: React.FC = () => {
                                   </button>
                                   <button
                                     onClick={() => handleCancelDownload(task.id)}
-                                    className="px-2.5 py-1.5 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 rounded-md text-xs font-mono text-red-300 flex items-center space-x-1 transition-colors"
+                                    className="px-2.5 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline-strong rounded-md text-xs font-mono text-red-700 dark:text-red-300 flex items-center space-x-1 transition-colors"
                                     title="Cancel active download"
                                   >
                                     <XCircle className="h-3.5 w-3.5" />
@@ -2738,7 +2826,7 @@ export const App: React.FC = () => {
                                 <div className="flex items-center space-x-1.5">
                                   <button
                                     onClick={() => handleResumeDownload(task.id)}
-                                    className="px-2.5 py-1.5 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 rounded-md text-xs font-mono text-emerald-300 flex items-center space-x-1 transition-colors"
+                                    className="px-2.5 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline-strong rounded-md text-xs font-mono text-emerald-700 dark:text-emerald-300 flex items-center space-x-1 transition-colors"
                                     title="Resume paused download"
                                   >
                                     <Play className="h-3.5 w-3.5" />
@@ -2746,7 +2834,7 @@ export const App: React.FC = () => {
                                   </button>
                                   <button
                                     onClick={() => handleCancelDownload(task.id)}
-                                    className="px-2.5 py-1.5 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 rounded-md text-xs font-mono text-red-300 flex items-center space-x-1 transition-colors"
+                                    className="px-2.5 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline-strong rounded-md text-xs font-mono text-red-700 dark:text-red-300 flex items-center space-x-1 transition-colors"
                                     title="Cancel paused download"
                                   >
                                     <XCircle className="h-3.5 w-3.5" />
@@ -2763,7 +2851,7 @@ export const App: React.FC = () => {
                                         task.destination_path
                                       )
                                     }
-                                    className="px-2.5 py-1.5 bg-sky-950/40 hover:bg-sky-900/50 border border-sky-800/60 rounded-md text-xs font-mono text-sky-300 flex items-center space-x-1.5 transition-colors cursor-pointer"
+                                    className="px-2.5 py-1.5 bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 rounded-md text-xs font-mono text-sky-700 dark:text-sky-300 flex items-center space-x-1.5 transition-colors cursor-pointer"
                                     title="Preview downloaded file"
                                   >
                                     <Eye className="h-3.5 w-3.5" />
@@ -2771,7 +2859,7 @@ export const App: React.FC = () => {
                                   </button>
                                   <button
                                     onClick={() => handleOpenFileOrFolder(task.destination_path)}
-                                    className="px-2.5 py-1.5 bg-emerald-950/40 hover:bg-emerald-900/50 border border-emerald-800/60 rounded-md text-xs font-mono text-emerald-300 flex items-center space-x-1.5 transition-colors cursor-pointer"
+                                    className="px-2.5 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 rounded-md text-xs font-mono text-emerald-700 dark:text-emerald-300 flex items-center space-x-1.5 transition-colors cursor-pointer"
                                     title={`Show in folder: ${task.destination_path}`}
                                   >
                                     <FolderOpen className="h-3.5 w-3.5" />
@@ -2781,7 +2869,7 @@ export const App: React.FC = () => {
                                     onClick={() =>
                                       handlePromptDelete(task.media_item, task.destination_path)
                                     }
-                                    className="p-1.5 bg-red-950/30 hover:bg-red-900/40 border border-red-800/40 rounded-md text-red-300 flex items-center justify-center transition-colors cursor-pointer"
+                                    className="p-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded-md text-red-700 dark:text-red-300 flex items-center justify-center transition-colors cursor-pointer"
                                     title="Delete task and downloaded file"
                                   >
                                     <Trash2 className="h-3.5 w-3.5" />
@@ -2796,7 +2884,7 @@ export const App: React.FC = () => {
                                       task.selected_format
                                     )
                                   }
-                                  className="px-2.5 py-1.5 bg-brand-dark hover:bg-neutral-800 border border-brand-dark rounded-md text-xs font-mono text-white flex items-center space-x-1.5 transition-colors"
+                                  className="px-2.5 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline rounded-md text-xs font-mono text-ink flex items-center space-x-1.5 transition-colors"
                                   title="Retry download"
                                 >
                                   <RotateCcw className="h-3.5 w-3.5" />
@@ -2808,7 +2896,7 @@ export const App: React.FC = () => {
 
                           {/* Progress bar */}
                           <div className="space-y-1.5">
-                            <div className="w-full h-2 rounded-full bg-brand-black/90 overflow-hidden border border-brand-dark/50">
+                            <div className="w-full h-2 rounded-full bg-band overflow-hidden border border-hairline">
                               <div
                                 className={`h-full transition-all duration-300 ${
                                   isCompleted
@@ -2817,7 +2905,7 @@ export const App: React.FC = () => {
                                     ? "bg-red-500"
                                     : isCancelled
                                     ? "bg-neutral-600"
-                                    : "bg-gradient-to-r from-brand-red via-purple-600 to-indigo-500"
+                                    : "bg-gradient-to-r from-accent via-purple-600 to-indigo-500"
                                 }`}
                                 style={{
                                   width: `${Math.min(
@@ -2829,7 +2917,7 @@ export const App: React.FC = () => {
                             </div>
 
                             {/* Telemetry line */}
-                            <div className="flex items-center justify-between text-[11px] font-mono text-neutral-400">
+                            <div className="flex items-center justify-between text-[11px] font-mono text-muted">
                               <div className="flex items-center space-x-3">
                                 <span>
                                   {formatBytes(task.bytes_downloaded)}
@@ -2838,7 +2926,7 @@ export const App: React.FC = () => {
                                     : ""}
                                 </span>
                                 <span>·</span>
-                                <span className="font-semibold text-brand-white">
+                                <span className="font-semibold text-ink">
                                   {task.progress_percent.toFixed(1)}%
                                 </span>
                                 {isRunning &&
@@ -2846,7 +2934,7 @@ export const App: React.FC = () => {
                                   task.speed_bytes_sec > 0 && (
                                     <>
                                       <span>·</span>
-                                      <span className="text-emerald-400">
+                                      <span className="text-emerald-600 dark:text-emerald-400">
                                         {formatSpeed(task.speed_bytes_sec)}
                                       </span>
                                     </>
@@ -2871,7 +2959,7 @@ export const App: React.FC = () => {
                               <div className="truncate max-w-sm text-right">
                                 {task.destination_path ? (
                                   <span
-                                    className="text-neutral-300"
+                                    className="text-ink/80"
                                     title={task.destination_path}
                                   >
                                     {task.destination_path.split(/[\\/]/).pop()}
@@ -2886,15 +2974,15 @@ export const App: React.FC = () => {
 
                             {/* Merging detail status */}
                             {task.status === "merging" && (
-                              <div className="text-[11px] font-mono text-purple-300 bg-purple-950/40 p-2.5 rounded-lg border border-purple-800/50 flex items-center space-x-2">
-                                <Sparkles className="h-3.5 w-3.5 text-purple-400 shrink-0 animate-spin" />
+                              <div className="text-[11px] font-mono text-purple-700 dark:text-purple-300 bg-purple-500/10 p-2.5 rounded-lg border border-purple-500/30 flex items-center space-x-2">
+                                <Sparkles className="h-3.5 w-3.5 text-purple-600 dark:text-purple-400 shrink-0 animate-spin" />
                                 <span>{task.error_message || "Multiplexing separate video & audio streams using FFmpeg..."}</span>
                               </div>
                             )}
 
                             {/* Error message detail if failed */}
                             {task.status === "failed" && task.error_message && (
-                              <div className="text-[11px] font-mono text-red-300 bg-red-950/40 p-2.5 rounded-lg border border-red-800/40">
+                              <div className="text-[11px] font-mono text-red-700 dark:text-red-300 bg-red-500/10 p-2.5 rounded-lg border border-red-500/30">
                                 Error: {task.error_message}
                               </div>
                             )}
@@ -2904,8 +2992,8 @@ export const App: React.FC = () => {
                     })}
 
                     {totalQueuePages > 1 && (
-                      <div className="flex items-center justify-between border-t border-brand-dark/50 pt-3 text-xs font-mono">
-                        <span className="text-neutral-400">
+                      <div className="flex items-center justify-between border-t border-hairline pt-3 text-xs font-mono">
+                        <span className="text-muted">
                           Showing {(queuePage - 1) * QUEUE_PAGE_SIZE + 1}–
                           {Math.min(
                             queuePage * QUEUE_PAGE_SIZE,
@@ -2918,12 +3006,12 @@ export const App: React.FC = () => {
                             type="button"
                             disabled={queuePage <= 1}
                             onClick={() => setQueuePage((p) => Math.max(1, p - 1))}
-                            className="px-2.5 py-1 bg-brand-dark/80 hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed border border-brand-dark rounded text-neutral-300 flex items-center space-x-1 transition-all"
+                            className="px-2.5 py-1 bg-raised hover:bg-hairline/70 disabled:opacity-40 disabled:cursor-not-allowed border border-hairline rounded text-ink/80 flex items-center space-x-1 transition-all"
                           >
                             <ChevronLeft className="h-3.5 w-3.5" />
                             <span>Prev</span>
                           </button>
-                          <span className="px-2.5 py-1 bg-brand-black/80 border border-brand-dark rounded text-neutral-200">
+                          <span className="px-2.5 py-1 bg-page border border-hairline rounded text-ink/90">
                             Page {queuePage} / {totalQueuePages}
                           </span>
                           <button
@@ -2932,7 +3020,7 @@ export const App: React.FC = () => {
                             onClick={() =>
                               setQueuePage((p) => Math.min(totalQueuePages, p + 1))
                             }
-                            className="px-2.5 py-1 bg-brand-dark/80 hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed border border-brand-dark rounded text-neutral-300 flex items-center space-x-1 transition-all"
+                            className="px-2.5 py-1 bg-raised hover:bg-hairline/70 disabled:opacity-40 disabled:cursor-not-allowed border border-hairline rounded text-ink/80 flex items-center space-x-1 transition-all"
                           >
                             <span>Next</span>
                             <ChevronRight className="h-3.5 w-3.5" />
@@ -2968,6 +3056,8 @@ export const App: React.FC = () => {
               ffmpegInfo={ffmpegInfo}
               onConcurrencyChange={(val) => setConcurrency(val)}
               onSpeedLimitChange={(val) => setSpeedLimitKbps(val)}
+              onThemeChange={(theme) => setThemePreference(theme, { persist: false })}
+              theme={themePreference}
             />
           )}
 
@@ -2978,15 +3068,15 @@ export const App: React.FC = () => {
             activeTab !== "downloads" &&
             activeTab !== "settings" && (
             <div className="max-w-2xl mx-auto text-center py-24 space-y-3">
-              <h2 className="text-lg font-bold text-brand-white capitalize">
+              <h2 className="text-lg font-bold text-ink capitalize">
                 {activeTab.replace("-", " ")}
               </h2>
-              <p className="text-sm text-neutral-400">
+              <p className="text-sm text-muted">
                 This subsystem view will be connected in its designated roadmap milestone.
               </p>
               <button
                 onClick={() => setActiveTab("scan")}
-                className="mt-4 px-4 py-2 bg-brand-dark text-xs text-brand-white rounded-md hover:bg-brand-dark/80"
+                className="mt-4 px-4 py-2 bg-raised text-xs text-ink rounded-md hover:bg-raised"
               >
                 Return to Scan Media
               </button>
@@ -3015,14 +3105,14 @@ export const App: React.FC = () => {
                   <h3 className="text-sm font-bold text-white truncate">
                     {previewModal.mediaItem.title || "Image Preview"}
                   </h3>
-                  <div className="flex items-center space-x-2 text-xs font-mono text-neutral-400">
+                  <div className="flex items-center space-x-2 text-xs font-mono text-white/70">
                     <span>Author: {previewModal.mediaItem.author || "Unknown"}</span>
                     <span>·</span>
-                    <span className="uppercase text-emerald-400">
+                    <span className="uppercase text-emerald-600 dark:text-emerald-400">
                       {previewModal.mediaItem.available_formats[0]?.container || "IMAGE"}
                     </span>
                     {previewModal.localPath && (
-                      <span className="px-1.5 py-0.5 bg-emerald-950/80 border border-emerald-600/60 rounded text-[10px] text-emerald-300">
+                      <span className="px-1.5 py-0.5 bg-emerald-500/10 border border-emerald-500/30 rounded text-[11px] text-emerald-700 dark:text-emerald-300">
                         Local File
                       </span>
                     )}
@@ -3030,7 +3120,7 @@ export const App: React.FC = () => {
                 </div>
 
                 {/* Toolbar Controls */}
-                <div className="flex items-center space-x-2 bg-brand-black/80 border border-brand-dark rounded-xl px-3 py-1.5 shadow-xl">
+                <div className="flex items-center space-x-2 bg-page border border-hairline rounded-xl px-3 py-1.5 shadow-xl">
                   <button
                     type="button"
                     onClick={() =>
@@ -3039,13 +3129,13 @@ export const App: React.FC = () => {
                         zoom: Math.max(0.25, Number((prev.zoom - 0.25).toFixed(2))),
                       }))
                     }
-                    className="p-1.5 text-neutral-300 hover:text-white rounded hover:bg-brand-dark transition-colors"
+                    className="p-1.5 text-ink/80 hover:text-ink rounded hover:bg-raised transition-colors"
                     title="Zoom Out (-)"
                   >
                     <ZoomOut className="h-4 w-4" />
                   </button>
 
-                  <span className="text-xs font-mono font-medium text-neutral-200 min-w-12 text-center">
+                  <span className="text-xs font-mono font-medium text-ink/90 min-w-12 text-center">
                     {Math.round(previewModal.zoom * 100)}%
                   </span>
 
@@ -3057,7 +3147,7 @@ export const App: React.FC = () => {
                         zoom: Math.min(4, Number((prev.zoom + 0.25).toFixed(2))),
                       }))
                     }
-                    className="p-1.5 text-neutral-300 hover:text-white rounded hover:bg-brand-dark transition-colors"
+                    className="p-1.5 text-ink/80 hover:text-ink rounded hover:bg-raised transition-colors"
                     title="Zoom In (+)"
                   >
                     <ZoomIn className="h-4 w-4" />
@@ -3068,7 +3158,7 @@ export const App: React.FC = () => {
                     onClick={() =>
                       setPreviewModal((prev) => ({ ...prev, zoom: 1, rotation: 0 }))
                     }
-                    className="p-1.5 text-neutral-300 hover:text-white rounded hover:bg-brand-dark transition-colors"
+                    className="p-1.5 text-ink/80 hover:text-ink rounded hover:bg-raised transition-colors"
                     title="Reset Zoom (0)"
                   >
                     <RotateCcw className="h-4 w-4" />
@@ -3082,18 +3172,18 @@ export const App: React.FC = () => {
                         rotation: (prev.rotation + 90) % 360,
                       }))
                     }
-                    className="p-1.5 text-neutral-300 hover:text-white rounded hover:bg-brand-dark transition-colors"
+                    className="p-1.5 text-ink/80 hover:text-ink rounded hover:bg-raised transition-colors"
                     title="Rotate 90° (R)"
                   >
                     <RotateCw className="h-4 w-4" />
                   </button>
 
-                  <div className="h-4 w-px bg-brand-dark mx-1" />
+                  <div className="h-4 w-px bg-raised mx-1" />
 
                   <button
                     type="button"
                     onClick={() => setPreviewModal((prev) => ({ ...prev, isOpen: false }))}
-                    className="p-1.5 text-neutral-400 hover:text-red-400 rounded hover:bg-brand-dark transition-colors"
+                    className="p-1.5 text-white/70 hover:text-red-400 rounded hover:bg-white/10 transition-colors"
                     title="Close (Escape)"
                   >
                     <X className="h-4 w-4" />
@@ -3125,7 +3215,7 @@ export const App: React.FC = () => {
 
               {/* Lightbox Footer Bar */}
               <div
-                className="flex items-center justify-between z-10 text-xs font-mono text-neutral-400 border-t border-neutral-800/80 pt-3"
+                className="flex items-center justify-between z-10 text-xs font-mono text-white/60 border-t border-white/10 pt-3"
                 onClick={(e) => e.stopPropagation()}
               >
                 <div className="flex items-center space-x-3">
@@ -3137,7 +3227,7 @@ export const App: React.FC = () => {
                       "Original Quality"}
                   </span>
                   <span>·</span>
-                  <span className="truncate max-w-sm text-neutral-400">
+                  <span className="truncate max-w-sm text-white/60">
                     {previewModal.localPath || previewModal.mediaItem.source_url}
                   </span>
                 </div>
@@ -3147,7 +3237,7 @@ export const App: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => handleOpenFileOrFolder(previewModal.localPath)}
-                      className="px-3 py-1.5 bg-brand-dark hover:bg-neutral-800 border border-brand-dark rounded-md text-white flex items-center space-x-1.5 transition-colors"
+                      className="px-3 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline rounded-md text-ink flex items-center space-x-1.5 transition-colors"
                     >
                       <FolderOpen className="h-3.5 w-3.5" />
                       <span>Show in Folder</span>
@@ -3156,7 +3246,7 @@ export const App: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => handleStartDownload(previewModal.mediaItem!)}
-                      className="px-3 py-1.5 bg-brand-red hover:bg-red-700 text-white rounded-md flex items-center space-x-1.5 transition-colors shadow-md shadow-brand-red/30"
+                      className="px-3 py-1.5 bg-accent hover:bg-accent-vivid text-on-accent rounded-md flex items-center space-x-1.5 transition-colors shadow-md shadow-accent/30"
                     >
                       <Download className="h-3.5 w-3.5" />
                       <span>Download Image</span>
@@ -3165,7 +3255,7 @@ export const App: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => handleOpenExportModal(previewModal.mediaItem!)}
-                    className="px-3 py-1.5 bg-brand-black/80 hover:bg-brand-dark border border-brand-dark rounded-md text-purple-300 flex items-center space-x-1.5 transition-colors"
+                    className="px-3 py-1.5 bg-page hover:bg-raised border border-hairline rounded-md text-purple-700 dark:text-purple-300 flex items-center space-x-1.5 transition-colors"
                   >
                     <FileJson className="h-3.5 w-3.5" />
                     <span>Export JSON</span>
@@ -3180,27 +3270,27 @@ export const App: React.FC = () => {
               onClick={() => setPreviewModal((prev) => ({ ...prev, isOpen: false }))}
             >
               <div
-                className="bg-brand-black border border-brand-dark rounded-2xl w-full max-w-4xl p-6 shadow-2xl space-y-4"
+                className="bg-page border border-hairline rounded-2xl w-full max-w-4xl p-6 shadow-2xl space-y-4"
                 onClick={(e) => e.stopPropagation()}
               >
                 {/* Player Header */}
-                <div className="flex items-center justify-between border-b border-brand-dark/60 pb-3">
+                <div className="flex items-center justify-between border-b border-hairline pb-3">
                   <div className="space-y-0.5 min-w-0 pr-4">
                     <div className="flex items-center space-x-2">
-                      <span className="font-bold text-sm text-brand-white truncate">
+                      <span className="font-bold text-sm text-ink truncate">
                         {previewModal.mediaItem.title || "Media Player"}
                       </span>
-                      <span className="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-brand-dark border border-brand-dark text-neutral-300 shrink-0">
+                      <span className="px-2 py-0.5 rounded text-[11px] font-mono uppercase bg-raised border border-hairline text-ink/80 shrink-0">
                         {previewModal.mediaItem.available_formats[0]?.container ||
                           previewModal.mediaItem.media_type}
                       </span>
                       {previewModal.localPath && (
-                        <span className="px-1.5 py-0.5 bg-emerald-950/80 border border-emerald-600/60 rounded text-[10px] font-mono text-emerald-300 shrink-0">
+                        <span className="px-1.5 py-0.5 bg-emerald-500/10 border border-emerald-500/30 rounded text-[11px] font-mono text-emerald-700 dark:text-emerald-300 shrink-0">
                           Direct Local Stream
                         </span>
                       )}
                     </div>
-                    <p className="text-xs font-mono text-neutral-400 truncate">
+                    <p className="text-xs font-mono text-muted truncate">
                       Author: {previewModal.mediaItem.author || "Unknown"} · Source:{" "}
                       {previewModal.mediaItem.source_url}
                     </p>
@@ -3209,7 +3299,7 @@ export const App: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setPreviewModal((prev) => ({ ...prev, isOpen: false }))}
-                    className="p-1.5 text-neutral-400 hover:text-white rounded-lg hover:bg-brand-dark transition-colors"
+                    className="p-1.5 text-muted hover:text-ink rounded-lg hover:bg-raised transition-colors"
                     title="Close Player (Escape)"
                   >
                     <X className="h-5 w-5" />
@@ -3217,18 +3307,18 @@ export const App: React.FC = () => {
                 </div>
 
                 {/* Player Body */}
-                <div className="flex flex-col items-center justify-center bg-black/90 rounded-xl overflow-hidden border border-brand-dark/80 min-h-64 relative">
+                <div className="flex flex-col items-center justify-center bg-black/90 rounded-xl overflow-hidden border border-hairline min-h-64 relative">
                   {previewModal.mediaItem.media_type === "audio" ? (
                     /* Audio Player Layout */
                     <div className="py-12 px-8 w-full max-w-lg flex flex-col items-center space-y-6">
                       <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-pink-600 to-purple-600 flex items-center justify-center shadow-xl shadow-pink-900/30 animate-pulse">
-                        <Music className="h-10 w-10 text-white" />
+                        <Music className="h-10 w-10 text-ink" />
                       </div>
                       <div className="text-center space-y-1">
-                        <h4 className="font-bold text-sm text-white">
+                        <h4 className="font-bold text-sm text-ink">
                           {previewModal.mediaItem.title || "Audio Track"}
                         </h4>
-                        <p className="text-xs font-mono text-neutral-400">
+                        <p className="text-xs font-mono text-muted">
                           {previewModal.mediaItem.author}
                         </p>
                       </div>
@@ -3263,9 +3353,9 @@ export const App: React.FC = () => {
                 </div>
 
                 {/* Player Controls & Diagnostics Bar */}
-                <div className="flex items-center justify-between text-xs font-mono text-neutral-400 pt-1">
+                <div className="flex items-center justify-between text-xs font-mono text-muted pt-1">
                   <div className="flex items-center space-x-2">
-                    <span className="text-[11px] text-neutral-400">Speed:</span>
+                    <span className="text-[11px] text-muted">Speed:</span>
                     {[0.5, 0.75, 1.0, 1.25, 1.5, 2.0].map((rate) => (
                       <button
                         type="button"
@@ -3273,8 +3363,8 @@ export const App: React.FC = () => {
                         onClick={() => handleSetPlaybackRate(rate)}
                         className={`px-2 py-0.5 rounded text-[11px] font-mono transition-colors ${
                           playbackSpeed === rate
-                            ? "bg-brand-red text-white font-semibold"
-                            : "bg-brand-dark/60 text-neutral-400 hover:text-white"
+                            ? "bg-accent text-on-accent font-semibold"
+                            : "bg-raised text-muted hover:text-ink"
                         }`}
                       >
                         {rate}x
@@ -3287,7 +3377,7 @@ export const App: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => handleOpenFileOrFolder(previewModal.localPath)}
-                        className="px-3 py-1.5 bg-brand-dark hover:bg-neutral-800 border border-brand-dark rounded-md text-white flex items-center space-x-1.5 transition-colors"
+                        className="px-3 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline rounded-md text-ink flex items-center space-x-1.5 transition-colors"
                       >
                         <FolderOpen className="h-3.5 w-3.5" />
                         <span>Show File</span>
@@ -3296,7 +3386,7 @@ export const App: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => handleStartDownload(previewModal.mediaItem!)}
-                        className="px-3 py-1.5 bg-brand-red hover:bg-red-700 text-white rounded-md flex items-center space-x-1.5 transition-colors shadow-md shadow-brand-red/30"
+                        className="px-3 py-1.5 bg-accent hover:bg-accent-vivid text-on-accent rounded-md flex items-center space-x-1.5 transition-colors shadow-md shadow-accent/30"
                       >
                         <Download className="h-3.5 w-3.5" />
                         <span>Download Stream</span>
@@ -3305,7 +3395,7 @@ export const App: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => handleOpenExportModal(previewModal.mediaItem!)}
-                      className="px-3 py-1.5 bg-brand-black/80 hover:bg-brand-dark border border-brand-dark rounded-md text-purple-300 flex items-center space-x-1.5 transition-colors"
+                      className="px-3 py-1.5 bg-page hover:bg-raised border border-hairline rounded-md text-purple-700 dark:text-purple-300 flex items-center space-x-1.5 transition-colors"
                     >
                       <FileJson className="h-3.5 w-3.5" />
                       <span>Export JSON</span>
@@ -3327,18 +3417,18 @@ export const App: React.FC = () => {
           onClick={() => setExportModal((prev) => ({ ...prev, isOpen: false }))}
         >
           <div
-            className="bg-brand-black border border-brand-dark rounded-2xl w-full max-w-2xl p-6 shadow-2xl space-y-4"
+            className="bg-page border border-hairline rounded-2xl w-full max-w-2xl p-6 shadow-2xl space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
-            <div className="flex items-center justify-between border-b border-brand-dark/60 pb-3">
+            <div className="flex items-center justify-between border-b border-hairline pb-3">
               <div className="flex items-center space-x-2.5">
-                <div className="p-2 rounded-lg bg-purple-950/80 border border-purple-800/60 text-purple-300">
+                <div className="p-2 rounded-lg bg-purple-500/10 border border-purple-500/30 text-purple-700 dark:text-purple-300">
                   <FileJson className="h-5 w-5" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold text-white">Media Metadata Export</h3>
-                  <p className="text-xs font-mono text-neutral-400">
+                  <h3 className="text-sm font-bold text-ink">Media Metadata Export</h3>
+                  <p className="text-xs font-mono text-muted">
                     Comprehensive JSON export of media discovery details and download task state.
                   </p>
                 </div>
@@ -3346,7 +3436,7 @@ export const App: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setExportModal((prev) => ({ ...prev, isOpen: false }))}
-                className="p-1.5 text-neutral-400 hover:text-white rounded-lg hover:bg-brand-dark transition-colors"
+                className="p-1.5 text-muted hover:text-ink rounded-lg hover:bg-raised transition-colors"
               >
                 <X className="h-5 w-5" />
               </button>
@@ -3354,19 +3444,19 @@ export const App: React.FC = () => {
 
             {/* JSON Code Viewer */}
             {exportModal.loading ? (
-              <div className="py-20 flex flex-col items-center justify-center space-y-3 text-neutral-400">
-                <Loader2 className="h-6 w-6 animate-spin text-purple-400" />
+              <div className="py-20 flex flex-col items-center justify-center space-y-3 text-muted">
+                <Loader2 className="h-6 w-6 animate-spin text-purple-600 dark:text-purple-400" />
                 <span className="text-xs font-mono">Generating formatted metadata JSON...</span>
               </div>
             ) : (
-              <pre className="bg-brand-dark/40 border border-brand-dark/80 rounded-xl p-4 text-xs font-mono text-emerald-300 max-h-96 overflow-y-auto whitespace-pre-wrap select-text leading-relaxed">
+              <pre className="bg-surface border border-hairline rounded-xl p-4 text-xs font-mono text-emerald-700 dark:text-emerald-300 max-h-96 overflow-y-auto whitespace-pre-wrap select-text leading-relaxed">
                 {JSON.stringify(exportModal.metadata, null, 2)}
               </pre>
             )}
 
             {/* Actions Footer */}
-            <div className="flex items-center justify-between pt-2 border-t border-brand-dark/60">
-              <span className="text-[11px] font-mono text-neutral-400">
+            <div className="flex items-center justify-between pt-2 border-t border-hairline">
+              <span className="text-[11px] font-mono text-muted">
                 Item ID: {exportModal.mediaItem.id}
               </span>
               <div className="flex items-center space-x-2">
@@ -3382,12 +3472,12 @@ export const App: React.FC = () => {
                       setExportModal((prev) => ({ ...prev, copied: false }));
                     }, 2000);
                   }}
-                  className="px-3.5 py-1.5 bg-brand-dark hover:bg-neutral-800 border border-brand-dark text-xs font-mono text-white rounded-lg flex items-center space-x-1.5 transition-colors"
+                  className="px-3.5 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline text-xs font-mono text-ink rounded-lg flex items-center space-x-1.5 transition-colors"
                 >
                   {exportModal.copied ? (
                     <>
-                      <Check className="h-3.5 w-3.5 text-emerald-400" />
-                      <span className="text-emerald-400 font-semibold">Copied!</span>
+                      <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                      <span className="text-emerald-600 dark:text-emerald-400 font-semibold">Copied!</span>
                     </>
                   ) : (
                     <>
@@ -3434,27 +3524,27 @@ export const App: React.FC = () => {
           onClick={() => setDeleteConfirm((prev) => ({ ...prev, isOpen: false }))}
         >
           <div
-            className="bg-brand-black border border-red-900/60 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4"
+            className="bg-page border border-red-500/30 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
-            <div className="flex items-center space-x-3 text-red-400">
-              <div className="p-2 rounded-lg bg-red-950/80 border border-red-800/60">
+            <div className="flex items-center space-x-3 text-red-600 dark:text-red-400">
+              <div className="p-2 rounded-lg bg-red-500/10 border border-red-500/30">
                 <AlertCircle className="h-5 w-5" />
               </div>
-              <h3 className="text-base font-bold text-white">Delete Media Item</h3>
+              <h3 className="text-base font-bold text-ink">Delete Media Item</h3>
             </div>
 
             {/* Modal Details */}
-            <div className="space-y-3 text-xs text-neutral-300">
+            <div className="space-y-3 text-xs text-ink/80">
               <p>
                 Are you sure you want to remove this media item from your local SQLite library?
               </p>
-              <div className="bg-brand-dark/40 border border-brand-dark/80 rounded-xl p-3 space-y-1">
-                <p className="font-semibold text-white truncate">
+              <div className="bg-surface border border-hairline rounded-xl p-3 space-y-1">
+                <p className="font-semibold text-ink truncate">
                   {deleteConfirm.mediaItem.title || "Untitled Media"}
                 </p>
-                <p className="text-[11px] font-mono text-neutral-400 truncate">
+                <p className="text-[11px] font-mono text-muted truncate">
                   Author: {deleteConfirm.mediaItem.author || "Unknown"} ·{" "}
                   {formatBytes(deleteConfirm.mediaItem.filesize_bytes)}
                 </p>
@@ -3462,7 +3552,7 @@ export const App: React.FC = () => {
 
               {/* Disk deletion toggle if file exists */}
               {deleteConfirm.localPath && (
-                <label className="flex items-start space-x-2.5 text-xs text-neutral-300 bg-red-950/20 border border-red-800/40 p-3 rounded-xl cursor-pointer">
+                <label className="flex items-start space-x-2.5 text-xs text-ink/80 bg-red-500/10 border border-red-500/30 p-3 rounded-xl cursor-pointer">
                   <input
                     type="checkbox"
                     checked={deleteConfirm.deleteDiskFile}
@@ -3472,13 +3562,13 @@ export const App: React.FC = () => {
                         deleteDiskFile: e.target.checked,
                       }))
                     }
-                    className="mt-0.5 rounded border-red-800 text-brand-red focus:ring-brand-red"
+                    className="mt-0.5 rounded border-red-500/40 text-accent focus:ring-accent"
                   />
                   <div className="space-y-0.5 min-w-0">
-                    <span className="font-medium text-red-200 block">
+                    <span className="font-medium text-red-700 dark:text-red-300 block">
                       Also permanently delete file from disk
                     </span>
-                    <span className="text-[11px] font-mono text-neutral-400 block truncate" title={deleteConfirm.localPath}>
+                    <span className="text-[11px] font-mono text-muted block truncate" title={deleteConfirm.localPath}>
                       {deleteConfirm.localPath}
                     </span>
                   </div>
@@ -3487,12 +3577,12 @@ export const App: React.FC = () => {
             </div>
 
             {/* Modal Actions */}
-            <div className="flex items-center justify-end space-x-2 pt-2 border-t border-brand-dark/60">
+            <div className="flex items-center justify-end space-x-2 pt-2 border-t border-hairline">
               <button
                 type="button"
                 onClick={() => setDeleteConfirm((prev) => ({ ...prev, isOpen: false }))}
                 disabled={deleteConfirm.loading}
-                className="px-4 py-2 bg-brand-dark hover:bg-neutral-800 border border-brand-dark text-xs font-mono text-neutral-300 rounded-lg transition-colors"
+                className="px-4 py-2 bg-raised hover:bg-hairline/70 border border-hairline text-xs font-mono text-ink/80 rounded-lg transition-colors"
               >
                 Cancel
               </button>
@@ -3500,7 +3590,7 @@ export const App: React.FC = () => {
                 type="button"
                 onClick={handleConfirmDelete}
                 disabled={deleteConfirm.loading}
-                className="px-4 py-2 bg-red-700 hover:bg-red-600 text-xs font-mono font-medium text-white rounded-lg flex items-center space-x-1.5 transition-colors shadow-md shadow-red-900/30"
+                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-xs font-mono font-medium text-white rounded-lg flex items-center space-x-1.5 transition-colors shadow-md shadow-red-900/30"
               >
                 {deleteConfirm.loading ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />

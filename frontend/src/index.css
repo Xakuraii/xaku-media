@@ -18,35 +18,35 @@
   :root {
     color-scheme: light;
 
-    --bg: 255 255 255;
-    --band: 246 246 248;
+    --bg: 250 250 251;
+    --band: 242 243 246;
     --surface: 255 255 255;
-    --raised: 243 243 246;
-    --ink: 15 17 20;
-    --muted: 78 81 90;
-    --faint: 111 114 124;
-    --hairline: 229 231 236;
-    --hairline-strong: 210 214 222;
-    --accent: 210 49 58;
-    --accent-vivid: 230 57 70;
+    --raised: 245 246 248;
+    --ink: 16 18 22;
+    --muted: 82 86 96;
+    --faint: 112 116 126;
+    --hairline: 228 230 235;
+    --hairline-strong: 205 209 217;
+    --accent: 199 42 56;
+    --accent-vivid: 219 54 68;
     --on-accent: 255 255 255;
   }
 
   .dark {
     color-scheme: dark;
 
-    --bg: 11 12 16;
-    --band: 14 15 20;
+    --bg: 10 11 15;
+    --band: 12 13 18;
     --surface: 17 19 25;
-    --raised: 23 25 32;
-    --ink: 248 249 250;
-    --muted: 166 170 180;
-    --faint: 138 142 152;
-    --hairline: 34 37 45;
-    --hairline-strong: 48 52 62;
+    --raised: 23 26 33;
+    --ink: 244 246 249;
+    --muted: 162 167 178;
+    --faint: 132 137 148;
+    --hairline: 34 37 46;
+    --hairline-strong: 50 54 65;
     --accent: 255 77 90;
-    --accent-vivid: 255 95 106;
-    --on-accent: 11 12 16;
+    --accent-vivid: 255 99 110;
+    --on-accent: 12 13 17;
   }
 
   html {
@@ -56,15 +56,36 @@
   body {
     margin: 0;
     padding: 0;
-    /* System stack on body: the desktop app keeps its original rendering.
-     * The landing page opts into Inter via Tailwind's font-sans on its root. */
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+    font-family: "Inter Variable", Inter, -apple-system, BlinkMacSystemFont,
+      "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
     overflow-x: hidden;
     background-color: rgb(var(--bg));
     color: rgb(var(--ink));
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
     transition: background-color 200ms ease, color 200ms ease;
+  }
+
+  /* Themed, unobtrusive scrollbars for the desktop shell. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--hairline-strong)) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: rgb(var(--hairline-strong));
+    border-radius: 999px;
+    border: 3px solid rgb(var(--bg));
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(var(--muted) / 0.6);
   }
 
   ::selection {
@@ -125,5 +146,68 @@
 
   .btn-ghost {
     @apply inline-flex items-center justify-center gap-2.5 rounded-xl border border-hairline bg-surface text-ink font-medium text-sm px-5 py-3.5 transition-all duration-200 shadow-card hover:bg-band hover:-translate-y-0.5 active:translate-y-0;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Desktop shell primitives                                            */
+  /* ------------------------------------------------------------------ */
+
+  /* App canvas: page color with one restrained accent wash at the top. */
+  .d-app {
+    background-image:
+      radial-gradient(
+        900px 460px at 12% -12%,
+        rgb(var(--accent) / 0.07),
+        transparent 70%
+      ),
+      radial-gradient(
+        720px 420px at 100% 0%,
+        rgb(var(--accent) / 0.04),
+        transparent 65%
+      );
+  }
+
+  .d-sidebar {
+    @apply border-r border-hairline bg-band/90 backdrop-blur-xl;
+  }
+
+  .d-card {
+    @apply rounded-2xl border border-hairline bg-surface shadow-card;
+  }
+
+  .d-panel {
+    @apply rounded-xl border border-hairline bg-raised/60;
+  }
+
+  .d-title {
+    @apply text-[22px] font-semibold leading-tight tracking-tight text-ink;
+  }
+
+  .d-subtitle {
+    @apply mt-1 text-[13px] leading-relaxed text-muted;
+  }
+
+  .d-section-title {
+    @apply text-[13px] font-semibold tracking-tight text-ink;
+  }
+
+  .d-label {
+    @apply font-mono text-[10px] font-medium uppercase tracking-[0.16em] text-faint;
+  }
+
+  .d-input {
+    @apply w-full rounded-xl border border-hairline bg-page px-3.5 py-2.5 text-[13px] text-ink placeholder-faint transition-colors focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20;
+  }
+
+  .d-btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl border border-hairline bg-surface px-3.5 py-2 text-[13px] font-medium text-ink transition-colors hover:bg-band disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .d-btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-[13px] font-semibold text-on-accent shadow-sm shadow-accent/25 transition-colors hover:bg-accent-vivid disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .d-chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-hairline bg-raised px-2.5 py-1 font-mono text-[11px] text-muted;
   }
 }

@@ -41,6 +41,8 @@ interface SettingsViewProps {
   ffmpegInfo: FFmpegInfoResult | null;
   onConcurrencyChange?: (val: number) => void;
   onSpeedLimitChange?: (val: number) => void;
+  onThemeChange?: (theme: "dark" | "light" | "system") => void;
+  theme?: "dark" | "light" | "system";
 }
 
 const DEFAULT_PREFERENCES: AppPreferences = {
@@ -64,6 +66,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   ffmpegInfo,
   onConcurrencyChange,
   onSpeedLimitChange,
+  onThemeChange,
+  theme: activeTheme,
 }) => {
   const [prefs, setPrefs] = useState<AppPreferences>(DEFAULT_PREFERENCES);
   const [loading, setLoading] = useState<boolean>(true);
@@ -290,6 +294,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     if (updates.max_download_speed_kbps !== undefined && onSpeedLimitChange) {
       onSpeedLimitChange(updates.max_download_speed_kbps);
     }
+    if (updates.theme && onThemeChange) {
+      onThemeChange(updates.theme);
+    }
 
     if (!window.api?.updatePreferences) return;
 
@@ -339,6 +346,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       if (onSpeedLimitChange) {
         onSpeedLimitChange(defaults.max_download_speed_kbps ?? 0);
       }
+      if (onThemeChange && defaults.theme) {
+        onThemeChange(defaults.theme);
+      }
       showSaveNotice("Preferences reset to factory defaults");
     } catch (err) {
       console.error("Failed to reset preferences:", err);
@@ -350,8 +360,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center py-32 space-y-3">
-        <RefreshCw className="h-8 w-8 text-brand-red animate-spin" />
-        <p className="text-xs font-mono text-neutral-400">Loading settings from local database...</p>
+        <RefreshCw className="h-8 w-8 text-accent animate-spin" />
+        <p className="text-xs font-mono text-muted">Loading settings from local database...</p>
       </div>
     );
   }
@@ -359,13 +369,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   return (
     <div className="max-w-4xl mx-auto space-y-8 pb-16 animate-in fade-in duration-200">
       {/* Settings Header */}
-      <div className="flex items-center justify-between border-b border-brand-dark/80 pb-5">
+      <div className="flex items-center justify-between border-b border-hairline pb-5">
         <div className="space-y-1">
           <div className="flex items-center space-x-2.5">
-            <SettingsIcon className="h-6 w-6 text-brand-red" />
-            <h1 className="text-xl font-bold tracking-tight text-brand-white">Application Settings</h1>
+            <SettingsIcon className="h-6 w-6 text-accent" />
+            <h1 className="text-2xl font-bold tracking-tight text-ink">Application Settings</h1>
           </div>
-          <p className="text-xs text-neutral-400">
+          <p className="text-sm text-muted mt-1">
             Configure local download paths, worker concurrency limits, format preferences, and theme styling.
           </p>
         </div>
@@ -373,17 +383,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         {/* Save indicator toast */}
         <div className="flex items-center space-x-3">
           {savedToast && (
-            <div className="flex items-center space-x-2 px-3 py-1.5 bg-emerald-950/80 border border-emerald-600/60 rounded-lg text-emerald-300 text-xs font-mono animate-in fade-in duration-150">
-              <Check className="h-3.5 w-3.5 text-emerald-400" />
+            <div className="flex items-center space-x-2 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/30 rounded-lg text-emerald-700 dark:text-emerald-300 text-xs font-mono animate-in fade-in duration-150">
+              <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
               <span>{savedToast}</span>
             </div>
           )}
           <button
             type="button"
             onClick={() => setResetConfirmOpen(true)}
-            className="flex items-center space-x-1.5 px-3 py-1.5 bg-brand-dark hover:bg-neutral-800 border border-brand-dark rounded-lg text-xs font-mono text-neutral-300 transition-colors"
+            className="flex items-center space-x-1.5 px-3 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline rounded-lg text-xs font-mono text-ink/80 transition-colors"
           >
-            <RotateCcw className="h-3.5 w-3.5 text-neutral-400" />
+            <RotateCcw className="h-3.5 w-3.5 text-muted" />
             <span>Reset Defaults</span>
           </button>
         </div>
@@ -392,27 +402,27 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       {/* ========================================================================= */}
       {/* 1. Storage & Download Directories */}
       {/* ========================================================================= */}
-      <section className="bg-brand-dark/20 border border-brand-dark/70 rounded-2xl p-6 space-y-4 shadow-lg shadow-black/40">
-        <div className="flex items-center justify-between border-b border-brand-dark/50 pb-3">
+      <section className="bg-surface border border-hairline rounded-2xl p-6 space-y-4 shadow-card">
+        <div className="flex items-center justify-between border-b border-hairline pb-3">
           <div className="flex items-center space-x-2.5">
-            <HardDrive className="h-5 w-5 text-brand-red" />
+            <HardDrive className="h-5 w-5 text-accent" />
             <div>
-              <h2 className="text-sm font-semibold text-brand-white">Storage & Download Directory</h2>
-              <p className="text-[11px] text-neutral-400 font-mono">
+              <h2 className="text-sm font-semibold text-ink">Storage & Download Directory</h2>
+              <p className="text-[11px] text-muted font-mono">
                 Primary directory where images, videos, and multi-part files are saved.
               </p>
             </div>
           </div>
-          <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-950/70 border border-emerald-800/60 text-emerald-300">
+          <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300">
             Local Disk Only
           </span>
         </div>
 
         <div className="space-y-3">
-          <label className="text-xs font-medium text-neutral-300">Default Download Location</label>
+          <label className="text-xs font-medium text-ink/80">Default Download Location</label>
           <div className="flex items-center space-x-2">
-            <div className="flex-1 bg-brand-black border border-brand-dark rounded-xl px-4 py-2.5 flex items-center space-x-3 text-xs font-mono text-neutral-200 overflow-hidden">
-              <Folder className="h-4 w-4 text-amber-400 shrink-0" />
+            <div className="flex-1 bg-page border border-hairline rounded-xl px-4 py-2.5 flex items-center space-x-3 text-xs font-mono text-ink/90 overflow-hidden">
+              <Folder className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
               <span className="truncate select-all" title={prefs.download_dir}>
                 {prefs.download_dir || "Resolving system default..."}
               </span>
@@ -420,7 +430,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <button
               type="button"
               onClick={handleSelectFolder}
-              className="px-4 py-2.5 bg-brand-red hover:bg-red-700 text-white rounded-xl text-xs font-medium flex items-center space-x-2 transition-colors shrink-0 shadow-md shadow-brand-red/30"
+              className="px-4 py-2.5 bg-accent hover:bg-accent-vivid text-on-accent rounded-xl text-xs font-medium flex items-center space-x-2 transition-colors shrink-0 shadow-md shadow-accent/30"
             >
               <FolderOpen className="h-4 w-4" />
               <span>Change Folder...</span>
@@ -428,7 +438,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <button
               type="button"
               onClick={handleOpenFolder}
-              className="p-2.5 bg-brand-dark hover:bg-neutral-800 border border-brand-dark rounded-xl text-neutral-300 hover:text-white transition-colors shrink-0"
+              className="p-2.5 bg-raised hover:bg-hairline/70 border border-hairline rounded-xl text-ink/80 hover:text-ink transition-colors shrink-0"
               title="Open folder in File Explorer"
             >
               <ExternalLink className="h-4 w-4" />
@@ -436,19 +446,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
-            <div className="bg-brand-black/60 border border-brand-dark/60 rounded-xl p-3 flex items-center justify-between text-xs font-mono">
-              <div className="flex items-center space-x-2 text-neutral-400">
-                <Film className="h-4 w-4 text-purple-400" />
+            <div className="bg-raised border border-hairline rounded-xl p-3 flex items-center justify-between text-xs font-mono">
+              <div className="flex items-center space-x-2 text-muted">
+                <Film className="h-4 w-4 text-purple-600 dark:text-purple-400" />
                 <span>Video Subdirectory:</span>
               </div>
-              <span className="text-neutral-200 font-bold">\videos</span>
+              <span className="text-ink/90 font-bold">\videos</span>
             </div>
-            <div className="bg-brand-black/60 border border-brand-dark/60 rounded-xl p-3 flex items-center justify-between text-xs font-mono">
-              <div className="flex items-center space-x-2 text-neutral-400">
-                <ImageIcon className="h-4 w-4 text-emerald-400" />
+            <div className="bg-raised border border-hairline rounded-xl p-3 flex items-center justify-between text-xs font-mono">
+              <div className="flex items-center space-x-2 text-muted">
+                <ImageIcon className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
                 <span>Image Subdirectory:</span>
               </div>
-              <span className="text-neutral-200 font-bold">\images</span>
+              <span className="text-ink/90 font-bold">\images</span>
             </div>
           </div>
         </div>
@@ -457,18 +467,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       {/* ========================================================================= */}
       {/* 2. Download Concurrency & Queue Scheduling */}
       {/* ========================================================================= */}
-      <section className="bg-brand-dark/20 border border-brand-dark/70 rounded-2xl p-6 space-y-5 shadow-lg shadow-black/40">
-        <div className="flex items-center justify-between border-b border-brand-dark/50 pb-3">
+      <section className="bg-surface border border-hairline rounded-2xl p-6 space-y-5 shadow-card">
+        <div className="flex items-center justify-between border-b border-hairline pb-3">
           <div className="flex items-center space-x-2.5">
-            <Sliders className="h-5 w-5 text-purple-400" />
+            <Sliders className="h-5 w-5 text-purple-600 dark:text-purple-400" />
             <div>
-              <h2 className="text-sm font-semibold text-brand-white">Concurrency & Queue Scheduling</h2>
-              <p className="text-[11px] text-neutral-400 font-mono">
+              <h2 className="text-sm font-semibold text-ink">Concurrency & Queue Scheduling</h2>
+              <p className="text-[11px] text-muted font-mono">
                 Control active download slots, request timeouts, and automatic retry limits.
               </p>
             </div>
           </div>
-          <span className="px-2.5 py-0.5 rounded text-xs font-mono bg-purple-950/70 border border-purple-800/60 text-purple-300">
+          <span className="px-2.5 py-0.5 rounded text-xs font-mono bg-purple-500/10 border border-purple-500/30 text-purple-700 dark:text-purple-300">
             {prefs.max_concurrent_downloads} Active Slots
           </span>
         </div>
@@ -476,8 +486,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         {/* Concurrency Slider & Stepper */}
         <div className="space-y-3">
           <div className="flex items-center justify-between text-xs">
-            <span className="font-medium text-neutral-300">Simultaneous Active Downloads</span>
-            <span className="font-mono text-purple-300 font-bold">{prefs.max_concurrent_downloads} slots</span>
+            <span className="font-medium text-ink/80">Simultaneous Active Downloads</span>
+            <span className="font-mono text-purple-700 dark:text-purple-300 font-bold">{prefs.max_concurrent_downloads} slots</span>
           </div>
 
           <div className="flex items-center space-x-4">
@@ -488,7 +498,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               step="1"
               value={prefs.max_concurrent_downloads}
               onChange={(e) => handleUpdate({ max_concurrent_downloads: parseInt(e.target.value, 10) })}
-              className="w-full h-2 bg-brand-dark rounded-lg appearance-none cursor-pointer accent-brand-red"
+              className="w-full h-2 bg-raised rounded-lg appearance-none cursor-pointer accent-accent"
             />
           </div>
 
@@ -501,30 +511,30 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 onClick={() => handleUpdate({ max_concurrent_downloads: slot })}
                 className={`px-3 py-1 rounded-lg text-xs font-mono border transition-all ${
                   prefs.max_concurrent_downloads === slot
-                    ? "bg-brand-red border-brand-red text-white shadow-sm shadow-brand-red/40"
-                    : "bg-brand-black/70 border-brand-dark text-neutral-400 hover:text-white hover:border-neutral-700"
+                    ? "bg-accent border-accent text-on-accent shadow-sm shadow-accent/40"
+                    : "bg-raised border-hairline text-muted hover:text-ink hover:border-hairline-strong"
                 }`}
               >
                 {slot} {slot === 1 ? "Slot" : "Slots"}
               </button>
             ))}
           </div>
-          <p className="text-[11px] text-neutral-400 leading-relaxed font-mono">
+          <p className="text-[11px] text-muted leading-relaxed font-mono">
             Tasks exceeding this limit stay safely queued in SQLite and start automatically as slots open up.
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t border-brand-dark/40">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t border-hairline">
           {/* Timeout */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-xs font-mono">
-              <span className="text-neutral-300">Network Timeout:</span>
-              <span className="text-neutral-400">{prefs.request_timeout_seconds} seconds</span>
+              <span className="text-ink/80">Network Timeout:</span>
+              <span className="text-muted">{prefs.request_timeout_seconds} seconds</span>
             </div>
             <select
               value={prefs.request_timeout_seconds}
               onChange={(e) => handleUpdate({ request_timeout_seconds: parseFloat(e.target.value) })}
-              className="w-full bg-brand-black border border-brand-dark rounded-xl px-3 py-2 text-xs font-mono text-neutral-200 focus:outline-none focus:border-brand-red"
+              className="w-full bg-page border border-hairline rounded-xl px-3 py-2 text-xs font-mono text-ink/90 focus:outline-none focus:border-accent"
             >
               <option value="15">15 seconds (Fast fail)</option>
               <option value="30">30 seconds (Recommended standard)</option>
@@ -536,13 +546,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           {/* Retries */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-xs font-mono">
-              <span className="text-neutral-300">Max Auto-Retries:</span>
-              <span className="text-neutral-400">{prefs.max_retries} attempts</span>
+              <span className="text-ink/80">Max Auto-Retries:</span>
+              <span className="text-muted">{prefs.max_retries} attempts</span>
             </div>
             <select
               value={prefs.max_retries}
               onChange={(e) => handleUpdate({ max_retries: parseInt(e.target.value, 10) })}
-              className="w-full bg-brand-black border border-brand-dark rounded-xl px-3 py-2 text-xs font-mono text-neutral-200 focus:outline-none focus:border-brand-red"
+              className="w-full bg-page border border-hairline rounded-xl px-3 py-2 text-xs font-mono text-ink/90 focus:outline-none focus:border-accent"
             >
               <option value="0">0 (No retries)</option>
               <option value="1">1 attempt</option>
@@ -553,13 +563,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
 
         {/* Global Bandwidth Throttling & Speed Limit */}
-        <div className="pt-4 border-t border-brand-dark/40 space-y-3">
+        <div className="pt-4 border-t border-hairline space-y-3">
           <div className="flex items-center justify-between text-xs">
             <div className="flex items-center space-x-2">
-              <Gauge className="h-4 w-4 text-cyan-400" />
-              <span className="font-semibold text-neutral-200">Global Bandwidth Speed Limit</span>
+              <Gauge className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
+              <span className="font-semibold text-ink/90">Global Bandwidth Speed Limit</span>
             </div>
-            <span className="font-mono text-cyan-300 font-bold">
+            <span className="font-mono text-cyan-700 dark:text-cyan-300 font-bold">
               {prefs.max_download_speed_kbps && prefs.max_download_speed_kbps > 0
                 ? prefs.max_download_speed_kbps >= 1024
                   ? `${(prefs.max_download_speed_kbps / 1024).toFixed(1)} MB/s`
@@ -587,8 +597,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   onClick={() => handleUpdate({ max_download_speed_kbps: preset.value })}
                   className={`px-3 py-1 rounded-lg text-xs font-mono border transition-all ${
                     active
-                      ? "bg-cyan-600 border-cyan-400 text-white shadow-sm shadow-cyan-600/40"
-                      : "bg-brand-black/70 border-brand-dark text-neutral-400 hover:text-white hover:border-neutral-700"
+                      ? "bg-cyan-700 border-cyan-400 text-white shadow-sm shadow-cyan-600/40"
+                      : "bg-raised border-hairline text-muted hover:text-ink hover:border-hairline-strong"
                   }`}
                 >
                   {preset.label}
@@ -598,7 +608,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
 
           <div className="flex items-center space-x-3 pt-1">
-            <span className="text-[11px] font-mono text-neutral-400">Custom Limit (KB/s):</span>
+            <span className="text-[11px] font-mono text-muted">Custom Limit (KB/s):</span>
             <input
               type="number"
               min="0"
@@ -610,9 +620,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 handleUpdate({ max_download_speed_kbps: val });
               }}
               placeholder="0 = unlimited"
-              className="w-36 bg-brand-black border border-brand-dark rounded-xl px-3 py-1.5 text-xs font-mono text-neutral-200 focus:outline-none focus:border-cyan-500"
+              className="w-36 bg-page border border-hairline rounded-xl px-3 py-1.5 text-xs font-mono text-ink/90 focus:outline-none focus:border-cyan-500"
             />
-            <span className="text-[11px] text-neutral-500 font-mono">
+            <span className="text-[11px] text-faint font-mono">
               Applies globally across all active workers in real time.
             </span>
           </div>
@@ -622,25 +632,25 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       {/* ========================================================================= */}
       {/* 3. Video Quality & Format Preferences */}
       {/* ========================================================================= */}
-      <section className="bg-brand-dark/20 border border-brand-dark/70 rounded-2xl p-6 space-y-5 shadow-lg shadow-black/40">
-        <div className="flex items-center justify-between border-b border-brand-dark/50 pb-3">
+      <section className="bg-surface border border-hairline rounded-2xl p-6 space-y-5 shadow-card">
+        <div className="flex items-center justify-between border-b border-hairline pb-3">
           <div className="flex items-center space-x-2.5">
-            <Film className="h-5 w-5 text-purple-400" />
+            <Film className="h-5 w-5 text-purple-600 dark:text-purple-400" />
             <div>
-              <h2 className="text-sm font-semibold text-brand-white">Default Video Pipeline Preferences</h2>
-              <p className="text-[11px] text-neutral-400 font-mono">
+              <h2 className="text-sm font-semibold text-ink">Default Video Pipeline Preferences</h2>
+              <p className="text-[11px] text-muted font-mono">
                 Preferred maximum resolution and container format for video downloads.
               </p>
             </div>
           </div>
-          <span className="px-2.5 py-0.5 rounded text-xs font-mono bg-brand-black border border-brand-dark text-neutral-300 uppercase">
+          <span className="px-2.5 py-0.5 rounded text-xs font-mono bg-page border border-hairline text-ink/80 uppercase">
             {prefs.default_video_resolution} · {prefs.default_video_container}
           </span>
         </div>
 
         {/* Video Resolution */}
         <div className="space-y-2.5">
-          <label className="text-xs font-medium text-neutral-300">Default Video Resolution</label>
+          <label className="text-xs font-medium text-ink/80">Default Video Resolution</label>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
             {[
               { id: "best", label: "Best Available", desc: "Max Source" },
@@ -656,12 +666,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 onClick={() => handleUpdate({ default_video_resolution: res.id })}
                 className={`p-2.5 rounded-xl border text-left flex flex-col transition-all ${
                   prefs.default_video_resolution === res.id
-                    ? "bg-purple-950/70 border-purple-600 text-white shadow-sm shadow-purple-900/50"
-                    : "bg-brand-black/70 border-brand-dark text-neutral-400 hover:text-white hover:border-neutral-700"
+                    ? "bg-purple-500/10 border-purple-500/40 text-ink shadow-sm shadow-purple-900/50"
+                    : "bg-raised border-hairline text-muted hover:text-ink hover:border-hairline-strong"
                 }`}
               >
-                <span className="text-xs font-bold text-brand-white">{res.label}</span>
-                <span className="text-[10px] font-mono text-neutral-400">{res.desc}</span>
+                <span className="text-xs font-bold text-ink">{res.label}</span>
+                <span className="text-[11px] font-mono text-muted">{res.desc}</span>
               </button>
             ))}
           </div>
@@ -669,7 +679,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
         {/* Video Container */}
         <div className="space-y-2.5">
-          <label className="text-xs font-medium text-neutral-300">Default Video Container</label>
+          <label className="text-xs font-medium text-ink/80">Default Video Container</label>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             {[
               { id: "mp4", label: "MP4", desc: "Universal Compatibility" },
@@ -683,19 +693,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 onClick={() => handleUpdate({ default_video_container: fmt.id })}
                 className={`p-2.5 rounded-xl border text-left flex flex-col transition-all ${
                   prefs.default_video_container === fmt.id
-                    ? "bg-purple-950/70 border-purple-600 text-white shadow-sm shadow-purple-900/50"
-                    : "bg-brand-black/70 border-brand-dark text-neutral-400 hover:text-white hover:border-neutral-700"
+                    ? "bg-purple-500/10 border-purple-500/40 text-ink shadow-sm shadow-purple-900/50"
+                    : "bg-raised border-hairline text-muted hover:text-ink hover:border-hairline-strong"
                 }`}
               >
-                <span className="text-xs font-bold uppercase text-brand-white">{fmt.label}</span>
-                <span className="text-[10px] font-mono text-neutral-400">{fmt.desc}</span>
+                <span className="text-xs font-bold uppercase text-ink">{fmt.label}</span>
+                <span className="text-[11px] font-mono text-muted">{fmt.desc}</span>
               </button>
             ))}
           </div>
         </div>
 
-        <div className="text-[11px] font-mono text-neutral-400 bg-brand-black/60 p-3 rounded-xl border border-brand-dark/60 flex items-start space-x-2">
-          <Sparkles className="h-4 w-4 text-purple-400 shrink-0 mt-0.5" />
+        <div className="text-[11px] font-mono text-muted bg-raised p-3 rounded-xl border border-hairline flex items-start space-x-2">
+          <Sparkles className="h-4 w-4 text-purple-600 dark:text-purple-400 shrink-0 mt-0.5" />
           <span>
             Non-destructive multiplexing: Separate video and audio streams are muxed without lossy re-encoding whenever supported by FFmpeg.
           </span>
@@ -705,18 +715,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       {/* ========================================================================= */}
       {/* 4. Image Quality & Format Preferences */}
       {/* ========================================================================= */}
-      <section className="bg-brand-dark/20 border border-brand-dark/70 rounded-2xl p-6 space-y-4 shadow-lg shadow-black/40">
-        <div className="flex items-center justify-between border-b border-brand-dark/50 pb-3">
+      <section className="bg-surface border border-hairline rounded-2xl p-6 space-y-4 shadow-card">
+        <div className="flex items-center justify-between border-b border-hairline pb-3">
           <div className="flex items-center space-x-2.5">
-            <ImageIcon className="h-5 w-5 text-emerald-400" />
+            <ImageIcon className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
             <div>
-              <h2 className="text-sm font-semibold text-brand-white">Default Image Pipeline Preferences</h2>
-              <p className="text-[11px] text-neutral-400 font-mono">
+              <h2 className="text-sm font-semibold text-ink">Default Image Pipeline Preferences</h2>
+              <p className="text-[11px] text-muted font-mono">
                 Preferred format for single image downloads and bulk gallery exports.
               </p>
             </div>
           </div>
-          <span className="px-2.5 py-0.5 rounded text-xs font-mono bg-brand-black border border-brand-dark text-neutral-300 uppercase">
+          <span className="px-2.5 py-0.5 rounded text-xs font-mono bg-page border border-hairline text-ink/80 uppercase">
             {prefs.default_image_format}
           </span>
         </div>
@@ -734,17 +744,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               onClick={() => handleUpdate({ default_image_format: fmt.id })}
               className={`p-2.5 rounded-xl border text-left flex flex-col transition-all ${
                 prefs.default_image_format === fmt.id
-                  ? "bg-emerald-950/70 border-emerald-600 text-white shadow-sm shadow-emerald-900/50"
-                  : "bg-brand-black/70 border-brand-dark text-neutral-400 hover:text-white hover:border-neutral-700"
+                  ? "bg-emerald-500/10 border-emerald-500/40 text-ink shadow-sm shadow-emerald-900/50"
+                  : "bg-raised border-hairline text-muted hover:text-ink hover:border-hairline-strong"
               }`}
             >
-              <span className="text-xs font-bold uppercase text-brand-white">{fmt.label}</span>
-              <span className="text-[10px] font-mono text-neutral-400">{fmt.desc}</span>
+              <span className="text-xs font-bold uppercase text-ink">{fmt.label}</span>
+              <span className="text-[11px] font-mono text-muted">{fmt.desc}</span>
             </button>
           ))}
         </div>
 
-        <p className="text-[11px] text-neutral-400 font-mono">
+        <p className="text-[11px] text-muted font-mono">
           Original preserves original EXIF metadata, ICC color profiles, and native compression without alteration.
         </p>
       </section>
@@ -752,26 +762,26 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       {/* ========================================================================= */}
       {/* 5. Session Credentials, Cookies & Custom Request Headers */}
       {/* ========================================================================= */}
-      <section className="bg-brand-dark/20 border border-brand-dark/70 rounded-2xl p-6 space-y-4 shadow-lg shadow-black/40">
-        <div className="flex items-center justify-between border-b border-brand-dark/50 pb-3">
+      <section className="bg-surface border border-hairline rounded-2xl p-6 space-y-4 shadow-card">
+        <div className="flex items-center justify-between border-b border-hairline pb-3">
           <div className="flex items-center space-x-2.5">
-            <KeyRound className="h-5 w-5 text-amber-400" />
+            <KeyRound className="h-5 w-5 text-amber-600 dark:text-amber-400" />
             <div>
-              <h2 className="text-sm font-semibold text-brand-white">Session Credentials & Custom Headers</h2>
-              <p className="text-[11px] text-neutral-400 font-mono">
+              <h2 className="text-sm font-semibold text-ink">Session Credentials & Custom Headers</h2>
+              <p className="text-[11px] text-muted font-mono">
                 Manage authenticated sessions, browser cookies, and domain-level HTTP headers for restricted platforms.
               </p>
             </div>
           </div>
           <div className="flex items-center space-x-2">
-            <div className="flex bg-brand-black border border-brand-dark rounded-lg p-0.5 text-xs font-mono">
+            <div className="flex bg-page border border-hairline rounded-lg p-0.5 text-xs font-mono">
               <button
                 type="button"
                 onClick={() => setAuthActiveTab("cookies")}
                 className={`px-3 py-1 rounded-md transition-colors ${
                   authActiveTab === "cookies"
-                    ? "bg-amber-950/80 text-amber-300 font-bold border border-amber-800/60"
-                    : "text-neutral-400 hover:text-white"
+                    ? "bg-amber-500/10 text-amber-700 dark:text-amber-300 font-bold border border-amber-500/30"
+                    : "text-muted hover:text-ink"
                 }`}
               >
                 Cookie Profiles ({cookieProfiles.length})
@@ -781,8 +791,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 onClick={() => setAuthActiveTab("headers")}
                 className={`px-3 py-1 rounded-md transition-colors ${
                   authActiveTab === "headers"
-                    ? "bg-amber-950/80 text-amber-300 font-bold border border-amber-800/60"
-                    : "text-neutral-400 hover:text-white"
+                    ? "bg-amber-500/10 text-amber-700 dark:text-amber-300 font-bold border border-amber-500/30"
+                    : "text-muted hover:text-ink"
                 }`}
               >
                 Domain Headers ({Object.keys(domainHeaders).length})
@@ -792,7 +802,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               type="button"
               onClick={loadAuthData}
               title="Refresh credentials and profiles"
-              className="p-1.5 bg-brand-black border border-brand-dark text-neutral-400 hover:text-white rounded-lg transition-colors"
+              className="p-1.5 bg-page border border-hairline text-muted hover:text-ink rounded-lg transition-colors"
             >
               <RefreshCw className="h-3.5 w-3.5" />
             </button>
@@ -804,8 +814,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <div
             className={`p-3 rounded-xl border text-xs font-mono flex items-center justify-between ${
               authFeedback.type === "success"
-                ? "bg-emerald-950/60 border-emerald-800/60 text-emerald-300"
-                : "bg-red-950/60 border-red-800/60 text-red-300"
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300"
+                : "bg-red-500/10 border-red-500/30 text-red-700 dark:text-red-300"
             }`}
           >
             <div className="flex items-center space-x-2">
@@ -819,7 +829,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <button
               type="button"
               onClick={() => setAuthFeedback(null)}
-              className="text-neutral-400 hover:text-white ml-2 text-xs"
+              className="text-muted hover:text-ink ml-2 text-xs"
             >
               ✕
             </button>
@@ -829,21 +839,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         {authActiveTab === "cookies" ? (
           <div className="space-y-4">
             {/* Importers Toolbar */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-brand-black/50 border border-brand-dark/60 rounded-xl p-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-raised/70 border border-hairline rounded-xl p-4">
               {/* Browser Extractor */}
               <div className="space-y-2">
-                <div className="flex items-center space-x-2 text-xs font-medium text-neutral-300">
-                  <Globe className="h-4 w-4 text-cyan-400" />
+                <div className="flex items-center space-x-2 text-xs font-medium text-ink/80">
+                  <Globe className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
                   <span>One-Click Browser Cookie Import</span>
                 </div>
-                <p className="text-[10px] text-neutral-400 font-mono">
+                <p className="text-[11px] text-muted font-mono">
                   Decrypts session cookies from local browser profiles (Edge, Chrome, Firefox, etc.).
                 </p>
                 <div className="flex items-center space-x-2 pt-1">
                   <select
                     value={selectedBrowser}
                     onChange={(e) => setSelectedBrowser(e.target.value)}
-                    className="bg-brand-black border border-brand-dark rounded-lg px-2.5 py-1.5 text-xs text-neutral-200 font-mono focus:border-cyan-500 capitalize"
+                    className="bg-page border border-hairline rounded-lg px-2.5 py-1.5 text-xs text-ink/90 font-mono focus:border-cyan-500 capitalize"
                   >
                     {supportedBrowsers.map((b) => (
                       <option key={b} value={b}>
@@ -856,13 +866,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     placeholder="Domain filter (e.g. patreon.com)"
                     value={browserDomainFilter}
                     onChange={(e) => setBrowserDomainFilter(e.target.value)}
-                    className="flex-1 bg-brand-black border border-brand-dark rounded-lg px-2.5 py-1.5 text-xs text-neutral-200 placeholder-neutral-500 font-mono focus:border-cyan-500"
+                    className="flex-1 bg-page border border-hairline rounded-lg px-2.5 py-1.5 text-xs text-ink/90 placeholder-faint font-mono focus:border-cyan-500"
                   />
                   <button
                     type="button"
                     onClick={handleBrowserImport}
                     disabled={importingBrowser}
-                    className="px-3 py-1.5 bg-cyan-900/60 hover:bg-cyan-800/80 border border-cyan-700/60 text-cyan-200 rounded-lg text-xs font-mono transition-colors flex items-center space-x-1.5 shrink-0"
+                    className="px-3 py-1.5 bg-cyan-500/15 hover:bg-cyan-800/80 border border-cyan-500/30 text-cyan-700 dark:text-cyan-300 rounded-lg text-xs font-mono transition-colors flex items-center space-x-1.5 shrink-0"
                   >
                     {importingBrowser ? (
                       <RefreshCw className="h-3.5 w-3.5 animate-spin" />
@@ -875,29 +885,29 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
 
               {/* File Import & Paste */}
-              <div className="space-y-2 md:border-l md:border-brand-dark/60 md:pl-4">
-                <div className="flex items-center space-x-2 text-xs font-medium text-neutral-300">
-                  <FileText className="h-4 w-4 text-amber-400" />
+              <div className="space-y-2 md:border-l md:border-hairline md:pl-4">
+                <div className="flex items-center space-x-2 text-xs font-medium text-ink/80">
+                  <FileText className="h-4 w-4 text-amber-600 dark:text-amber-400" />
                   <span>Manual Netscape File & Text Import</span>
                 </div>
-                <p className="text-[10px] text-neutral-400 font-mono">
+                <p className="text-[11px] text-muted font-mono">
                   Import Netscape `.txt` cookies exported from browser extensions or paste raw headers.
                 </p>
                 <div className="flex items-center space-x-2 pt-1">
                   <button
                     type="button"
                     onClick={handleFileImport}
-                    className="flex-1 px-3 py-1.5 bg-brand-black hover:bg-brand-dark border border-brand-dark text-neutral-200 rounded-lg text-xs font-mono transition-colors flex items-center justify-center space-x-1.5"
+                    className="flex-1 px-3 py-1.5 bg-page hover:bg-raised border border-hairline text-ink/90 rounded-lg text-xs font-mono transition-colors flex items-center justify-center space-x-1.5"
                   >
-                    <Upload className="h-3.5 w-3.5 text-amber-400" />
+                    <Upload className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
                     <span>Import .txt File</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setPasteModalOpen(true)}
-                    className="flex-1 px-3 py-1.5 bg-brand-black hover:bg-brand-dark border border-brand-dark text-neutral-200 rounded-lg text-xs font-mono transition-colors flex items-center justify-center space-x-1.5"
+                    className="flex-1 px-3 py-1.5 bg-page hover:bg-raised border border-hairline text-ink/90 rounded-lg text-xs font-mono transition-colors flex items-center justify-center space-x-1.5"
                   >
-                    <Plus className="h-3.5 w-3.5 text-emerald-400" />
+                    <Plus className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
                     <span>Paste Text</span>
                   </button>
                 </div>
@@ -906,15 +916,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
             {/* Active Profiles Table */}
             <div className="space-y-2">
-              <span className="text-xs font-medium text-neutral-300">Active Cookie Profiles</span>
+              <span className="text-xs font-medium text-ink/80">Active Cookie Profiles</span>
               {cookieProfiles.length === 0 ? (
-                <div className="p-6 text-center border border-dashed border-brand-dark rounded-xl bg-brand-black/30 text-xs font-mono text-neutral-500">
+                <div className="p-6 text-center border border-dashed border-hairline rounded-xl bg-raised/50 text-xs font-mono text-faint">
                   No active session cookie profiles found. Import browser cookies or upload a Netscape .txt file above.
                 </div>
               ) : (
-                <div className="border border-brand-dark rounded-xl overflow-hidden bg-brand-black/40">
+                <div className="border border-hairline rounded-xl overflow-hidden bg-raised/60">
                   <table className="w-full text-left text-xs font-mono">
-                    <thead className="bg-brand-dark/40 border-b border-brand-dark/60 text-[10px] text-neutral-400 uppercase tracking-wider">
+                    <thead className="bg-surface border-b border-hairline text-[11px] text-muted uppercase tracking-wider">
                       <tr>
                         <th className="py-2 px-3">Domain</th>
                         <th className="py-2 px-3">Source</th>
@@ -923,24 +933,24 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         <th className="py-2 px-3 text-right">Actions</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-brand-dark/40 text-neutral-300">
+                    <tbody className="divide-y divide-hairline text-ink/80">
                       {cookieProfiles.map((p) => (
-                        <tr key={p.id} className="hover:bg-brand-dark/20 transition-colors">
-                          <td className="py-2 px-3 font-bold text-amber-300">{p.domain}</td>
+                        <tr key={p.id} className="hover:bg-surface transition-colors">
+                          <td className="py-2 px-3 font-bold text-amber-700 dark:text-amber-300">{p.domain}</td>
                           <td className="py-2 px-3">
-                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-brand-black border border-brand-dark text-neutral-300 uppercase">
+                            <span className="px-1.5 py-0.5 rounded text-[11px] bg-page border border-hairline text-ink/80 uppercase">
                               {p.browser_source || "text"}
                             </span>
                           </td>
-                          <td className="py-2 px-3 text-cyan-300">{p.cookie_count} entries</td>
-                          <td className="py-2 px-3 text-[10px] text-neutral-500 truncate max-w-xs" title={p.cookie_file_path}>
+                          <td className="py-2 px-3 text-cyan-700 dark:text-cyan-300">{p.cookie_count} entries</td>
+                          <td className="py-2 px-3 text-[11px] text-faint truncate max-w-xs" title={p.cookie_file_path}>
                             {p.cookie_file_path}
                           </td>
                           <td className="py-2 px-3 text-right">
                             <button
                               type="button"
                               onClick={() => handleDeleteCookieProfile(p.id, p.domain)}
-                              className="text-red-400 hover:text-red-300 p-1 hover:bg-red-950/50 rounded transition-colors"
+                              className="text-red-600 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300 p-1 hover:bg-red-500/10 rounded transition-colors"
                               title="Delete cookie profile"
                             >
                               <Trash2 className="h-3.5 w-3.5" />
@@ -958,11 +968,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <div className="space-y-4">
             {/* Headers Toolbar */}
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-neutral-300">Configured Domain Request Headers</span>
+              <span className="text-xs font-medium text-ink/80">Configured Domain Request Headers</span>
               <button
                 type="button"
                 onClick={() => setHeaderModalOpen(true)}
-                className="px-3 py-1.5 bg-amber-950/60 hover:bg-amber-900/80 border border-amber-700/60 text-amber-200 rounded-lg text-xs font-mono transition-colors flex items-center space-x-1.5"
+                className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-700 dark:text-amber-300 rounded-lg text-xs font-mono transition-colors flex items-center space-x-1.5"
               >
                 <Plus className="h-3.5 w-3.5" />
                 <span>Add Domain Header</span>
@@ -970,13 +980,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
 
             {Object.keys(domainHeaders).length === 0 ? (
-              <div className="p-6 text-center border border-dashed border-brand-dark rounded-xl bg-brand-black/30 text-xs font-mono text-neutral-500">
+              <div className="p-6 text-center border border-dashed border-hairline rounded-xl bg-raised/50 text-xs font-mono text-faint">
                 No custom domain headers configured. Standard default User-Agent and CORS headers are used.
               </div>
             ) : (
-              <div className="border border-brand-dark rounded-xl overflow-hidden bg-brand-black/40">
+              <div className="border border-hairline rounded-xl overflow-hidden bg-raised/60">
                 <table className="w-full text-left text-xs font-mono">
-                  <thead className="bg-brand-dark/40 border-b border-brand-dark/60 text-[10px] text-neutral-400 uppercase tracking-wider">
+                  <thead className="bg-surface border-b border-hairline text-[11px] text-muted uppercase tracking-wider">
                     <tr>
                       <th className="py-2 px-3">Domain</th>
                       <th className="py-2 px-3">User-Agent</th>
@@ -985,24 +995,24 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       <th className="py-2 px-3 text-right">Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-brand-dark/40 text-neutral-300">
+                  <tbody className="divide-y divide-hairline text-ink/80">
                     {Object.entries(domainHeaders).map(([dom, h]) => (
-                      <tr key={dom} className="hover:bg-brand-dark/20 transition-colors">
-                        <td className="py-2 px-3 font-bold text-amber-300">{dom}</td>
-                        <td className="py-2 px-3 text-[10px] text-neutral-400 truncate max-w-xs" title={h["User-Agent"] || "Default"}>
+                      <tr key={dom} className="hover:bg-surface transition-colors">
+                        <td className="py-2 px-3 font-bold text-amber-700 dark:text-amber-300">{dom}</td>
+                        <td className="py-2 px-3 text-[11px] text-muted truncate max-w-xs" title={h["User-Agent"] || "Default"}>
                           {h["User-Agent"] || "Default"}
                         </td>
-                        <td className="py-2 px-3 text-[10px] text-neutral-400 truncate max-w-xs" title={h["Referer"] || "None"}>
+                        <td className="py-2 px-3 text-[11px] text-muted truncate max-w-xs" title={h["Referer"] || "None"}>
                           {h["Referer"] || "None"}
                         </td>
-                        <td className="py-2 px-3 text-[10px] text-neutral-400">
+                        <td className="py-2 px-3 text-[11px] text-muted">
                           {h["Authorization"] ? "Bearer ••••••••" : "None"}
                         </td>
                         <td className="py-2 px-3 text-right">
                           <button
                             type="button"
                             onClick={() => handleDeleteDomainHeaders(dom)}
-                            className="text-red-400 hover:text-red-300 p-1 hover:bg-red-950/50 rounded transition-colors"
+                            className="text-red-600 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300 p-1 hover:bg-red-500/10 rounded transition-colors"
                             title="Delete custom headers"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
@@ -1021,19 +1031,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       {/* ========================================================================= */}
       {/* 6. Appearance & Diagnostics */}
       {/* ========================================================================= */}
-      <section className="bg-brand-dark/20 border border-brand-dark/70 rounded-2xl p-6 space-y-4 shadow-lg shadow-black/40">
-        <div className="flex items-center justify-between border-b border-brand-dark/50 pb-3">
+      <section className="bg-surface border border-hairline rounded-2xl p-6 space-y-4 shadow-card">
+        <div className="flex items-center justify-between border-b border-hairline pb-3">
           <div className="flex items-center space-x-2.5">
-            <Moon className="h-5 w-5 text-amber-400" />
+            <Moon className="h-5 w-5 text-accent" />
             <div>
-              <h2 className="text-sm font-semibold text-brand-white">Theme & Appearance</h2>
-              <p className="text-[11px] text-neutral-400 font-mono">
+              <h2 className="text-sm font-semibold text-ink">Theme & Appearance</h2>
+              <p className="text-[11px] text-muted font-mono">
                 Select visual color palette and application interface theme.
               </p>
             </div>
           </div>
-          <span className="px-2.5 py-0.5 rounded text-xs font-mono bg-brand-black border border-brand-dark text-neutral-300 capitalize">
-            {prefs.theme}
+          <span className="px-2.5 py-0.5 rounded text-xs font-mono bg-page border border-hairline text-ink/80 capitalize">
+            {activeTheme ?? prefs.theme}
           </span>
         </div>
 
@@ -1050,16 +1060,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 type="button"
                 onClick={() => handleUpdate({ theme: theme.id as any })}
                 className={`p-3 rounded-xl border text-left flex flex-col space-y-1 transition-all ${
-                  prefs.theme === theme.id
-                    ? "bg-amber-950/60 border-amber-600 text-white shadow-sm shadow-amber-900/40"
-                    : "bg-brand-black/70 border-brand-dark text-neutral-400 hover:text-white hover:border-neutral-700"
+                  (activeTheme ?? prefs.theme) === theme.id
+                    ? "bg-accent/10 border-accent/40 text-ink shadow-sm shadow-accent/10"
+                    : "bg-raised border-hairline text-muted hover:text-ink hover:border-hairline-strong"
                 }`}
               >
                 <div className="flex items-center space-x-2">
-                  <Icon className="h-4 w-4 text-amber-400" />
-                  <span className="text-xs font-bold text-brand-white">{theme.label}</span>
+                  <Icon className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                  <span className="text-xs font-bold text-ink">{theme.label}</span>
                 </div>
-                <span className="text-[10px] font-mono text-neutral-400">{theme.desc}</span>
+                <span className="text-[11px] font-mono text-muted">{theme.desc}</span>
               </button>
             );
           })}
@@ -1069,57 +1079,57 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       {/* ========================================================================= */}
       {/* 6. System Runtime Diagnostics */}
       {/* ========================================================================= */}
-      <section className="bg-brand-dark/20 border border-brand-dark/70 rounded-2xl p-6 space-y-4 shadow-lg shadow-black/40">
-        <div className="flex items-center justify-between border-b border-brand-dark/50 pb-3">
+      <section className="bg-surface border border-hairline rounded-2xl p-6 space-y-4 shadow-card">
+        <div className="flex items-center justify-between border-b border-hairline pb-3">
           <div className="flex items-center space-x-2.5">
-            <Cpu className="h-5 w-5 text-cyan-400" />
+            <Cpu className="h-5 w-5 text-cyan-600 dark:text-cyan-400" />
             <div>
-              <h2 className="text-sm font-semibold text-brand-white">Runtime System Diagnostics</h2>
-              <p className="text-[11px] text-neutral-400 font-mono">
+              <h2 className="text-sm font-semibold text-ink">Runtime System Diagnostics</h2>
+              <p className="text-[11px] text-muted font-mono">
                 Environment runtimes, tool detection, and local SQLite database path.
               </p>
             </div>
           </div>
-          <span className="px-2.5 py-0.5 rounded text-xs font-mono bg-emerald-950/70 border border-emerald-800/60 text-emerald-300">
+          <span className="px-2.5 py-0.5 rounded text-xs font-mono bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300">
             All Systems Active
           </span>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs font-mono">
-          <div className="bg-brand-black/60 border border-brand-dark/60 rounded-xl p-3 space-y-1">
-            <span className="text-neutral-400 text-[10px] uppercase">Python Engine</span>
-            <div className="text-neutral-200 font-bold">
+          <div className="bg-raised border border-hairline rounded-xl p-3 space-y-1">
+            <span className="text-muted text-[11px] uppercase">Python Engine</span>
+            <div className="text-ink/90 font-bold">
               Python {pythonStatus?.info?.python_version || "3.12.x"} (PID: {pythonStatus?.pid || "Active"})
             </div>
-            <div className="text-[10px] text-neutral-500 truncate" title={pythonStatus?.info?.python_executable}>
+            <div className="text-[11px] text-faint truncate" title={pythonStatus?.info?.python_executable}>
               {pythonStatus?.info?.python_executable}
             </div>
           </div>
 
-          <div className="bg-brand-black/60 border border-brand-dark/60 rounded-xl p-3 space-y-1">
-            <span className="text-neutral-400 text-[10px] uppercase">Media Processing (FFmpeg)</span>
-            <div className="text-neutral-200 font-bold">
+          <div className="bg-raised border border-hairline rounded-xl p-3 space-y-1">
+            <span className="text-muted text-[11px] uppercase">Media Processing (FFmpeg)</span>
+            <div className="text-ink/90 font-bold">
               {ffmpegInfo?.installed ? `FFmpeg ${ffmpegInfo.version || "Installed"}` : "Not Detected"}
             </div>
-            <div className="text-[10px] text-neutral-500 truncate" title={ffmpegInfo?.ffmpeg_path || "System PATH"}>
+            <div className="text-[11px] text-faint truncate" title={ffmpegInfo?.ffmpeg_path || "System PATH"}>
               {ffmpegInfo?.ffmpeg_path || "System PATH"}
             </div>
           </div>
 
-          <div className="bg-brand-black/60 border border-brand-dark/60 rounded-xl p-3 space-y-1">
-            <span className="text-neutral-400 text-[10px] uppercase">Electron Shell</span>
-            <div className="text-neutral-200 font-bold">
+          <div className="bg-raised border border-hairline rounded-xl p-3 space-y-1">
+            <span className="text-muted text-[11px] uppercase">Electron Shell</span>
+            <div className="text-ink/90 font-bold">
               Electron v{systemInfo?.version || "33.x"} ({systemInfo?.platform || "win32"} {systemInfo?.arch || "x64"})
             </div>
-            <div className="text-[10px] text-neutral-500">Local-First Desktop Architecture</div>
+            <div className="text-[11px] text-faint">Local-First Desktop Architecture</div>
           </div>
 
-          <div className="bg-brand-black/60 border border-brand-dark/60 rounded-xl p-3 space-y-1">
-            <span className="text-neutral-400 text-[10px] uppercase">Local Data Directory</span>
-            <div className="text-neutral-200 font-bold truncate">
+          <div className="bg-raised border border-hairline rounded-xl p-3 space-y-1">
+            <span className="text-muted text-[11px] uppercase">Local Data Directory</span>
+            <div className="text-ink/90 font-bold truncate">
               {pythonStatus?.info?.data_dir || "%LOCALAPPDATA%\\XakuMedia"}
             </div>
-            <div className="text-[10px] text-neutral-500">Persistent SQLite Database</div>
+            <div className="text-[11px] text-faint">Persistent SQLite Database</div>
           </div>
         </div>
       </section>
@@ -1131,21 +1141,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           onClick={() => setResetConfirmOpen(false)}
         >
           <div
-            className="bg-brand-black border border-brand-dark rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4"
+            className="bg-page border border-hairline rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center space-x-3 text-amber-400">
+            <div className="flex items-center space-x-3 text-amber-600 dark:text-amber-400">
               <AlertCircle className="h-6 w-6 shrink-0" />
-              <h3 className="text-base font-bold text-white">Reset Preferences to Factory Defaults?</h3>
+              <h3 className="text-base font-bold text-ink">Reset Preferences to Factory Defaults?</h3>
             </div>
-            <p className="text-xs text-neutral-400 leading-relaxed font-mono">
+            <p className="text-xs text-muted leading-relaxed font-mono">
               This will restore the standard download folder, 4-worker concurrency limit, 1080p MP4 defaults, and dark theme. Your downloaded files and scan history will NOT be deleted.
             </p>
             <div className="flex items-center justify-end space-x-2 pt-2">
               <button
                 type="button"
                 onClick={() => setResetConfirmOpen(false)}
-                className="px-4 py-2 bg-brand-dark hover:bg-neutral-800 text-neutral-300 hover:text-white rounded-xl text-xs font-mono transition-colors"
+                className="px-4 py-2 bg-raised hover:bg-hairline/70 text-ink/80 hover:text-ink rounded-xl text-xs font-mono transition-colors"
               >
                 Cancel
               </button>
@@ -1153,7 +1163,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 type="button"
                 onClick={handleResetToDefaults}
                 disabled={saving}
-                className="px-4 py-2 bg-brand-red hover:bg-red-700 text-white rounded-xl text-xs font-medium transition-colors shadow-md shadow-brand-red/30 flex items-center space-x-1.5"
+                className="px-4 py-2 bg-accent hover:bg-accent-vivid text-on-accent rounded-xl text-xs font-medium transition-colors shadow-md shadow-accent/30 flex items-center space-x-1.5"
               >
                 {saving && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}
                 <span>Confirm Reset</span>
@@ -1169,35 +1179,35 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           onClick={() => setPasteModalOpen(false)}
         >
           <div
-            className="bg-brand-black border border-brand-dark rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-4"
+            className="bg-page border border-hairline rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center space-x-3 text-amber-400">
+            <div className="flex items-center space-x-3 text-amber-600 dark:text-amber-400">
               <KeyRound className="h-5 w-5 shrink-0" />
-              <h3 className="text-sm font-bold text-white">Paste Netscape Cookies Text</h3>
+              <h3 className="text-sm font-bold text-ink">Paste Netscape Cookies Text</h3>
             </div>
-            <p className="text-xs text-neutral-400 font-mono">
+            <p className="text-xs text-muted font-mono">
               Paste standard Netscape HTTP cookie file text (tab-separated lines). Supports HttpOnly cookies.
             </p>
             <div className="space-y-3 font-mono">
               <div>
-                <label className="text-[10px] text-neutral-400 uppercase">Target Domain</label>
+                <label className="text-[11px] text-muted uppercase">Target Domain</label>
                 <input
                   type="text"
                   placeholder="e.g. patreon.com or artstation.com"
                   value={pasteDomain}
                   onChange={(e) => setPasteDomain(e.target.value)}
-                  className="w-full mt-1 bg-brand-dark/40 border border-brand-dark rounded-lg px-3 py-1.5 text-xs text-neutral-200 placeholder-neutral-500 focus:border-amber-500"
+                  className="w-full mt-1 bg-surface border border-hairline rounded-lg px-3 py-1.5 text-xs text-ink/90 placeholder-faint focus:border-amber-500"
                 />
               </div>
               <div>
-                <label className="text-[10px] text-neutral-400 uppercase">Cookie Text Content</label>
+                <label className="text-[11px] text-muted uppercase">Cookie Text Content</label>
                 <textarea
                   rows={6}
                   placeholder="# Netscape HTTP Cookie File&#10;.example.com	TRUE	/	TRUE	1893456000	session_id	xyz"
                   value={pasteText}
                   onChange={(e) => setPasteText(e.target.value)}
-                  className="w-full mt-1 bg-brand-dark/40 border border-brand-dark rounded-lg p-2.5 text-xs text-neutral-200 placeholder-neutral-500 font-mono focus:border-amber-500 resize-none"
+                  className="w-full mt-1 bg-surface border border-hairline rounded-lg p-2.5 text-xs text-ink/90 placeholder-faint font-mono focus:border-amber-500 resize-none"
                 />
               </div>
             </div>
@@ -1205,7 +1215,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <button
                 type="button"
                 onClick={() => setPasteModalOpen(false)}
-                className="px-4 py-2 bg-brand-dark hover:bg-neutral-800 text-neutral-300 hover:text-white rounded-xl text-xs font-mono transition-colors"
+                className="px-4 py-2 bg-raised hover:bg-hairline/70 text-ink/80 hover:text-ink rounded-xl text-xs font-mono transition-colors"
               >
                 Cancel
               </button>
@@ -1229,55 +1239,55 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           onClick={() => setHeaderModalOpen(false)}
         >
           <div
-            className="bg-brand-black border border-brand-dark rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-4"
+            className="bg-page border border-hairline rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center space-x-3 text-cyan-400">
+            <div className="flex items-center space-x-3 text-cyan-600 dark:text-cyan-400">
               <Shield className="h-5 w-5 shrink-0" />
-              <h3 className="text-sm font-bold text-white">Configure Domain Request Headers</h3>
+              <h3 className="text-sm font-bold text-ink">Configure Domain Request Headers</h3>
             </div>
-            <p className="text-xs text-neutral-400 font-mono">
+            <p className="text-xs text-muted font-mono">
               Configure custom HTTP headers for requests to this domain and its subdomains.
             </p>
             <div className="space-y-3 font-mono">
               <div>
-                <label className="text-[10px] text-neutral-400 uppercase">Target Domain</label>
+                <label className="text-[11px] text-muted uppercase">Target Domain</label>
                 <input
                   type="text"
                   placeholder="e.g. reddit.com or deviantart.com"
                   value={headerDomain}
                   onChange={(e) => setHeaderDomain(e.target.value)}
-                  className="w-full mt-1 bg-brand-dark/40 border border-brand-dark rounded-lg px-3 py-1.5 text-xs text-neutral-200 placeholder-neutral-500 focus:border-cyan-500"
+                  className="w-full mt-1 bg-surface border border-hairline rounded-lg px-3 py-1.5 text-xs text-ink/90 placeholder-faint focus:border-cyan-500"
                 />
               </div>
               <div>
-                <label className="text-[10px] text-neutral-400 uppercase">User-Agent Override (Optional)</label>
+                <label className="text-[11px] text-muted uppercase">User-Agent Override (Optional)</label>
                 <input
                   type="text"
                   placeholder="Custom User-Agent header..."
                   value={headerUserAgent}
                   onChange={(e) => setHeaderUserAgent(e.target.value)}
-                  className="w-full mt-1 bg-brand-dark/40 border border-brand-dark rounded-lg px-3 py-1.5 text-xs text-neutral-200 placeholder-neutral-500 focus:border-cyan-500"
+                  className="w-full mt-1 bg-surface border border-hairline rounded-lg px-3 py-1.5 text-xs text-ink/90 placeholder-faint focus:border-cyan-500"
                 />
               </div>
               <div>
-                <label className="text-[10px] text-neutral-400 uppercase">Referer Header (Optional)</label>
+                <label className="text-[11px] text-muted uppercase">Referer Header (Optional)</label>
                 <input
                   type="text"
                   placeholder="https://www.example.com/"
                   value={headerReferer}
                   onChange={(e) => setHeaderReferer(e.target.value)}
-                  className="w-full mt-1 bg-brand-dark/40 border border-brand-dark rounded-lg px-3 py-1.5 text-xs text-neutral-200 placeholder-neutral-500 focus:border-cyan-500"
+                  className="w-full mt-1 bg-surface border border-hairline rounded-lg px-3 py-1.5 text-xs text-ink/90 placeholder-faint focus:border-cyan-500"
                 />
               </div>
               <div>
-                <label className="text-[10px] text-neutral-400 uppercase">Authorization Header (Optional)</label>
+                <label className="text-[11px] text-muted uppercase">Authorization Header (Optional)</label>
                 <input
                   type="password"
                   placeholder="Bearer token or API key..."
                   value={headerAuth}
                   onChange={(e) => setHeaderAuth(e.target.value)}
-                  className="w-full mt-1 bg-brand-dark/40 border border-brand-dark rounded-lg px-3 py-1.5 text-xs text-neutral-200 placeholder-neutral-500 focus:border-cyan-500"
+                  className="w-full mt-1 bg-surface border border-hairline rounded-lg px-3 py-1.5 text-xs text-ink/90 placeholder-faint focus:border-cyan-500"
                 />
               </div>
             </div>
@@ -1285,7 +1295,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <button
                 type="button"
                 onClick={() => setHeaderModalOpen(false)}
-                className="px-4 py-2 bg-brand-dark hover:bg-neutral-800 text-neutral-300 hover:text-white rounded-xl text-xs font-mono transition-colors"
+                className="px-4 py-2 bg-raised hover:bg-hairline/70 text-ink/80 hover:text-ink rounded-xl text-xs font-mono transition-colors"
               >
                 Cancel
               </button>

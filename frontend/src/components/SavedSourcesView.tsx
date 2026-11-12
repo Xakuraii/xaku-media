@@ -207,32 +207,32 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-brand-black overflow-y-auto p-8 space-y-6">
+    <div className="mx-auto w-full max-w-4xl space-y-6">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-brand-dark/60 pb-5">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-hairline pb-5">
         <div className="flex items-center space-x-3">
-          <div className="h-10 w-10 rounded-xl bg-amber-950/60 border border-amber-800/60 flex items-center justify-center text-amber-400 shadow-md shadow-amber-950/40">
+          <div className="h-10 w-10 rounded-xl bg-accent/10 border border-accent/25 flex items-center justify-center text-accent shadow-card">
             <Bookmark className="h-5 w-5" />
           </div>
           <div>
-            <h1 className="text-xl font-extrabold text-brand-white flex items-center space-x-2.5">
-              <span>Saved Sources &amp; Incremental Rescan</span>
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-mono bg-brand-dark border border-brand-dark/80 text-amber-300">
+            <h1 className="text-2xl font-bold tracking-tight text-ink flex items-center space-x-2.5">
+              <span>Saved Sources</span>
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-mono bg-raised border border-hairline text-accent">
                 {sources.length} {sources.length === 1 ? "Source" : "Sources"}
               </span>
             </h1>
-            <p className="text-xs text-neutral-400 font-mono">
+            <p className="text-sm text-muted mt-1">
               Bookmark channels, artist portfolios, and galleries. Run 1-click rescans to discover only new items.
             </p>
           </div>
         </div>
 
-        <div className="flex items-center space-x-2.5">
+        <div className="flex shrink-0 items-center gap-2.5">
           <button
             type="button"
             onClick={handleRescanAll}
             disabled={isRescanningAll || sources.length === 0}
-            className="px-3.5 py-2 bg-brand-black hover:bg-brand-dark border border-brand-dark text-cyan-300 rounded-xl text-xs font-mono transition-colors flex items-center space-x-2 disabled:opacity-50"
+            className="whitespace-nowrap px-3.5 py-2 bg-surface hover:bg-raised border border-hairline text-ink/80 rounded-xl text-xs font-mono transition-colors flex items-center space-x-2 disabled:opacity-50"
             title="Rescan all saved sources to discover new uploads"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${isRescanningAll ? "animate-spin" : ""}`} />
@@ -242,7 +242,7 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
           <button
             type="button"
             onClick={() => setAddModalOpen(true)}
-            className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-black font-bold rounded-xl text-xs transition-colors flex items-center space-x-1.5 shadow-md shadow-amber-600/20"
+            className="whitespace-nowrap px-4 py-2 bg-accent hover:bg-accent-vivid text-on-accent font-semibold rounded-xl text-xs transition-colors flex items-center space-x-1.5 shadow-sm shadow-accent/25"
           >
             <Plus className="h-4 w-4" />
             <span>Add Source</span>
@@ -255,8 +255,8 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
         <div
           className={`p-3 rounded-xl border text-xs font-mono flex items-center justify-between animate-in fade-in duration-150 ${
             feedback.type === "success"
-              ? "bg-emerald-950/60 border-emerald-800/60 text-emerald-300"
-              : "bg-red-950/60 border-red-800/60 text-red-300"
+              ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300"
+              : "bg-red-500/10 border-red-500/30 text-red-700 dark:text-red-300"
           }`}
         >
           <div className="flex items-center space-x-2">
@@ -270,7 +270,7 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
           <button
             type="button"
             onClick={() => setFeedback(null)}
-            className="text-neutral-400 hover:text-white ml-2 text-xs"
+            className="text-muted hover:text-ink ml-2 text-xs"
           >
             ✕
           </button>
@@ -279,20 +279,20 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
 
       {/* Rescan All Summary Banner */}
       {rescanSummary && (
-        <div className="p-3.5 rounded-xl border border-amber-800/60 bg-amber-950/40 text-amber-200 text-xs font-mono flex items-center justify-between shadow-lg">
+        <div className="p-3.5 rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-xs font-mono flex items-center justify-between shadow-lg">
           <div className="flex items-center space-x-3">
-            <Sparkles className="h-4 w-4 text-amber-400 shrink-0" />
+            <Sparkles className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
             <div>
-              <span className="font-bold text-amber-300">Rescan All Completed:</span>{" "}
+              <span className="font-bold text-amber-700 dark:text-amber-300">Rescan All Completed:</span>{" "}
               Checked {rescanSummary.sources_checked} sources ·{" "}
-              <span className="text-emerald-400 font-bold">{rescanSummary.total_new_items} new items discovered</span> ·{" "}
+              <span className="text-emerald-600 dark:text-emerald-400 font-bold">{rescanSummary.total_new_items} new items discovered</span> ·{" "}
               {rescanSummary.total_items_found} total items · {Object.keys(rescanSummary.errors).length} errors
             </div>
           </div>
           <button
             type="button"
             onClick={() => setRescanSummary(null)}
-            className="text-amber-400/80 hover:text-white p-1"
+            className="text-amber-600 dark:text-amber-400 hover:text-ink p-1"
             title="Dismiss summary"
           >
             <X className="h-4 w-4" />
@@ -301,28 +301,28 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
       )}
 
       {/* Filter and Search Bar */}
-      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-brand-dark/20 border border-brand-dark/70 rounded-2xl p-4 shadow-lg shadow-black/40">
+      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-surface border border-hairline rounded-2xl p-4 shadow-card">
         <div className="flex-1 relative">
-          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-400" />
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted" />
           <input
             type="text"
             placeholder="Search by title, author, or URL..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-brand-black border border-brand-dark rounded-xl pl-9 pr-3.5 py-2 text-xs text-neutral-200 placeholder-neutral-500 font-mono focus:border-amber-500"
+            className="w-full bg-page border border-hairline rounded-xl pl-9 pr-3.5 py-2 text-xs text-ink/90 placeholder-faint font-mono focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
           />
         </div>
 
         {/* Tag Pills */}
         <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 md:pb-0 text-xs font-mono">
-          <Filter className="h-3.5 w-3.5 text-neutral-400 shrink-0 ml-1" />
+          <Filter className="h-3.5 w-3.5 text-muted shrink-0 ml-1" />
           <button
             type="button"
             onClick={() => setSelectedTag("all")}
             className={`px-2.5 py-1 rounded-lg transition-colors ${
               selectedTag === "all"
-                ? "bg-amber-950/80 text-amber-300 font-bold border border-amber-800/60"
-                : "bg-brand-black border border-brand-dark text-neutral-400 hover:text-white"
+                ? "bg-accent/10 text-accent font-bold border border-accent/30"
+                : "bg-page border border-hairline text-muted hover:text-ink"
             }`}
           >
             All ({sources.length})
@@ -334,8 +334,8 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
               onClick={() => setSelectedTag(tag)}
               className={`px-2.5 py-1 rounded-lg transition-colors capitalize ${
                 selectedTag === tag
-                  ? "bg-amber-950/80 text-amber-300 font-bold border border-amber-800/60"
-                  : "bg-brand-black border border-brand-dark text-neutral-400 hover:text-white"
+                  ? "bg-accent/10 text-accent font-bold border border-accent/30"
+                  : "bg-page border border-hairline text-muted hover:text-ink"
               }`}
             >
               #{tag}
@@ -346,15 +346,15 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
 
       {/* Sources Grid */}
       {loading ? (
-        <div className="py-24 text-center text-xs font-mono text-neutral-400 flex flex-col items-center space-y-3">
-          <RefreshCw className="h-6 w-6 animate-spin text-amber-400" />
+        <div className="py-24 text-center text-xs font-mono text-muted flex flex-col items-center space-y-3">
+          <RefreshCw className="h-6 w-6 animate-spin text-amber-600 dark:text-amber-400" />
           <span>Loading bookmarked sources...</span>
         </div>
       ) : filteredSources.length === 0 ? (
-        <div className="py-24 text-center border border-dashed border-brand-dark rounded-2xl bg-brand-dark/10 p-8 space-y-3">
-          <Bookmark className="h-8 w-8 text-neutral-600 mx-auto" />
-          <h3 className="text-sm font-bold text-neutral-300">No Saved Sources Found</h3>
-          <p className="text-xs text-neutral-500 font-mono max-w-md mx-auto">
+        <div className="py-24 text-center border border-dashed border-hairline rounded-2xl bg-raised/40 p-8 space-y-3">
+          <Bookmark className="h-8 w-8 text-faint mx-auto" />
+          <h3 className="text-sm font-bold text-ink/80">No Saved Sources Found</h3>
+          <p className="text-xs text-faint font-mono max-w-md mx-auto">
             {searchQuery || selectedTag !== "all"
               ? "No sources match your active filter. Try resetting your search."
               : "Bookmark artist profiles, galleries, and channels to track new uploads and run differential rescans."}
@@ -362,7 +362,7 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
           <button
             type="button"
             onClick={() => setAddModalOpen(true)}
-            className="mt-2 px-3 py-1.5 bg-brand-dark hover:bg-neutral-800 border border-brand-dark text-amber-300 text-xs font-mono rounded-lg transition-colors"
+            className="mt-2 px-3 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline text-accent text-xs font-mono rounded-lg transition-colors"
           >
             + Add Your First Source
           </button>
@@ -374,40 +374,40 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
             return (
               <div
                 key={source.id}
-                className="bg-brand-dark/20 hover:bg-brand-dark/30 border border-brand-dark/70 rounded-2xl p-5 space-y-4 shadow-lg shadow-black/40 transition-all flex flex-col justify-between"
+                className="bg-surface hover:bg-surface border border-hairline rounded-2xl p-5 space-y-4 shadow-card transition-all flex flex-col justify-between"
               >
                 <div className="space-y-3">
                   {/* Top Bar: Platform & Category */}
                   <div className="flex items-center justify-between text-[11px] font-mono">
-                    <span className="px-2 py-0.5 rounded bg-brand-black border border-brand-dark text-amber-300 font-bold capitalize">
+                    <span className="px-2 py-0.5 rounded bg-page border border-hairline text-amber-700 dark:text-amber-300 font-bold capitalize">
                       {source.platform || "Custom Source"}
                     </span>
-                    <span className="text-neutral-500 capitalize">
+                    <span className="text-faint capitalize">
                       {source.category || "Collection"}
                     </span>
                   </div>
 
                   {/* Title & Author */}
                   <div>
-                    <h3 className="text-sm font-bold text-brand-white line-clamp-1" title={source.title}>
+                    <h3 className="text-sm font-bold text-ink line-clamp-1" title={source.title}>
                       {source.title}
                     </h3>
                     {source.author && (
-                      <span className="text-xs text-neutral-400 font-mono">
+                      <span className="text-xs text-muted font-mono">
                         by @{source.author}
                       </span>
                     )}
                   </div>
 
                   {/* Target URL */}
-                  <div className="bg-brand-black/60 border border-brand-dark/60 rounded-xl p-2.5 text-[11px] font-mono text-neutral-400 truncate flex items-center justify-between">
+                  <div className="bg-raised border border-hairline rounded-xl p-2.5 text-[11px] font-mono text-muted truncate flex items-center justify-between">
                     <span className="truncate pr-2" title={source.url}>
                       {source.url}
                     </span>
                     <button
                       type="button"
                       onClick={() => onScanUrl(source.url)}
-                      className="text-cyan-400 hover:text-cyan-300 p-1 hover:bg-cyan-950/40 rounded transition-colors shrink-0"
+                      className="text-cyan-600 dark:text-cyan-400 hover:text-cyan-600 dark:hover:text-cyan-300 p-1 hover:bg-cyan-500/10 rounded transition-colors shrink-0"
                       title="Load in Scan Media view"
                     >
                       <ArrowRight className="h-3.5 w-3.5" />
@@ -420,7 +420,7 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
                       {source.tags.map((t) => (
                         <span
                           key={t}
-                          className="px-2 py-0.5 rounded text-[10px] font-mono bg-amber-950/40 border border-amber-800/40 text-amber-300"
+                          className="px-2 py-0.5 rounded text-[11px] font-mono bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-300"
                         >
                           #{t}
                         </span>
@@ -430,13 +430,13 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
                 </div>
 
                 {/* Bottom Metadata & Actions */}
-                <div className="space-y-3 pt-3 border-t border-brand-dark/50">
-                  <div className="flex items-center justify-between text-[10px] font-mono text-neutral-400">
+                <div className="space-y-3 pt-3 border-t border-hairline">
+                  <div className="flex items-center justify-between text-[11px] font-mono text-muted">
                     <div className="flex items-center space-x-1.5">
-                      <Clock className="h-3 w-3 text-neutral-500" />
+                      <Clock className="h-3 w-3 text-faint" />
                       <span>{formatDate(source.last_scanned_at)}</span>
                     </div>
-                    <span className="text-cyan-300 font-bold">
+                    <span className="text-cyan-700 dark:text-cyan-300 font-bold">
                       {source.last_item_count} {source.last_item_count === 1 ? "item" : "items"}
                     </span>
                   </div>
@@ -446,7 +446,7 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
                       type="button"
                       onClick={() => handleRescanSingle(source.id)}
                       disabled={isRescanning}
-                      className="flex-1 py-1.5 bg-cyan-950/60 hover:bg-cyan-900/80 border border-cyan-800/60 text-cyan-200 rounded-xl text-xs font-mono transition-colors flex items-center justify-center space-x-1.5 shadow-sm"
+                      className="flex-1 py-1.5 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-700 dark:text-cyan-300 rounded-xl text-xs font-mono transition-colors flex items-center justify-center space-x-1.5 shadow-sm"
                     >
                       <RefreshCw className={`h-3 w-3 ${isRescanning ? "animate-spin" : ""}`} />
                       <span>{isRescanning ? "Rescanning..." : "Rescan Now"}</span>
@@ -454,7 +454,7 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
                     <button
                       type="button"
                       onClick={() => handleDeleteSource(source.id, source.title)}
-                      className="p-1.5 bg-brand-black hover:bg-red-950/50 border border-brand-dark hover:border-red-800/60 text-neutral-400 hover:text-red-300 rounded-xl transition-colors"
+                      className="p-1.5 bg-page hover:bg-red-500/10 border border-hairline hover:border-red-500/30 text-muted hover:text-red-600 dark:hover:text-red-300 rounded-xl transition-colors"
                       title="Delete saved source"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -474,45 +474,45 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
           onClick={() => setAddModalOpen(false)}
         >
           <div
-            className="bg-brand-black border border-brand-dark rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-4"
+            className="bg-page border border-hairline rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center space-x-3 text-amber-400">
+            <div className="flex items-center space-x-3 text-amber-600 dark:text-amber-400">
               <Bookmark className="h-5 w-5 shrink-0" />
-              <h3 className="text-sm font-bold text-white">Bookmark Media Source</h3>
+              <h3 className="text-sm font-bold text-ink">Bookmark Media Source</h3>
             </div>
-            <p className="text-xs text-neutral-400 font-mono">
+            <p className="text-xs text-muted font-mono">
               Save a gallery, profile, channel, or direct collection URL for differential monitoring.
             </p>
             <div className="space-y-3 font-mono">
               <div>
-                <label className="text-[10px] text-neutral-400 uppercase">Source URL *</label>
+                <label className="text-[11px] text-muted uppercase">Source URL *</label>
                 <input
                   type="text"
                   placeholder="https://artstation.com/artist/projects or https://youtube.com/@channel"
                   value={addUrl}
                   onChange={(e) => setAddUrl(e.target.value)}
-                  className="w-full mt-1 bg-brand-dark/40 border border-brand-dark rounded-lg px-3 py-1.5 text-xs text-neutral-200 placeholder-neutral-500 focus:border-amber-500"
+                  className="w-full mt-1 bg-surface border border-hairline rounded-lg px-3 py-1.5 text-xs text-ink/90 placeholder-faint focus:border-amber-500"
                 />
               </div>
               <div>
-                <label className="text-[10px] text-neutral-400 uppercase">Title / Name (Optional)</label>
+                <label className="text-[11px] text-muted uppercase">Title / Name (Optional)</label>
                 <input
                   type="text"
                   placeholder="Artist Portfolio or Channel Name"
                   value={addTitle}
                   onChange={(e) => setAddTitle(e.target.value)}
-                  className="w-full mt-1 bg-brand-dark/40 border border-brand-dark rounded-lg px-3 py-1.5 text-xs text-neutral-200 placeholder-neutral-500 focus:border-amber-500"
+                  className="w-full mt-1 bg-surface border border-hairline rounded-lg px-3 py-1.5 text-xs text-ink/90 placeholder-faint focus:border-amber-500"
                 />
               </div>
               <div>
-                <label className="text-[10px] text-neutral-400 uppercase">Tags (Optional, comma-separated)</label>
+                <label className="text-[11px] text-muted uppercase">Tags (Optional, comma-separated)</label>
                 <input
                   type="text"
                   placeholder="concept-art, 3d, illustrations, favorites"
                   value={addTags}
                   onChange={(e) => setAddTags(e.target.value)}
-                  className="w-full mt-1 bg-brand-dark/40 border border-brand-dark rounded-lg px-3 py-1.5 text-xs text-neutral-200 placeholder-neutral-500 focus:border-amber-500"
+                  className="w-full mt-1 bg-surface border border-hairline rounded-lg px-3 py-1.5 text-xs text-ink/90 placeholder-faint focus:border-amber-500"
                 />
               </div>
             </div>
@@ -520,7 +520,7 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
               <button
                 type="button"
                 onClick={() => setAddModalOpen(false)}
-                className="px-4 py-2 bg-brand-dark hover:bg-neutral-800 text-neutral-300 hover:text-white rounded-xl text-xs font-mono transition-colors"
+                className="px-4 py-2 bg-raised hover:bg-hairline/70 text-ink/80 hover:text-ink rounded-xl text-xs font-mono transition-colors"
               >
                 Cancel
               </button>
@@ -528,7 +528,7 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
                 type="button"
                 onClick={handleAddSource}
                 disabled={addSaving}
-                className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-black font-bold rounded-xl text-xs transition-colors flex items-center space-x-1.5"
+                className="whitespace-nowrap px-4 py-2 bg-accent hover:bg-accent-vivid text-on-accent font-semibold rounded-xl text-xs transition-colors flex items-center space-x-1.5 shadow-sm shadow-accent/25"
               >
                 {addSaving && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}
                 <span>Save Source</span>
@@ -545,21 +545,21 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
           onClick={() => setRescanModalOpen(false)}
         >
           <div
-            className="bg-brand-black border border-brand-dark rounded-2xl w-full max-w-3xl max-h-[85vh] p-6 shadow-2xl space-y-4 flex flex-col"
+            className="bg-page border border-hairline rounded-2xl w-full max-w-3xl max-h-[85vh] p-6 shadow-2xl space-y-4 flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
-            <div className="flex items-center justify-between border-b border-brand-dark/60 pb-3">
+            <div className="flex items-center justify-between border-b border-hairline pb-3">
               <div className="flex items-center space-x-2.5">
-                <Sparkles className="h-5 w-5 text-amber-400" />
+                <Sparkles className="h-5 w-5 text-amber-600 dark:text-amber-400" />
                 <div>
-                  <h3 className="text-sm font-bold text-white flex items-center space-x-2">
+                  <h3 className="text-sm font-bold text-ink flex items-center space-x-2">
                     <span>Rescan Results: {rescanResult.source.title}</span>
-                    <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-950/80 border border-emerald-800/60 text-emerald-300 font-bold">
+                    <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 font-bold">
                       +{rescanResult.new_item_count} NEW
                     </span>
                   </h3>
-                  <p className="text-[11px] text-neutral-400 font-mono truncate max-w-lg">
+                  <p className="text-[11px] text-muted font-mono truncate max-w-lg">
                     {rescanResult.source.url}
                   </p>
                 </div>
@@ -567,7 +567,7 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
               <button
                 type="button"
                 onClick={() => setRescanModalOpen(false)}
-                className="text-neutral-400 hover:text-white text-xs p-1"
+                className="text-muted hover:text-ink text-xs p-1"
               >
                 ✕
               </button>
@@ -575,36 +575,36 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
 
             {/* Differential Summary Metrics */}
             <div className="grid grid-cols-3 gap-3 text-xs font-mono">
-              <div className="bg-brand-dark/30 border border-brand-dark rounded-xl p-3 text-center">
-                <span className="text-[10px] text-neutral-400 uppercase">Total Found</span>
-                <div className="text-base font-bold text-white mt-0.5">
+              <div className="bg-surface border border-hairline rounded-xl p-3 text-center">
+                <span className="text-[11px] text-muted uppercase">Total Found</span>
+                <div className="text-base font-bold text-ink mt-0.5">
                   {rescanResult.total_found}
                 </div>
               </div>
-              <div className="bg-emerald-950/40 border border-emerald-800/50 rounded-xl p-3 text-center">
-                <span className="text-[10px] text-emerald-400 uppercase">New Since Last Visit</span>
-                <div className="text-base font-bold text-emerald-300 mt-0.5">
+              <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-3 text-center">
+                <span className="text-[11px] text-emerald-600 dark:text-emerald-400 uppercase">New Since Last Visit</span>
+                <div className="text-base font-bold text-emerald-700 dark:text-emerald-300 mt-0.5">
                   +{rescanResult.new_item_count}
                 </div>
               </div>
-              <div className="bg-brand-dark/30 border border-brand-dark rounded-xl p-3 text-center">
-                <span className="text-[10px] text-neutral-400 uppercase">Previously Known</span>
-                <div className="text-base font-bold text-neutral-300 mt-0.5">
+              <div className="bg-surface border border-hairline rounded-xl p-3 text-center">
+                <span className="text-[11px] text-muted uppercase">Previously Known</span>
+                <div className="text-base font-bold text-ink/80 mt-0.5">
                   {rescanResult.existing_items.length}
                 </div>
               </div>
             </div>
 
             {/* View Tabs & Batch Download CTA */}
-            <div className="flex items-center justify-between border-b border-brand-dark/50 pb-2">
+            <div className="flex items-center justify-between border-b border-hairline pb-2">
               <div className="flex space-x-2 text-xs font-mono">
                 <button
                   type="button"
                   onClick={() => setRescanItemTab("new")}
                   className={`px-3 py-1 rounded-lg transition-colors ${
                     rescanItemTab === "new"
-                      ? "bg-emerald-950/80 text-emerald-300 font-bold border border-emerald-800/60"
-                      : "text-neutral-400 hover:text-white"
+                      ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-bold border border-emerald-500/30"
+                      : "text-muted hover:text-ink"
                   }`}
                 >
                   New Items Only ({rescanResult.new_item_count})
@@ -614,8 +614,8 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
                   onClick={() => setRescanItemTab("all")}
                   className={`px-3 py-1 rounded-lg transition-colors ${
                     rescanItemTab === "all"
-                      ? "bg-amber-950/80 text-amber-300 font-bold border border-amber-800/60"
-                      : "text-neutral-400 hover:text-white"
+                      ? "bg-accent/10 text-accent font-bold border border-accent/30"
+                      : "text-muted hover:text-ink"
                   }`}
                 >
                   All Discovered Items ({rescanResult.total_found})
@@ -642,7 +642,7 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
 
                 if (displayItems.length === 0) {
                   return (
-                    <div className="py-12 text-center text-neutral-500">
+                    <div className="py-12 text-center text-faint">
                       No new items discovered since last scan. Everything is up to date!
                     </div>
                   );
@@ -657,18 +657,18 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
                           key={item.id}
                           className={`p-3 rounded-xl border flex items-center space-x-3 transition-colors ${
                             isNew
-                              ? "bg-emerald-950/20 border-emerald-800/50 text-white"
-                              : "bg-brand-dark/20 border-brand-dark text-neutral-300"
+                              ? "bg-emerald-500/10 border-emerald-500/30 text-ink"
+                              : "bg-surface border-hairline text-ink/80"
                           }`}
                         >
                           {item.thumbnail_url ? (
                             <img
                               src={item.thumbnail_url}
                               alt={item.title || "thumbnail"}
-                              className="h-12 w-12 object-cover rounded-lg shrink-0 border border-brand-dark"
+                              className="h-12 w-12 object-cover rounded-lg shrink-0 border border-hairline"
                             />
                           ) : (
-                            <div className="h-12 w-12 rounded-lg bg-brand-dark flex items-center justify-center shrink-0 text-neutral-400">
+                            <div className="h-12 w-12 rounded-lg bg-raised flex items-center justify-center shrink-0 text-muted">
                               {item.media_type === "video" ? (
                                 <Film className="h-5 w-5" />
                               ) : (
@@ -680,11 +680,11 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
                           <div className="flex-1 min-w-0 space-y-1">
                             <div className="flex items-center space-x-1.5">
                               {isNew ? (
-                                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-950 border border-emerald-700 text-emerald-300 uppercase">
+                                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-950 border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 uppercase">
                                   NEW
                                 </span>
                               ) : (
-                                <span className="px-1.5 py-0.2 rounded text-[9px] bg-brand-dark text-neutral-400 uppercase">
+                                <span className="px-1.5 py-0.2 rounded text-[9px] bg-raised text-muted uppercase">
                                   KNOWN
                                 </span>
                               )}
@@ -692,7 +692,7 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
                                 {item.title || "Untitled Media"}
                               </span>
                             </div>
-                            <div className="text-[10px] text-neutral-400 truncate" title={item.original_url}>
+                            <div className="text-[11px] text-muted truncate" title={item.original_url}>
                               {item.original_url}
                             </div>
                           </div>
@@ -705,11 +705,11 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
             </div>
 
             {/* Modal Footer */}
-            <div className="flex items-center justify-end space-x-2 pt-2 border-t border-brand-dark/60">
+            <div className="flex items-center justify-end space-x-2 pt-2 border-t border-hairline">
               <button
                 type="button"
                 onClick={() => setRescanModalOpen(false)}
-                className="px-4 py-1.5 bg-brand-dark hover:bg-neutral-800 text-neutral-300 hover:text-white rounded-xl text-xs font-mono transition-colors"
+                className="px-4 py-1.5 bg-raised hover:bg-hairline/70 text-ink/80 hover:text-ink rounded-xl text-xs font-mono transition-colors"
               >
                 Close
               </button>
