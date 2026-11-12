@@ -25,7 +25,7 @@ export interface ReleaseAssetInfo {
 
 export const RELEASE_CONFIG: ReleaseAssetInfo = {
   version: "0.1.0",
-  releaseDate: "12 November 2026",
+  releaseDate: "November 12, 2026 ",
   githubOwner: "Xakuraii",
   githubRepo: "xaku-media",
   releasesUrl: "https://github.com/Xakuraii/xaku-media/releases",

@@ -1,6 +1,6 @@
 # XakuMedia v0.1.0 — Production Release Notes
 
-**Release Date:** October 24, 2026  
+**Release Date:** November 12, 2026  
 **Identity:** Developed under the **XAKURAII** identity.  
 **Target Platform:** Windows 11 / Windows 10 (64-bit)  
 
