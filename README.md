@@ -1,13 +1,14 @@
-# XakuMedia
+<p align="center">
+  <img src="frontend/public/XakuMedia.svg" alt="XakuMedia Logo" width="130" />
+</p>
 
-> **Local-first Windows Desktop Bulk Media Downloader**  
-> Developed under the **XAKURAII** identity.
+<h1 align="center">XakuMedia</h1>
 
-[![Python Version](https://img.shields.io/badge/python-3.12-blue.svg)](https://python.org)
-[![Electron](https://img.shields.io/badge/electron-33.0-47848F.svg)](https://electronjs.org)
-[![React](https://img.shields.io/badge/react-18.3-61DAFB.svg)](https://react.dev)
-[![Tests](https://img.shields.io/badge/tests-140%20passing-brightgreen.svg)](docs/CURRENT_STATE.md)
-[![License](https://img.shields.io/badge/license-Personal%20%26%20Private-lightgrey.svg)](#license)
+<p align="center">
+  <strong>Local-first Windows Desktop Bulk Media Downloader.</strong>
+  <br />
+ A desktop media downloader for discovering, previewing, and bulk-downloading online videos and images.
+</p>
 
 ---
 
