@@ -88,6 +88,8 @@ export interface MediaFormatInfoPayload {
   format_id: string;
   container?: string | null;
   resolution?: string | null;
+  video_codec?: string | null;
+  audio_codec?: string | null;
   width?: number | null;
   height?: number | null;
   fps?: number | null;

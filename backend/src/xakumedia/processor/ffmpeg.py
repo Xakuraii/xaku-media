@@ -257,6 +257,7 @@ def merge_video_audio(
     cmd = [
         str(bin_path),
         "-y",
+        "-nostdin",
         "-hide_banner",
         "-loglevel",
         "error",
@@ -279,14 +280,19 @@ def merge_video_audio(
     logger.info(f"Merging streams: {video_path.name} + {audio_path.name} -> {output_path.name}")
 
     def _execute_ffmpeg_proc(arguments: list[str]) -> tuple[int, str]:
+        # stdout/stderr must be drained while running or ffmpeg can block on full pipes.
         proc = subprocess.Popen(
             arguments,
-            stdout=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
-
-        while proc.poll() is None:
+        stderr = ""
+        started = time.monotonic()
+        timeout_seconds = 600.0
+        while True:
             if is_cancelled and is_cancelled():
                 logger.warning(f"Cancellation received during FFmpeg merge of {output_path.name}")
                 proc.terminate()
@@ -295,12 +301,34 @@ def merge_video_audio(
                 except subprocess.TimeoutExpired:
                     proc.kill()
                 if output_path.exists():
-                    output_path.unlink()
+                    try:
+                        output_path.unlink()
+                    except OSError:
+                        pass
                 raise DownloadCancelledError("Stream merge cancelled by user")
-            time.sleep(0.1)
 
-        _, stderr = proc.communicate()
-        return proc.returncode, stderr
+            if time.monotonic() - started > timeout_seconds:
+                logger.error(f"FFmpeg merge timed out after {timeout_seconds}s: {output_path.name}")
+                proc.kill()
+                try:
+                    _, stderr = proc.communicate(timeout=5.0)
+                except Exception:
+                    stderr = stderr or "timed out"
+                if output_path.exists():
+                    try:
+                        output_path.unlink()
+                    except OSError:
+                        pass
+                raise StreamMergeError(
+                    f"FFmpeg merge timed out after {int(timeout_seconds)}s"
+                )
+
+            try:
+                _, chunk = proc.communicate(timeout=0.2)
+                stderr = chunk or ""
+                return proc.returncode or 0, stderr
+            except subprocess.TimeoutExpired:
+                continue
 
     returncode, stderr = _execute_ffmpeg_proc(cmd)
 
@@ -320,6 +348,7 @@ def merge_video_audio(
         fallback_cmd = [
             str(bin_path),
             "-y",
+            "-nostdin",
             "-hide_banner",
             "-loglevel",
             "error",

@@ -64,6 +64,7 @@ import { useDesktopTheme } from "./desktop/theme";
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<string>("scan");
   const [settingsSection, setSettingsSection] = useState<"cookies" | undefined>(undefined);
+  const [scanPrefillUrl, setScanPrefillUrl] = useState<string>("");
 
   const openExternal = (url: string) => {
     if (window.api?.openExternalUrl) {
@@ -523,8 +524,12 @@ export const App: React.FC = () => {
   };
 
   const handleReScan = (url: string) => {
-    setUrlInput(url);
     setActiveTab("scan");
+    if (window.api?.startScan) {
+      setScanPrefillUrl(url);
+      return;
+    }
+    setUrlInput(url);
     handleScanUrlWith(url);
   };
 
@@ -1189,6 +1194,8 @@ export const App: React.FC = () => {
         <div className="flex-1 overflow-y-auto px-8 py-7">
           {activeTab === "scan" && (window.api?.startScan ? (
             <BulkScanView
+              prefillUrl={scanPrefillUrl}
+              onPrefillConsumed={() => setScanPrefillUrl("")}
               onDownloadStarted={() => setActiveTab("downloads")}
               onOpenSettings={(section) => {
                 setSettingsSection(section ?? "cookies");

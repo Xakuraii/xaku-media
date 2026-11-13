@@ -489,6 +489,22 @@ class DownloadManager:
                 ):
                     audio_format = f
                     break
+            # Some extractors expose audio as a direct stream; pick best available.
+            if audio_format is None:
+                audio_candidates = [
+                    f
+                    for f in task.media_item.available_formats
+                    if f.audio_codec
+                    and f.audio_codec != "none"
+                    and (f.video_codec is None or f.video_codec == "none")
+                    and f.url
+                ]
+                if audio_candidates:
+                    audio_candidates.sort(
+                        key=lambda fmt: (fmt.filesize_bytes or 0, fmt.height or 0),
+                        reverse=True,
+                    )
+                    audio_format = audio_candidates[0]
 
         video_part = None
         audio_part = None

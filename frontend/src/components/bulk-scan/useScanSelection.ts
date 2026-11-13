@@ -1,12 +1,14 @@
 import { useCallback, useMemo, useState } from "react";
-import type { DiscoveredMediaItem, ScanPost } from "../../../../desktop/shared/types";
+import type { DiscoveredMediaItem } from "../../../../desktop/shared/types";
+import { isItemDownloaded, type PostWithScan } from "./types";
 import { visibleMedia } from "./utils";
 
-/** Selection is independent from filtering, so users can mix images and videos. */
+/** Selection is independent from filtering. */
 export function useScanSelection(
-  posts: ScanPost[],
-  visiblePosts: ScanPost[],
-  filter: "all" | "image" | "video" | "album"
+  posts: PostWithScan[],
+  visiblePosts: PostWithScan[],
+  filter: "all" | "image" | "video" | "album",
+  downloaded: Set<string>
 ) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
@@ -31,25 +33,30 @@ export function useScanSelection(
     });
   }, []);
 
-  const togglePost = useCallback(
-    (post: ScanPost) => {
-      const ids = post.media_items.map((item) => item.id);
-      const allSelected = ids.length > 0 && ids.every((id) => selected.has(id));
-      setSelected((prev) => {
-        const next = new Set(prev);
-        for (const id of ids) {
-          if (allSelected) next.delete(id);
-          else next.add(id);
-        }
-        return next;
-      });
-    },
-    [selected]
-  );
+  const togglePost = useCallback((post: PostWithScan) => {
+    const ids = post.media_items.map((item) => item.id);
+    setSelected((prev) => {
+      const allSelected = ids.length > 0 && ids.every((id) => prev.has(id));
+      const next = new Set(prev);
+      for (const id of ids) {
+        if (allSelected) next.delete(id);
+        else next.add(id);
+      }
+      return next;
+    });
+  }, []);
 
-  const selectVisible = useCallback(
+  const selectAllVisible = useCallback(
     () => setSelected(new Set(visibleItems.map((item) => item.id))),
     [visibleItems]
+  );
+
+  const selectOnlyNew = useCallback(
+    () =>
+      setSelected(
+        new Set(visibleItems.filter((item) => !isItemDownloaded(item, downloaded)).map((item) => item.id))
+      ),
+    [visibleItems, downloaded]
   );
 
   const clearSelection = useCallback(() => setSelected(new Set()), []);
@@ -57,35 +64,28 @@ export function useScanSelection(
   const selectByType = useCallback(
     (type: "image" | "video") =>
       setSelected(
-        new Set(
-          posts
-            .flatMap((post) => post.media_items)
-            .filter((item) => item.media_type === type)
-            .map((item) => item.id)
-        )
+        new Set(visibleItems.filter((item) => item.media_type === type).map((item) => item.id))
       ),
-    [posts]
+    [visibleItems]
   );
 
   const selectAlbums = useCallback(
     () =>
       setSelected(
         new Set(
-          posts
+          visiblePosts
             .filter((post) => post.media_items.length > 1)
-            .flatMap((post) => post.media_items)
+            .flatMap((post) => visibleMedia(post, filter))
             .map((item) => item.id)
         )
       ),
-    [posts]
+    [visiblePosts, filter]
   );
 
   const invertSelection = useCallback(
     () =>
       setSelected(
-        new Set(
-          visibleItems.filter((item) => !selected.has(item.id)).map((item) => item.id)
-        )
+        new Set(visibleItems.filter((item) => !selected.has(item.id)).map((item) => item.id))
       ),
     [selected, visibleItems]
   );
@@ -96,7 +96,8 @@ export function useScanSelection(
     visibleItems,
     toggleMedia,
     togglePost,
-    selectVisible,
+    selectAllVisible,
+    selectOnlyNew,
     clearSelection,
     selectByType,
     selectAlbums,

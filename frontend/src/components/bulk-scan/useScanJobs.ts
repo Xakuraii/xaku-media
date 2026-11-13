@@ -3,9 +3,10 @@ import type {
   LibraryStats,
   ScanJobSnapshot,
   ScanOptionsPayload,
+  ScanPost,
   ScanStartedPayload,
 } from "../../../../desktop/shared/types";
-import type { JobEntry } from "./types";
+import type { JobEntry, PostWithScan } from "./types";
 import { EMPTY_PROGRESS, dedupePosts } from "./utils";
 
 export interface StartScanResult {
@@ -13,9 +14,12 @@ export interface StartScanResult {
   failures: string[];
 }
 
+function tagPosts(posts: ScanPost[], jobId: string, scanId?: string | null): PostWithScan[] {
+  return posts.map((post) => ({ ...post, _job_id: jobId, _scan_id: scanId ?? null }));
+}
+
 /**
  * Owns scan job snapshots, progressive event merging, and live stats.
- * The hook is deliberately independent of selection and rendering.
  */
 export function useScanJobs() {
   const [jobs, setJobs] = useState<Record<string, JobEntry>>({});
@@ -29,11 +33,15 @@ export function useScanJobs() {
   const mergeSnapshot = useCallback((snapshot: ScanJobSnapshot) => {
     setJobs((prev) => {
       const existing = prev[snapshot.job_id];
+      const merged = dedupePosts([
+        ...(existing?.posts || []),
+        ...tagPosts(snapshot.posts || [], snapshot.job_id, snapshot.scan_id),
+      ]);
       return {
         ...prev,
         [snapshot.job_id]: {
           snapshot,
-          posts: dedupePosts([...(existing?.posts || []), ...(snapshot.posts || [])]),
+          posts: merged,
         },
       };
     });
@@ -75,11 +83,12 @@ export function useScanJobs() {
         setJobs((prev) => {
           const entry = prev[data.job_id];
           if (!entry) return prev;
+          const post = tagPosts([data.post], data.job_id, data.scan_id)[0];
           return {
             ...prev,
             [data.job_id]: {
               snapshot: { ...entry.snapshot, status: "running", progress: data.progress },
-              posts: dedupePosts([...entry.posts, data.post]),
+              posts: dedupePosts([...entry.posts, post] as PostWithScan[]),
             },
           };
         });
@@ -154,7 +163,7 @@ export function useScanJobs() {
         for (const snapshot of result.jobs || []) {
           restored[snapshot.job_id] = {
             snapshot,
-            posts: dedupePosts(snapshot.posts || []),
+            posts: tagPosts(snapshot.posts || [], snapshot.job_id, snapshot.scan_id),
           };
         }
         setJobs((prev) => ({ ...restored, ...prev }));
@@ -206,13 +215,27 @@ export function useScanJobs() {
     await window.api?.cancelScan?.(jobId);
   }, []);
 
+  const removeJob = useCallback((jobId: string) => {
+    setJobs((prev) => {
+      if (!prev[jobId]) return prev;
+      const next = { ...prev };
+      delete next[jobId];
+      return next;
+    });
+  }, []);
+
   const allPosts = useMemo(
-    () => dedupePosts(Object.values(jobs).flatMap((entry) => entry.posts)),
+    () => dedupePosts(Object.values(jobs).flatMap((entry) => entry.posts as PostWithScan[])),
     [jobs]
   );
 
   const activeJobs = useMemo(
-    () => Object.values(jobs).sort((a, b) => (a.snapshot.started_at || "").localeCompare(b.snapshot.started_at || "")),
+    () =>
+      Object.values(jobs).sort((a, b) =>
+        (b.snapshot.started_at || b.snapshot.finished_at || "").localeCompare(
+          a.snapshot.started_at || a.snapshot.finished_at || ""
+        )
+      ),
     [jobs]
   );
 
@@ -248,6 +271,7 @@ export function useScanJobs() {
     starting,
     start,
     cancel,
+    removeJob,
     refreshStats,
   };
 }

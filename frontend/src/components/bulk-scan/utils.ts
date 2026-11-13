@@ -1,10 +1,9 @@
 import type {
   DiscoveredMediaItem,
   MediaFormatInfoPayload,
-  ScanPost,
   ScanProgressPayload,
 } from "../../../../desktop/shared/types";
-import type { MediaFilter } from "./types";
+import type { MediaFilter, PostWithScan } from "./types";
 
 export const EMPTY_PROGRESS: ScanProgressPayload = {
   posts_discovered: 0,
@@ -37,9 +36,9 @@ export function formatBytes(value?: number | null): string {
   return `${size.toFixed(size >= 100 || unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
 
-export function dedupePosts(posts: ScanPost[]): ScanPost[] {
+export function dedupePosts<T extends { id: string }>(posts: T[]): T[] {
   const seen = new Set<string>();
-  const result: ScanPost[] = [];
+  const result: T[] = [];
   for (const post of posts) {
     if (seen.has(post.id)) continue;
     seen.add(post.id);
@@ -56,29 +55,80 @@ export function parseUrls(text: string): string[] {
   return Array.from(new Set(found));
 }
 
-export function chooseFormat(item: DiscoveredMediaItem): MediaFormatInfoPayload | null {
+function resolutionHeight(resolution?: string | null): number {
+  if (!resolution) return 0;
+  const match = resolution.match(/(\d{3,4})/);
+  return match ? parseInt(match[1], 10) : 0;
+}
+
+export function chooseFormat(
+  item: DiscoveredMediaItem,
+  preferredResolution?: string | null
+): MediaFormatInfoPayload | null {
   const formats = item.available_formats || [];
   if (formats.length === 0) return null;
+
+  if (item.media_type === "video") {
+    const pref = (preferredResolution || "").toLowerCase();
+    const target = pref === "best" || pref === "original" ? Infinity : resolutionHeight(pref);
+
+    const muxedWithAudio = formats.filter(
+      (format) =>
+        !format.requires_merge &&
+        format.video_codec &&
+        format.video_codec !== "none" &&
+        format.audio_codec &&
+        format.audio_codec !== "none"
+    );
+    const pickMuxed = () => {
+      if (muxedWithAudio.length === 0) return null;
+      if (Number.isFinite(target)) {
+        const within = muxedWithAudio.filter((format) => (format.height || 0) <= target);
+        if (within.length > 0) return within[0];
+      }
+      return muxedWithAudio[0];
+    };
+    const chosenMuxed = pickMuxed();
+    if (chosenMuxed) return chosenMuxed;
+
+    const videoTracks = formats.filter(
+      (format) => format.video_codec && format.video_codec !== "none"
+    );
+    if (videoTracks.length > 0) {
+      if (Number.isFinite(target)) {
+        const within = videoTracks.filter((format) => (format.height || 0) <= target);
+        if (within.length > 0) return within[0];
+      }
+      return videoTracks[0];
+    }
+  }
+
   const muxed = formats.find((format) => !format.requires_merge);
   return muxed || formats[0];
 }
 
-export function postMatchesFilter(post: ScanPost, filter: MediaFilter): boolean {
+export function postMatchesFilter(post: PostWithScan, filter: MediaFilter): boolean {
   if (filter === "all") return true;
   if (filter === "album") return post.media_items.length > 1;
   if (filter === "image") return post.media_items.some((item) => item.media_type === "image");
   return post.media_items.some((item) => item.media_type === "video");
 }
 
-export function visibleMedia(post: ScanPost, filter: MediaFilter): DiscoveredMediaItem[] {
+export function visibleMedia(post: PostWithScan, filter: MediaFilter): DiscoveredMediaItem[] {
   if (filter === "image") return post.media_items.filter((item) => item.media_type === "image");
   if (filter === "video") return post.media_items.filter((item) => item.media_type === "video");
   return post.media_items;
 }
 
-export function filterPosts(posts: ScanPost[], filter: MediaFilter, search: string): ScanPost[] {
+export function filterPosts(
+  posts: PostWithScan[],
+  filter: MediaFilter,
+  search: string,
+  focusedJobId: string | null
+): PostWithScan[] {
   const query = search.trim().toLowerCase();
   return posts.filter((post) => {
+    if (focusedJobId && post._job_id !== focusedJobId) return false;
     if (!postMatchesFilter(post, filter)) return false;
     if (!query) return true;
     const haystack = [
@@ -94,7 +144,7 @@ export function filterPosts(posts: ScanPost[], filter: MediaFilter, search: stri
   });
 }
 
-export function countPosts(posts: ScanPost[]) {
+export function countPosts(posts: PostWithScan[]) {
   const media = posts.flatMap((post) => post.media_items);
   return {
     posts: posts.length,

@@ -2,33 +2,35 @@ import {
   CheckSquare,
   Download,
   Film,
-  FolderOpen,
   Image as ImageIcon,
   Layers,
   Loader2,
   Search,
   Square,
+  Sparkles,
 } from "lucide-react";
-import type { ScanPost } from "../../../../desktop/shared/types";
-import type { MediaFilter } from "./types";
-import { formatBytes, hostOf, visibleMedia } from "./utils";
+import type { DiscoveredMediaItem } from "../../../../desktop/shared/types";
+import { isItemDownloaded, type MediaFilter, type PostWithScan } from "./types";
+import { chooseFormat, formatBytes, visibleMedia } from "./utils";
 
 interface PostBrowserProps {
-  filteredPosts: ScanPost[];
+  filteredPosts: PostWithScan[];
   counts: { posts: number; media: number; images: number; videos: number; albums: number };
   selected: Set<string>;
+  downloaded: Set<string>;
   runningCount: number;
   totalProgress: { posts: number; media: number };
   filter: MediaFilter;
   search: string;
   downloading: boolean;
+  focusedScanLabel?: string | null;
+  preferredResolution?: string;
   onFilterChange: (filter: MediaFilter) => void;
   onSearchChange: (value: string) => void;
-  onTogglePost: (post: ScanPost) => void;
   onToggleMedia: (itemId: string) => void;
-  onSelectVisible: () => void;
+  onSelectAllVisible: () => void;
+  onSelectOnlyNew: () => void;
   onSelectByType: (type: "image" | "video") => void;
-  onSelectAlbums: () => void;
   onInvertSelection: () => void;
   onClearSelection: () => void;
   onDownload: () => void;
@@ -38,22 +40,27 @@ export function PostBrowser({
   filteredPosts,
   counts,
   selected,
+  downloaded,
   runningCount,
   totalProgress,
   filter,
   search,
   downloading,
+  focusedScanLabel,
+  preferredResolution,
   onFilterChange,
   onSearchChange,
-  onTogglePost,
   onToggleMedia,
-  onSelectVisible,
+  onSelectAllVisible,
+  onSelectOnlyNew,
   onSelectByType,
-  onSelectAlbums,
   onInvertSelection,
   onClearSelection,
   onDownload,
 }: PostBrowserProps) {
+  const visibleItems = filteredPosts.flatMap((post) => visibleMedia(post, filter));
+  const newCount = visibleItems.filter((item) => !isItemDownloaded(item, downloaded)).length;
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-hairline bg-surface px-4 py-3">
@@ -88,10 +95,19 @@ export function PostBrowser({
               className="w-44 rounded-full border border-hairline bg-page py-1 pl-7 pr-3 font-mono text-[11px] text-ink placeholder-faint focus:border-accent focus:outline-none"
             />
           </div>
+          {focusedScanLabel && (
+            <span className="rounded-full border border-accent/30 bg-accent/10 px-2.5 py-1 font-mono text-[10px] text-accent">
+              showing: {focusedScanLabel}
+            </span>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2 font-mono text-[11px]">
-          <button type="button" onClick={onSelectVisible} className="text-ink/80 hover:text-accent">
-            Select view
+          <button type="button" onClick={onSelectAllVisible} className="text-ink/80 hover:text-accent">
+            Select all
+          </button>
+          <button type="button" onClick={onSelectOnlyNew} className="inline-flex items-center gap-1 text-ink/80 hover:text-accent">
+            <Sparkles className="h-3 w-3" />
+            Select new ({newCount})
           </button>
           <span className="text-hairline">|</span>
           <button type="button" onClick={() => onSelectByType("image")} className="text-ink/80 hover:text-accent">
@@ -99,9 +115,6 @@ export function PostBrowser({
           </button>
           <button type="button" onClick={() => onSelectByType("video")} className="text-ink/80 hover:text-accent">
             Videos
-          </button>
-          <button type="button" onClick={onSelectAlbums} className="text-ink/80 hover:text-accent">
-            Albums
           </button>
           <button type="button" onClick={onInvertSelection} className="text-ink/80 hover:text-accent">
             Invert
@@ -117,7 +130,7 @@ export function PostBrowser({
           <span className="text-accent font-semibold">{selected.size}</span> selected
           <span className="text-muted">
             {" "}
-            · {counts.posts} posts · {counts.media} media
+            · {counts.posts} posts · {counts.media} media · {newCount} new
           </span>
           {runningCount > 0 && (
             <span className="ml-3 text-muted">
@@ -135,137 +148,116 @@ export function PostBrowser({
               : "cursor-not-allowed border border-hairline bg-raised text-faint"
           }`}
         >
-          {downloading ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Download className="h-4 w-4" />
-          )}
+          {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
           <span>{downloading ? "Queueing…" : `Download selected (${selected.size})`}</span>
         </button>
       </div>
 
-      {filteredPosts.length === 0 && runningCount === 0 ? (
+      {visibleItems.length === 0 && runningCount === 0 ? (
         <div className="rounded-xl border border-hairline bg-surface py-16 text-center">
-          <FolderOpen className="mx-auto h-8 w-8 stroke-1 text-muted" />
-          <p className="mt-2 text-xs text-muted">No posts match this filter yet.</p>
+          <Layers className="mx-auto h-8 w-8 stroke-1 text-muted" />
+          <p className="mt-2 text-xs text-muted">No media match this view yet.</p>
         </div>
       ) : (
-        <div className="space-y-4">
-          {filteredPosts.map((post) => {
-            const media = visibleMedia(post, filter);
-            const allSelected =
-              post.media_items.length > 0 &&
-              post.media_items.every((item) => selected.has(item.id));
-            const someSelected = post.media_items.some((item) => selected.has(item.id));
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+          {visibleItems.map((item, index) => {
+            const isSelected = selected.has(item.id);
+            const wasDownloaded = isItemDownloaded(item, downloaded);
+            const chosen = chooseFormat(item, preferredResolution);
             return (
-              <div
-                key={post.id}
-                className="overflow-hidden rounded-xl border border-hairline bg-surface shadow-sm"
-              >
-                <div className="flex flex-wrap items-center gap-3 border-b border-hairline px-4 py-3">
-                  <button
-                    type="button"
-                    onClick={() => onTogglePost(post)}
-                    className="text-ink/70 transition-colors hover:text-accent"
-                    aria-label={allSelected ? "Deselect post" : "Select post"}
-                  >
-                    {allSelected ? (
-                      <CheckSquare className="h-4 w-4 text-accent" />
-                    ) : someSelected ? (
-                      <CheckSquare className="h-4 w-4 text-muted" />
-                    ) : (
-                      <Square className="h-4 w-4" />
-                    )}
-                  </button>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-ink">
-                      {post.title || post.media_items[0]?.title || "Untitled post"}
-                    </p>
-                    <p className="truncate font-mono text-[11px] text-muted">
-                      {post.author} · {post.provider}
-                      {post.post_url ? ` · ${hostOf(post.post_url)}` : ""}
-                    </p>
-                  </div>
-                  <span className="rounded-full border border-hairline px-2 py-0.5 font-mono text-[10px] uppercase text-muted">
-                    {post.post_type}
-                  </span>
-                  <span className="font-mono text-[11px] text-muted">
-                    {post.media_items.length} item{post.media_items.length === 1 ? "" : "s"}
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3 lg:grid-cols-4">
-                  {media.map((item, index) => {
-                    const isSelected = selected.has(item.id);
-                    return (
-                      <div
-                        key={item.id}
-                        className={`group overflow-hidden rounded-lg border bg-page transition-colors ${
-                          isSelected ? "border-accent ring-1 ring-accent/40" : "border-hairline"
-                        }`}
-                      >
-                        <div className="relative aspect-[4/3] bg-raised">
-                          {item.thumbnail_url ? (
-                            <img
-                              src={item.thumbnail_url}
-                              alt=""
-                              loading="lazy"
-                              referrerPolicy="no-referrer"
-                              className="h-full w-full object-cover"
-                            />
-                          ) : (
-                            <div className="flex h-full w-full items-center justify-center text-muted">
-                              {item.media_type === "video" ? (
-                                <Film className="h-8 w-8 stroke-1" />
-                              ) : item.media_type === "image" ? (
-                                <ImageIcon className="h-8 w-8 stroke-1" />
-                              ) : (
-                                <Layers className="h-8 w-8 stroke-1" />
-                              )}
-                            </div>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => onToggleMedia(item.id)}
-                            className="absolute left-1.5 top-1.5 rounded bg-black/65 p-1 text-white/90 backdrop-blur transition-colors hover:bg-accent hover:text-on-accent"
-                            aria-label={isSelected ? "Deselect item" : "Select item"}
-                          >
-                            {isSelected ? (
-                              <CheckSquare className="h-3.5 w-3.5" />
-                            ) : (
-                              <Square className="h-3.5 w-3.5" />
-                            )}
-                          </button>
-                          <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 font-mono text-[9px] uppercase text-white/85">
-                            {item.media_type}
-                          </span>
-                          <span className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 font-mono text-[9px] text-white/70">
-                            #{index + 1}
-                          </span>
-                        </div>
-                        <div className="space-y-1 px-2.5 py-2">
-                          <p
-                            className="truncate font-mono text-[11px] text-ink"
-                            title={item.title || item.original_url}
-                          >
-                            {item.title || item.extension?.toUpperCase() || `Item ${index + 1}`}
-                          </p>
-                          <div className="flex items-center justify-between font-mono text-[10px] text-muted">
-                            <span>{formatBytes(item.filesize_bytes)}</span>
-                            <span className="truncate pl-2">
-                              {item.extension || item.mime_type?.split("/")[1] || ""}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
+              <MediaCard
+                key={item.id}
+                item={item}
+                index={index}
+                isSelected={isSelected}
+                wasDownloaded={wasDownloaded}
+                chosenFormat={chosen}
+                onToggle={() => onToggleMedia(item.id)}
+              />
             );
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+function MediaCard({
+  item,
+  index,
+  isSelected,
+  wasDownloaded,
+  chosenFormat,
+  onToggle,
+}: {
+  item: DiscoveredMediaItem;
+  index: number;
+  isSelected: boolean;
+  wasDownloaded: boolean;
+  chosenFormat: ReturnType<typeof chooseFormat>;
+  onToggle: () => void;
+}) {
+  const displaySize = chosenFormat?.filesize_bytes ?? item.filesize_bytes;
+  const displayRes = chosenFormat?.resolution || null;
+  return (
+    <div
+      className={`group overflow-hidden rounded-lg border bg-surface transition-colors ${
+        isSelected ? "border-accent ring-1 ring-accent/40" : "border-hairline"
+      }`}
+    >
+      <div className="relative aspect-square bg-raised">
+        {item.thumbnail_url ? (
+          <img
+            src={item.thumbnail_url}
+            alt=""
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center text-muted">
+            {item.media_type === "video" ? (
+              <Film className="h-8 w-8 stroke-1" />
+            ) : item.media_type === "image" ? (
+              <ImageIcon className="h-8 w-8 stroke-1" />
+            ) : (
+              <Layers className="h-8 w-8 stroke-1" />
+            )}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={onToggle}
+          className="absolute left-1.5 top-1.5 rounded bg-black/65 p-1 text-white/90 backdrop-blur transition-colors hover:bg-accent hover:text-on-accent"
+          aria-label={isSelected ? "Deselect item" : "Select item"}
+        >
+          {isSelected ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
+        </button>
+        <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 font-mono text-[9px] uppercase text-white/85">
+          {item.media_type}{displayRes ? ` · ${displayRes}` : ""}
+        </span>
+        <span className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 font-mono text-[9px] text-white/70">
+          #{index + 1}
+        </span>
+        {wasDownloaded && (
+          <span className="absolute bottom-1.5 left-1.5 rounded bg-emerald-600/90 px-1.5 py-0.5 font-mono text-[9px] text-white">
+            downloaded
+          </span>
+        )}
+      </div>
+      <div className="space-y-1 px-2 py-1.5">
+        <p className="truncate font-mono text-[10px] text-ink" title={item.title || item.original_url}>
+          {item.title || item.extension?.toUpperCase() || `Item ${index + 1}`}
+        </p>
+        <div className="flex items-center justify-between font-mono text-[10px] text-muted">
+          <span title={chosenFormat ? "Size for selected quality setting" : undefined}>
+            {formatBytes(displaySize)}
+          </span>
+          <span className="truncate pl-1">
+            {chosenFormat?.container || item.extension || item.mime_type?.split("/")[1] || ""}
+          </span>
+        </div>
+      </div>
     </div>
   );
 }

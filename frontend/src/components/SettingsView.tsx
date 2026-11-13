@@ -87,11 +87,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   theme: activeTheme,
 }) => {
   const [prefs, setPrefs] = useState<AppPreferences>(DEFAULT_PREFERENCES);
+  const [draft, setDraft] = useState<AppPreferences>(DEFAULT_PREFERENCES);
   const [loading, setLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
   const [saveNotice, setSaveNotice] = useState<{ message: string; ok: boolean } | null>(null);
   const [resetConfirmOpen, setResetConfirmOpen] = useState<boolean>(false);
   const credentialsRef = useRef<HTMLElement | null>(null);
+
+  const hasUnsavedChanges = JSON.stringify(draft) !== JSON.stringify(prefs);
 
   // Authentication, Cookies & Custom Request Headers State
   const [cookieProfiles, setCookieProfiles] = useState<CookieProfileRecord[]>([]);
@@ -128,6 +131,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         setLoading(true);
         const data = await window.api.getPreferences();
         setPrefs(data);
+        setDraft(data);
         if (typeof data.cookie_browser === "string" && data.cookie_browser) {
           setSelectedBrowser(data.cookie_browser);
         }
@@ -311,30 +315,43 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }, 2800);
   };
 
-  const handleUpdate = async (updates: Partial<AppPreferences>) => {
-    const next = { ...prefs, ...updates };
-    setPrefs(next);
-
-    if (updates.max_concurrent_downloads && onConcurrencyChange) {
-      onConcurrencyChange(updates.max_concurrent_downloads);
+  const handleDraftChange = (updates: Partial<AppPreferences>) => {
+    setDraft((prev) => ({ ...prev, ...updates }));
+    // Apply runtime side effects immediately for responsiveness; Save persists to DB.
+    if (updates.max_concurrent_downloads !== undefined) {
+      const val = updates.max_concurrent_downloads as number;
+      onConcurrencyChange?.(val);
+      window.api?.setDownloadConcurrency?.(val).catch(() => undefined);
     }
-    if (updates.max_download_speed_kbps !== undefined && onSpeedLimitChange) {
-      onSpeedLimitChange(updates.max_download_speed_kbps);
+    if (updates.max_download_speed_kbps !== undefined) {
+      const val = updates.max_download_speed_kbps as number;
+      onSpeedLimitChange?.(val);
+      window.api?.setSpeedLimit?.(val).catch(() => undefined);
     }
     if (updates.theme && onThemeChange) {
       onThemeChange(updates.theme);
     }
+  };
 
+  const handleSave = async () => {
     if (!window.api?.updatePreferences) return;
-
     try {
       setSaving(true);
-      const updated = await window.api.updatePreferences(updates);
+      const updated = await window.api.updatePreferences(draft);
       setPrefs(updated);
-      showSaveNotice();
+      setDraft(updated);
+      // Ensure runtime matches saved values.
+      onConcurrencyChange?.(updated.max_concurrent_downloads);
+      window.api?.setDownloadConcurrency?.(updated.max_concurrent_downloads).catch(() => undefined);
+      onSpeedLimitChange?.(updated.max_download_speed_kbps ?? 0);
+      window.api?.setSpeedLimit?.(updated.max_download_speed_kbps ?? 0).catch(() => undefined);
+      if (onThemeChange && updated.theme) {
+        onThemeChange(updated.theme);
+      }
+      showSaveNotice("Settings saved to local database");
     } catch (err) {
       console.error("Failed to persist preferences:", err);
-      showSaveNotice("Could not save settings — changes are only in memory", false);
+      showSaveNotice("Could not save settings — changes are not persisted", false);
     } finally {
       setSaving(false);
     }
@@ -343,9 +360,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const handleSelectFolder = async () => {
     if (!window.api?.selectFolder) return;
     try {
-      const selected = await window.api.selectFolder(prefs.download_dir);
-      if (selected && selected !== prefs.download_dir) {
-        await handleUpdate({ download_dir: selected });
+      const selected = await window.api.selectFolder(draft.download_dir);
+      if (selected && selected !== draft.download_dir) {
+        handleDraftChange({ download_dir: selected });
       }
     } catch (err) {
       console.error("Failed to select directory:", err);
@@ -353,9 +370,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   const handleOpenFolder = async () => {
-    if (!prefs.download_dir || !window.api?.openPath) return;
+    if (!draft.download_dir || !window.api?.openPath) return;
     try {
-      await window.api.openPath(prefs.download_dir);
+      await window.api.openPath(draft.download_dir);
     } catch (err) {
       console.error("Failed to open directory:", err);
     }
@@ -367,6 +384,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       setSaving(true);
       const defaults = await window.api.resetPreferences();
       setPrefs(defaults);
+      setDraft(defaults);
       setResetConfirmOpen(false);
       if (onConcurrencyChange) {
         onConcurrencyChange(defaults.max_concurrent_downloads);
@@ -429,6 +447,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           )}
           <button
             type="button"
+            onClick={() => void handleSave()}
+            disabled={saving || !hasUnsavedChanges}
+            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-mono transition-colors border ${
+              hasUnsavedChanges && !saving
+                ? "bg-accent text-on-accent border-accent hover:bg-accent-vivid"
+                : "bg-raised border-hairline text-faint cursor-not-allowed"
+            }`}
+          >
+            {saving ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+            <span>{hasUnsavedChanges ? "Save changes" : "Saved"}</span>
+          </button>
+          <button
+            type="button"
             onClick={() => setResetConfirmOpen(true)}
             className="flex items-center space-x-1.5 px-3 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline rounded-lg text-xs font-mono text-ink/80 transition-colors"
           >
@@ -462,8 +493,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <div className="flex items-center space-x-2">
             <div className="flex-1 bg-page border border-hairline rounded-xl px-4 py-2.5 flex items-center space-x-3 text-xs font-mono text-ink/90 overflow-hidden">
               <Folder className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
-              <span className="truncate select-all" title={prefs.download_dir}>
-                {prefs.download_dir || "Resolving system default..."}
+              <span className="truncate select-all" title={draft.download_dir}>
+                {draft.download_dir || "Resolving system default..."}
               </span>
             </div>
             <button
@@ -518,7 +549,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
           <span className="px-2.5 py-0.5 rounded text-xs font-mono bg-purple-500/10 border border-purple-500/30 text-purple-700 dark:text-purple-300">
-            {prefs.max_concurrent_downloads} Active Slots
+            {draft.max_concurrent_downloads} Active Slots
           </span>
         </div>
 
@@ -526,7 +557,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         <div className="space-y-3">
           <div className="flex items-center justify-between text-xs">
             <span className="font-medium text-ink/80">Simultaneous Active Downloads</span>
-            <span className="font-mono text-purple-700 dark:text-purple-300 font-bold">{prefs.max_concurrent_downloads} slots</span>
+            <span className="font-mono text-purple-700 dark:text-purple-300 font-bold">{draft.max_concurrent_downloads} slots</span>
           </div>
 
           <div className="flex items-center space-x-4">
@@ -535,8 +566,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               min="1"
               max="10"
               step="1"
-              value={prefs.max_concurrent_downloads}
-              onChange={(e) => handleUpdate({ max_concurrent_downloads: parseInt(e.target.value, 10) })}
+              value={draft.max_concurrent_downloads}
+              onChange={(e) => handleDraftChange({ max_concurrent_downloads: parseInt(e.target.value, 10) })}
               className="w-full h-2 bg-raised rounded-lg appearance-none cursor-pointer accent-accent"
             />
           </div>
@@ -547,9 +578,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <button
                 key={slot}
                 type="button"
-                onClick={() => handleUpdate({ max_concurrent_downloads: slot })}
+                onClick={() => handleDraftChange({ max_concurrent_downloads: slot })}
                 className={`px-3 py-1 rounded-lg text-xs font-mono border transition-all ${
-                  prefs.max_concurrent_downloads === slot
+                  draft.max_concurrent_downloads === slot
                     ? "bg-accent border-accent text-on-accent shadow-sm shadow-accent/40"
                     : "bg-raised border-hairline text-muted hover:text-ink hover:border-hairline-strong"
                 }`}
@@ -568,11 +599,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-xs font-mono">
               <span className="text-ink/80">Network Timeout:</span>
-              <span className="text-muted">{prefs.request_timeout_seconds} seconds</span>
+              <span className="text-muted">{draft.request_timeout_seconds} seconds</span>
             </div>
             <select
-              value={prefs.request_timeout_seconds}
-              onChange={(e) => handleUpdate({ request_timeout_seconds: parseFloat(e.target.value) })}
+              value={draft.request_timeout_seconds}
+              onChange={(e) => handleDraftChange({ request_timeout_seconds: parseFloat(e.target.value) })}
               className="w-full bg-page border border-hairline rounded-xl px-3 py-2 text-xs font-mono text-ink/90 focus:outline-none focus:border-accent"
             >
               <option value="15">15 seconds (Fast fail)</option>
@@ -586,11 +617,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-xs font-mono">
               <span className="text-ink/80">Max Auto-Retries:</span>
-              <span className="text-muted">{prefs.max_retries} attempts</span>
+              <span className="text-muted">{draft.max_retries} attempts</span>
             </div>
             <select
-              value={prefs.max_retries}
-              onChange={(e) => handleUpdate({ max_retries: parseInt(e.target.value, 10) })}
+              value={draft.max_retries}
+              onChange={(e) => handleDraftChange({ max_retries: parseInt(e.target.value, 10) })}
               className="w-full bg-page border border-hairline rounded-xl px-3 py-2 text-xs font-mono text-ink/90 focus:outline-none focus:border-accent"
             >
               <option value="0">0 (No retries)</option>
@@ -609,10 +640,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <span className="font-semibold text-ink/90">Global Bandwidth Speed Limit</span>
             </div>
             <span className="font-mono text-cyan-700 dark:text-cyan-300 font-bold">
-              {prefs.max_download_speed_kbps && prefs.max_download_speed_kbps > 0
-                ? prefs.max_download_speed_kbps >= 1024
-                  ? `${(prefs.max_download_speed_kbps / 1024).toFixed(1)} MB/s`
-                  : `${prefs.max_download_speed_kbps} KB/s`
+              {draft.max_download_speed_kbps && draft.max_download_speed_kbps > 0
+                ? draft.max_download_speed_kbps >= 1024
+                  ? `${(draft.max_download_speed_kbps / 1024).toFixed(1)} MB/s`
+                  : `${draft.max_download_speed_kbps} KB/s`
                 : "Unlimited (Full Speed)"}
             </span>
           </div>
@@ -628,12 +659,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               { label: "20 MB/s", value: 20480 },
               { label: "50 MB/s", value: 51200 },
             ].map((preset) => {
-              const active = (prefs.max_download_speed_kbps || 0) === preset.value;
+              const active = (draft.max_download_speed_kbps || 0) === preset.value;
               return (
                 <button
                   key={preset.value}
                   type="button"
-                  onClick={() => handleUpdate({ max_download_speed_kbps: preset.value })}
+                  onClick={() => handleDraftChange({ max_download_speed_kbps: preset.value })}
                   className={`px-3 py-1 rounded-lg text-xs font-mono border transition-all ${
                     active
                       ? "bg-cyan-700 border-cyan-400 text-white shadow-sm shadow-cyan-600/40"
@@ -653,10 +684,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               min="0"
               max="1000000"
               step="100"
-              value={prefs.max_download_speed_kbps ?? 0}
+              value={draft.max_download_speed_kbps ?? 0}
               onChange={(e) => {
                 const val = Math.max(0, parseInt(e.target.value, 10) || 0);
-                handleUpdate({ max_download_speed_kbps: val });
+                handleDraftChange({ max_download_speed_kbps: val });
               }}
               placeholder="0 = unlimited"
               className="w-36 bg-page border border-hairline rounded-xl px-3 py-1.5 text-xs font-mono text-ink/90 focus:outline-none focus:border-cyan-500"
@@ -683,7 +714,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
           <span className="px-2.5 py-0.5 rounded text-xs font-mono bg-page border border-hairline text-ink/80 uppercase">
-            {prefs.default_video_resolution} · {prefs.default_video_container}
+            {draft.default_video_resolution} · {draft.default_video_container}
           </span>
         </div>
 
@@ -702,9 +733,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <button
                 key={res.id}
                 type="button"
-                onClick={() => handleUpdate({ default_video_resolution: res.id })}
+                onClick={() => handleDraftChange({ default_video_resolution: res.id })}
                 className={`p-2.5 rounded-xl border text-left flex flex-col transition-all ${
-                  prefs.default_video_resolution === res.id
+                  draft.default_video_resolution === res.id
                     ? "bg-purple-500/10 border-purple-500/40 text-ink shadow-sm shadow-purple-900/50"
                     : "bg-raised border-hairline text-muted hover:text-ink hover:border-hairline-strong"
                 }`}
@@ -729,9 +760,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <button
                 key={fmt.id}
                 type="button"
-                onClick={() => handleUpdate({ default_video_container: fmt.id })}
+                onClick={() => handleDraftChange({ default_video_container: fmt.id })}
                 className={`p-2.5 rounded-xl border text-left flex flex-col transition-all ${
-                  prefs.default_video_container === fmt.id
+                  draft.default_video_container === fmt.id
                     ? "bg-purple-500/10 border-purple-500/40 text-ink shadow-sm shadow-purple-900/50"
                     : "bg-raised border-hairline text-muted hover:text-ink hover:border-hairline-strong"
                 }`}
@@ -766,7 +797,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
           <span className="px-2.5 py-0.5 rounded text-xs font-mono bg-page border border-hairline text-ink/80 uppercase">
-            {prefs.default_image_format}
+            {draft.default_image_format}
           </span>
         </div>
 
@@ -780,9 +811,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <button
               key={fmt.id}
               type="button"
-              onClick={() => handleUpdate({ default_image_format: fmt.id })}
+              onClick={() => handleDraftChange({ default_image_format: fmt.id })}
               className={`p-2.5 rounded-xl border text-left flex flex-col transition-all ${
-                prefs.default_image_format === fmt.id
+                draft.default_image_format === fmt.id
                   ? "bg-emerald-500/10 border-emerald-500/40 text-ink shadow-sm shadow-emerald-900/50"
                   : "bg-raised border-hairline text-muted hover:text-ink hover:border-hairline-strong"
               }`}
@@ -897,7 +928,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     onChange={(e) => {
                       const browser = e.target.value;
                       setSelectedBrowser(browser);
-                      void handleUpdate({ cookie_browser: browser });
+                      void handleDraftChange({ cookie_browser: browser });
                     }}
                     className="bg-page border border-hairline rounded-lg px-2.5 py-1.5 text-xs text-ink/90 font-mono focus:border-cyan-500 capitalize"
                   >
@@ -1089,7 +1120,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
           <span className="px-2.5 py-0.5 rounded text-xs font-mono bg-page border border-hairline text-ink/80 capitalize">
-            {activeTheme ?? prefs.theme}
+            {activeTheme ?? draft.theme}
           </span>
         </div>
 
@@ -1104,9 +1135,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <button
                 key={theme.id}
                 type="button"
-                onClick={() => handleUpdate({ theme: theme.id as any })}
+                onClick={() => handleDraftChange({ theme: theme.id as any })}
                 className={`p-3 rounded-xl border text-left flex flex-col space-y-1 transition-all ${
-                  (activeTheme ?? prefs.theme) === theme.id
+                  (activeTheme ?? draft.theme) === theme.id
                     ? "bg-accent/10 border-accent/40 text-ink shadow-sm shadow-accent/10"
                     : "bg-raised border-hairline text-muted hover:text-ink hover:border-hairline-strong"
                 }`}

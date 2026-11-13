@@ -55,8 +55,8 @@ def _open_media_stream(
         with client.stream("GET", url, headers=retry_headers) as retry:
             yield retry
 
-CHUNK_SIZE = 64 * 1024  # 64 KB streaming buffer
-PROGRESS_EMIT_INTERVAL = 0.15  # Emit progress update every 150ms
+CHUNK_SIZE = 1024 * 1024  # 1 MB streaming buffer for better throughput
+PROGRESS_EMIT_INTERVAL = 0.25  # Emit progress update every 250ms to reduce overhead
 
 
 def download_stream(

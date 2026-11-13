@@ -1,4 +1,4 @@
-import { Loader2, Search } from "lucide-react";
+import { Bookmark, Loader2, Search } from "lucide-react";
 import type { RefObject } from "react";
 
 interface ScanSourceFormProps {
@@ -7,9 +7,11 @@ interface ScanSourceFormProps {
   inputRef: RefObject<HTMLTextAreaElement>;
   detectedCount: number;
   starting: boolean;
+  bookmarking?: boolean;
   dragging: boolean;
   onDragStateChange: (dragging: boolean) => void;
   onStart: () => void;
+  onBookmark?: () => void;
   showOptions: boolean;
   onToggleOptions: () => void;
   maxPosts: string;
@@ -28,9 +30,11 @@ export function ScanSourceForm({
   inputRef,
   detectedCount,
   starting,
+  bookmarking,
   dragging,
   onDragStateChange,
   onStart,
+  onBookmark,
   showOptions,
   onToggleOptions,
   maxPosts,
@@ -89,6 +93,19 @@ export function ScanSourceForm({
         >
           {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
           <span>{starting ? "Starting…" : "Start scan"}</span>
+        </button>
+        <button
+          type="button"
+          onClick={onBookmark}
+          disabled={!input.trim() || !onBookmark || bookmarking}
+          className={`flex items-center gap-2 rounded-lg border px-3 py-2.5 text-xs font-mono transition-colors ${
+            input.trim() && onBookmark && !bookmarking
+              ? "border-hairline text-ink/80 hover:bg-raised hover:text-accent"
+              : "cursor-not-allowed border-hairline bg-raised text-faint"
+          }`}
+        >
+          {bookmarking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bookmark className="h-3.5 w-3.5" />}
+          <span>{bookmarking ? "Saving…" : "Bookmark link"}</span>
         </button>
         <button
           type="button"

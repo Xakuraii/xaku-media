@@ -52,18 +52,21 @@ class BandwidthThrottler:
 
         Returns total seconds spent sleeping (0.0 if unlimited or enough tokens).
         """
-        if self.max_speed_kbps <= 0 or num_bytes <= 0:
+        if num_bytes <= 0:
             return 0.0
+        with self._lock:
+            if self.max_speed_kbps <= 0:
+                return 0.0
 
         total_slept = 0.0
+        remaining = num_bytes
 
-        while True:
+        while remaining > 0:
             if cancel_event and cancel_event.is_set():
                 return total_slept
             if pause_event and pause_event.is_set():
                 return total_slept
 
-            sleep_duration = 0.0
             with self._lock:
                 if self.max_speed_kbps <= 0:
                     return total_slept
@@ -75,17 +78,27 @@ class BandwidthThrottler:
                     self._capacity, self._tokens + (elapsed * self._rate_bytes_sec)
                 )
 
-                if self._tokens >= num_bytes:
-                    self._tokens -= num_bytes
+                if self._tokens >= remaining:
+                    self._tokens -= remaining
                     return total_slept
 
-                deficit = num_bytes - self._tokens
-                sleep_duration = deficit / self._rate_bytes_sec
+                # Consume what we have and wait for the rest, pacing smoothly.
+                deficit = remaining - self._tokens
+                self._tokens = 0.0
+                remaining = deficit
+                sleep_duration = deficit / self._rate_bytes_sec if self._rate_bytes_sec > 0 else 0.0
 
-            # Sleep outside the lock in small increments to maintain responsiveness
-            slice_duration = min(0.05, sleep_duration)
-            time.sleep(slice_duration)
-            total_slept += slice_duration
+            # Sleep outside lock in small increments to stay responsive.
+            slept = 0.0
+            while slept < sleep_duration:
+                if cancel_event and cancel_event.is_set() or (pause_event and pause_event.is_set()):
+                    return total_slept
+                slice_duration = min(0.05, sleep_duration - slept)
+                time.sleep(slice_duration)
+                slept += slice_duration
+                total_slept += slice_duration
+
+        return total_slept
 
 
 # Default global instance
