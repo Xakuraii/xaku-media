@@ -120,9 +120,10 @@ erDiagram
 | **V2** | `MIGRATION_V2` | `cookie_profiles`, `domain_headers`, domain index | Milestone 17 |
 | **V3** | `MIGRATION_V3` | `saved_sources`, multi-column indexes (`url`, `platform`, `last_scanned_at`) | Milestone 18 |
 | **V4** | `MIGRATION_V4` | High-performance covering indexes (`idx_scan_history_items_media_id`, `idx_download_tasks_media_id`, `idx_media_items_author`, `idx_download_tasks_updated_at`) | Milestone 21 |
+| **V5** | `MIGRATION_V5_TABLES` + column helper | `posts`, `scan_history_posts`, scan status/count/stop-reason columns, media provider/post/attachment columns, partial unique index on `(provider, provider_media_id)` | Milestone 29 |
 
 ### Active Schema Version
-`CURRENT_SCHEMA_VERSION = 4`
+`CURRENT_SCHEMA_VERSION = 5`
 
 ---
 
@@ -178,6 +179,43 @@ CREATE TABLE IF NOT EXISTS scan_history_items (
 CREATE INDEX IF NOT EXISTS idx_scan_history_items_scan ON scan_history_items(scan_id, position);
 CREATE INDEX IF NOT EXISTS idx_scan_history_items_media_id ON scan_history_items(media_id);
 ```
+
+### 4.2.1 `posts` & `scan_history_posts` (V5)
+Groups the attachments discovered under one provider post/album. Post IDs are deterministic UUIDs, so rescans update the same row instead of duplicating it.
+```sql
+CREATE TABLE IF NOT EXISTS posts (
+    id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    provider_post_id TEXT,
+    source_url TEXT NOT NULL,
+    post_url TEXT,
+    author TEXT NOT NULL DEFAULT 'media',
+    title TEXT,
+    post_type TEXT NOT NULL DEFAULT 'unknown',
+    created_at TIMESTAMP,
+    metadata_extra_json TEXT NOT NULL DEFAULT '{}',
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_provider_post_id
+    ON posts(provider, provider_post_id) WHERE provider_post_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS scan_history_posts (
+    scan_id TEXT NOT NULL,
+    post_id TEXT NOT NULL,
+    item_order INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (scan_id, post_id),
+    FOREIGN KEY (scan_id) REFERENCES scan_history(id) ON DELETE CASCADE,
+    FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE
+);
+```
+Existing `media_items` rows gain `provider`, `provider_media_id`, `post_id`, `post_url`, `attachment_index`, `mime_type`, `extension`, and `is_thumbnail`. The partial unique index `idx_media_items_provider_media` enforces one row per provider asset without affecting legacy rows whose provider is `NULL`.
+
+Because providers may generate fresh row ids for the same asset on every scan, writes are **identity-aware**:
+`MediaRepository._canonical_media_id()` resolves `(provider, provider_media_id)` to the stored row id before
+inserting, and `save_media_items`, `save_scan_post`, and `save_download_tasks` all reuse that id. This keeps
+rescans and repeat downloads on a single row instead of colliding with the unique index or the
+`download_tasks.media_id` foreign key.
+
 
 ### 4.3 `download_tasks`
 Tracks individual download jobs, progression, file destinations, and formats.

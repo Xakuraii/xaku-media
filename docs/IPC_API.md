@@ -56,6 +56,11 @@ XakuMedia enforces strict security boundaries between the three runtime layers:
 | `extract_video` | `{"url": str, "timeout": int?}` | `VideoExtractResult` | Extracts video formats, resolutions, codecs, and stream merging requirements via `yt-dlp`. |
 | `extract_gallery` | `{"url": str, "timeout": int?}` | `GalleryExtractResult` | Discovers multi-item album images/videos using `gallery-dl` via non-polluting `DataJob`. |
 
+Bulk discovery jobs are handled separately through the JSON-RPC methods registered by `ScanManager`
+(`start_scan`, `cancel_scan`, `get_scan_status`, `list_scan_jobs`) and the `scan:*` telemetry events in
+section 3. Provider capabilities expose `has_cookies` so the UI can tell whether a cookie profile is
+already attached for the source domain.
+
 ---
 
 ### 2.3 Download Queue & Manager Methods
@@ -93,6 +98,10 @@ XakuMedia enforces strict security boundaries between the three runtime layers:
 | `get_preferences` | `{}` | `dict[str, Any]` | Fetches all persisted application preferences from SQLite. |
 | `update_preferences` | `{"preferences": dict}` | `dict[str, Any]` | Merges updates into SQLite preferences and synchronizes active runtime state. |
 | `reset_preferences` | `{}` | `dict[str, Any]` | Resets all settings to factory defaults. |
+
+Preferences are validated, written to the local SQLite `app_preferences` table, and applied to the
+runtime config on change. The cookie-import browser preference is stored as `cookie_browser`
+(default `"chrome"`), alongside paths, concurrency, format defaults, theme, and log level.
 
 ---
 
@@ -133,6 +142,13 @@ XakuMedia enforces strict security boundaries between the three runtime layers:
 | `get_scan_history` | `{"limit": int?}` | `{"history": list, "count": int}` | Retrieves previous scan sessions. |
 | `get_scan_items` | `{"scan_id": str}` | `{"items": list, "count": int}` | Fetches discovered items from a specific scan session. |
 | `clear_scan_history` | `{}` | `{"cleared": bool}` | Clears all scan history sessions. |
+| `start_scan` | `{"url": str, "options": ScanOptions?}` | `ScanJobSnapshot` | Starts a bulk discovery job (profile/channel/playlist/gallery/direct). Returns immediately; results stream through `scan:*` events. |
+| `cancel_scan` | `{"job_id": str}` | `ScanJobSnapshot` | Stops a running scan, keeping partial results. |
+| `get_scan_status` | `{"job_id": str}` | `ScanJobSnapshot` | Returns the current in-memory snapshot for a job. |
+| `list_scan_jobs` | `{"limit": int?}` | `{"jobs": list, "count": int}` | Lists recent scan jobs retained by this engine session. |
+| `get_scan_posts` | `{"scan_id": str}` | `{"posts": list}` | Loads persisted posts and their attachments for a scan. |
+| `get_library_stats` | `{}` | `LibraryStats` | Real aggregate counts of media, posts, scans, and downloads. |
+| `get_provider_capabilities` | `{"url": str}` | `{"capabilities": ProviderCapabilities}` | Reports honest bulk/pagination/auth capabilities before scanning. |
 
 ---
 
@@ -150,6 +166,11 @@ The Python engine broadcasts real-time progress events to `stdout` as JSON-RPC n
 | `download:failed` | `{"task_id": str, "error_message": str}` | Network drop, permission denial, or stream abort. |
 | `queue_cleared` | `{"cleared_count": int}` | Completed tasks flushed from queue. |
 | `download:recovery_completed`| `RecoverySummary` | Startup audit of interrupted downloads finished. |
+| `scan:started` | `ScanStartedPayload` | A bulk scan job was accepted. |
+| `scan:post` | `{"job_id", "scan_id", "post", "progress"}` | A post/album was discovered and persisted. |
+| `scan:progress` | `{"job_id", "scan_id", "status", "progress"}` | Scan counters changed (throttled to ~150ms). |
+| `scan:warning` | `{"job_id", "scan_id", "message"}` | A non-fatal discovery warning (skipped entry, nested queue, audio-only attachment). |
+| `scan:completed` / `scan:cancelled` / `scan:failed` | `ScanFinishedEventPayload` | The job finished, was stopped by the user, or failed. Failed events carry `error_category` (domain code) and `error_details` (site, cookie state, remediation hint). |
 
 ---
 
@@ -169,6 +190,20 @@ export interface DesktopApi {
   classifyUrl(url: string): Promise<ClassifiedUrlResult>;
   extractVideo(url: string, timeout?: number): Promise<VideoExtractResult>;
   extractGallery(url: string, timeout?: number): Promise<GalleryExtractResult>;
+
+  // Bulk Discovery Jobs
+  startScan(url: string, options?: ScanOptionsPayload): Promise<ScanJobSnapshot>;
+  cancelScan(jobId: string): Promise<ScanJobSnapshot>;
+  getScanStatus(jobId: string): Promise<ScanJobSnapshot>;
+  listScanJobs(limit?: number): Promise<{ jobs: ScanJobSnapshot[]; count: number }>;
+  getScanPosts(scanId: string): Promise<{ posts: ScanPost[] }>;
+  getLibraryStats(): Promise<LibraryStats>;
+  getProviderCapabilities(url: string): Promise<{ capabilities: ProviderCapabilities }>;
+  onScanStarted(cb: (data: ScanStartedPayload) => void): () => void;
+  onScanPost(cb: (data: ScanPostEventPayload) => void): () => void;
+  onScanProgress(cb: (data: ScanProgressEventPayload) => void): () => void;
+  onScanWarning(cb: (data: { job_id: string; message: string }) => void): () => void;
+  onScanFinished(cb: (data: ScanFinishedEventPayload) => void): () => void;
 
   // Downloader & Queue
   startDownload(item: MediaItem, format?: MediaFormatInfo, dest?: string): Promise<DownloadTask>;
@@ -197,6 +232,7 @@ export interface DesktopApi {
   selectFolder(): Promise<string | null>;
   selectCookieFile(): Promise<string | null>;
   openPath(filePath: string): Promise<void>;
+  openExternalUrl(url: string): Promise<boolean>;
 
   // Event Listeners
   onDownloadProgress(callback: (update: ProgressUpdate) => void): () => void;
