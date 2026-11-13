@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Folder,
   FolderOpen,
@@ -39,10 +39,26 @@ interface SettingsViewProps {
   systemInfo: SystemInfo | null;
   pythonStatus: PythonBridgeStatus | null;
   ffmpegInfo: FFmpegInfoResult | null;
+  /** Deep link from an error card: scroll to the cookie profiles section. */
+  initialSection?: "cookies";
   onConcurrencyChange?: (val: number) => void;
   onSpeedLimitChange?: (val: number) => void;
   onThemeChange?: (theme: "dark" | "light" | "system") => void;
   theme?: "dark" | "light" | "system";
+}
+
+const COOKIE_EXPORT_EXTENSION_URL =
+  "https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc";
+
+/** Derive a cookie profile domain from the first data line of a cookies.txt export. */
+function detectCookieDomain(text: string): string | null {
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim().replace(/^#HttpOnly_/, "");
+    if (!line || line.startsWith("#")) continue;
+    const domain = line.split(/\s+/)[0]?.replace(/^\./, "").trim();
+    if (domain && domain.includes(".")) return domain;
+  }
+  return null;
 }
 
 const DEFAULT_PREFERENCES: AppPreferences = {
@@ -64,6 +80,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   systemInfo,
   pythonStatus,
   ffmpegInfo,
+  initialSection,
   onConcurrencyChange,
   onSpeedLimitChange,
   onThemeChange,
@@ -72,14 +89,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [prefs, setPrefs] = useState<AppPreferences>(DEFAULT_PREFERENCES);
   const [loading, setLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
-  const [savedToast, setSavedToast] = useState<string | null>(null);
+  const [saveNotice, setSaveNotice] = useState<{ message: string; ok: boolean } | null>(null);
   const [resetConfirmOpen, setResetConfirmOpen] = useState<boolean>(false);
+  const credentialsRef = useRef<HTMLElement | null>(null);
 
   // Authentication, Cookies & Custom Request Headers State
   const [cookieProfiles, setCookieProfiles] = useState<CookieProfileRecord[]>([]);
   const [domainHeaders, setDomainHeaders] = useState<Record<string, Record<string, string>>>({});
   const [supportedBrowsers, setSupportedBrowsers] = useState<string[]>(["edge", "chrome", "firefox"]);
-  const [selectedBrowser, setSelectedBrowser] = useState<string>("edge");
+  const [selectedBrowser, setSelectedBrowser] = useState<string>("chrome");
   const [browserDomainFilter, setBrowserDomainFilter] = useState<string>("");
   const [importingBrowser, setImportingBrowser] = useState<boolean>(false);
   const [authActiveTab, setAuthActiveTab] = useState<"cookies" | "headers">("cookies");
@@ -93,6 +111,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [headerAuth, setHeaderAuth] = useState<string>("");
   const [authFeedback, setAuthFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
 
+  useEffect(() => {
+    if (initialSection !== "cookies") return;
+    setAuthActiveTab("cookies");
+    credentialsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [initialSection]);
+
   // Load preferences from SQLite on mount
   useEffect(() => {
     async function loadPreferences() {
@@ -104,6 +128,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         setLoading(true);
         const data = await window.api.getPreferences();
         setPrefs(data);
+        if (typeof data.cookie_browser === "string" && data.cookie_browser) {
+          setSelectedBrowser(data.cookie_browser);
+        }
       } catch (err) {
         console.error("Failed to load application preferences:", err);
       } finally {
@@ -277,10 +304,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
-  const showSaveNotice = (msg: string = "Settings saved to local SQLite") => {
-    setSavedToast(msg);
+  const showSaveNotice = (message: string = "Settings saved to local SQLite", ok: boolean = true) => {
+    setSaveNotice({ message, ok });
     setTimeout(() => {
-      setSavedToast(null);
+      setSaveNotice(null);
     }, 2800);
   };
 
@@ -307,6 +334,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       showSaveNotice();
     } catch (err) {
       console.error("Failed to persist preferences:", err);
+      showSaveNotice("Could not save settings — changes are only in memory", false);
     } finally {
       setSaving(false);
     }
@@ -352,6 +380,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       showSaveNotice("Preferences reset to factory defaults");
     } catch (err) {
       console.error("Failed to reset preferences:", err);
+      showSaveNotice("Could not reset preferences", false);
     } finally {
       setSaving(false);
     }
@@ -382,10 +411,20 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
         {/* Save indicator toast */}
         <div className="flex items-center space-x-3">
-          {savedToast && (
-            <div className="flex items-center space-x-2 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/30 rounded-lg text-emerald-700 dark:text-emerald-300 text-xs font-mono animate-in fade-in duration-150">
-              <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-              <span>{savedToast}</span>
+          {saveNotice && (
+            <div
+              className={`flex items-center space-x-2 px-3 py-1.5 border rounded-lg text-xs font-mono animate-in fade-in duration-150 ${
+                saveNotice.ok
+                  ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300"
+                  : "bg-red-500/10 border-red-500/30 text-red-700 dark:text-red-300"
+              }`}
+            >
+              {saveNotice.ok ? (
+                <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+              ) : (
+                <AlertCircle className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
+              )}
+              <span>{saveNotice.message}</span>
             </div>
           )}
           <button
@@ -762,7 +801,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       {/* ========================================================================= */}
       {/* 5. Session Credentials, Cookies & Custom Request Headers */}
       {/* ========================================================================= */}
-      <section className="bg-surface border border-hairline rounded-2xl p-6 space-y-4 shadow-card">
+      <section
+        ref={credentialsRef}
+        className="bg-surface border border-hairline rounded-2xl p-6 space-y-4 shadow-card"
+      >
         <div className="flex items-center justify-between border-b border-hairline pb-3">
           <div className="flex items-center space-x-2.5">
             <KeyRound className="h-5 w-5 text-amber-600 dark:text-amber-400" />
@@ -852,7 +894,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <div className="flex items-center space-x-2 pt-1">
                   <select
                     value={selectedBrowser}
-                    onChange={(e) => setSelectedBrowser(e.target.value)}
+                    onChange={(e) => {
+                      const browser = e.target.value;
+                      setSelectedBrowser(browser);
+                      void handleUpdate({ cookie_browser: browser });
+                    }}
                     className="bg-page border border-hairline rounded-lg px-2.5 py-1.5 text-xs text-ink/90 font-mono focus:border-cyan-500 capitalize"
                   >
                     {supportedBrowsers.map((b) => (
@@ -1189,6 +1235,20 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <p className="text-xs text-muted font-mono">
               Paste standard Netscape HTTP cookie file text (tab-separated lines). Supports HttpOnly cookies.
             </p>
+            <button
+              type="button"
+              onClick={() => {
+                if (window.api?.openExternalUrl) {
+                  void window.api.openExternalUrl(COOKIE_EXPORT_EXTENSION_URL);
+                  return;
+                }
+                window.open(COOKIE_EXPORT_EXTENSION_URL, "_blank", "noopener,noreferrer");
+              }}
+              className="inline-flex w-fit items-center space-x-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] font-mono text-amber-700 transition-colors hover:bg-amber-500/20 dark:text-amber-300"
+            >
+              <ExternalLink className="h-3 w-3" />
+              <span>Get cookies.txt LOCALLY (Chrome/Edge extension)</span>
+            </button>
             <div className="space-y-3 font-mono">
               <div>
                 <label className="text-[11px] text-muted uppercase">Target Domain</label>
@@ -1206,7 +1266,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   rows={6}
                   placeholder="# Netscape HTTP Cookie File&#10;.example.com	TRUE	/	TRUE	1893456000	session_id	xyz"
                   value={pasteText}
-                  onChange={(e) => setPasteText(e.target.value)}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setPasteText(value);
+                    if (!pasteDomain.trim()) {
+                      const detected = detectCookieDomain(value);
+                      if (detected) setPasteDomain(detected);
+                    }
+                  }}
                   className="w-full mt-1 bg-surface border border-hairline rounded-lg p-2.5 text-xs text-ink/90 placeholder-faint font-mono focus:border-amber-500 resize-none"
                 />
               </div>

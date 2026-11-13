@@ -24,6 +24,16 @@ logger = get_logger("server.dispatcher")
 HandlerFunc = Callable[[dict[str, Any]], Any]
 
 
+def _capabilities_for(url: str) -> dict[str, Any] | None:
+    """Best-effort capability report; classification must not fail because of it."""
+    try:
+        from ..providers.registry import provider_capabilities
+
+        return provider_capabilities(url).model_dump()
+    except Exception:
+        return None
+
+
 class RpcDispatcher:
     """Dispatches JSON-RPC requests to registered handler functions."""
 
@@ -177,6 +187,7 @@ class RpcDispatcher:
                 "classified_url": classified.model_dump() if classified else None,
                 "media_item": media_items[0].model_dump() if media_items else None,
                 "media_items": [m.model_dump() for m in media_items],
+                "capabilities": _capabilities_for(url),
             }
 
         def extract_video_handler(params: dict[str, Any]) -> dict[str, Any]:
@@ -230,6 +241,67 @@ class RpcDispatcher:
 
             deleted = default_repository.clear_scan_history(scan_id)
             return {"deleted_count": deleted}
+
+        def start_scan_handler(params: dict[str, Any]) -> dict[str, Any]:
+            url = params.get("url")
+            if not url or not isinstance(url, str):
+                raise TypeError("Parameter 'url' is required and must be a string.")
+
+            from ..models.post import ScanOptions
+            from ..scanning import default_scan_manager
+
+            raw_options = params.get("options")
+            options = (
+                ScanOptions.model_validate(raw_options)
+                if isinstance(raw_options, dict)
+                else ScanOptions()
+            )
+            return default_scan_manager.start(url, options)
+
+        def cancel_scan_handler(params: dict[str, Any]) -> dict[str, Any]:
+            job_id = params.get("job_id")
+            if not job_id or not isinstance(job_id, str):
+                raise TypeError("Parameter 'job_id' is required and must be a string.")
+            from ..scanning import default_scan_manager
+
+            return default_scan_manager.cancel(job_id)
+
+        def get_scan_status_handler(params: dict[str, Any]) -> dict[str, Any]:
+            job_id = params.get("job_id")
+            if not job_id or not isinstance(job_id, str):
+                raise TypeError("Parameter 'job_id' is required and must be a string.")
+            from ..scanning import default_scan_manager
+
+            return default_scan_manager.get(job_id)
+
+        def list_scan_jobs_handler(params: dict[str, Any]) -> dict[str, Any]:
+            limit = int(params.get("limit", 20))
+            from ..scanning import default_scan_manager
+
+            jobs = default_scan_manager.list_jobs(limit)
+            return {"jobs": jobs, "count": len(jobs)}
+
+        def get_scan_posts_handler(params: dict[str, Any]) -> dict[str, Any]:
+            scan_id = params.get("scan_id")
+            if not scan_id or not isinstance(scan_id, str):
+                raise TypeError("Parameter 'scan_id' is required and must be a string.")
+            from ..db import default_repository
+
+            posts = default_repository.get_scan_posts(scan_id)
+            return {"posts": [post.model_dump(mode="json") for post in posts]}
+
+        def get_library_stats_handler(params: dict[str, Any]) -> dict[str, Any]:
+            from ..db import default_repository
+
+            return default_repository.get_library_stats()
+
+        def get_provider_capabilities_handler(params: dict[str, Any]) -> dict[str, Any]:
+            url = params.get("url")
+            if not url or not isinstance(url, str):
+                raise TypeError("Parameter 'url' is required and must be a string.")
+            from ..providers.registry import provider_capabilities
+
+            return {"capabilities": provider_capabilities(url).model_dump()}
 
         def save_media_item_handler(params: dict[str, Any]) -> dict[str, Any]:
             item_data = params.get("media_item")
@@ -743,6 +815,13 @@ class RpcDispatcher:
         self.register("get_scan_history", get_scan_history_handler)
         self.register("get_scan_items", get_scan_items_handler)
         self.register("clear_scan_history", clear_scan_history_handler)
+        self.register("start_scan", start_scan_handler)
+        self.register("cancel_scan", cancel_scan_handler)
+        self.register("get_scan_status", get_scan_status_handler)
+        self.register("list_scan_jobs", list_scan_jobs_handler)
+        self.register("get_scan_posts", get_scan_posts_handler)
+        self.register("get_library_stats", get_library_stats_handler)
+        self.register("get_provider_capabilities", get_provider_capabilities_handler)
         self.register("save_media_item", save_media_item_handler)
         self.register("get_saved_media", get_saved_media_handler)
         self.register("query_saved_media", query_saved_media_handler)

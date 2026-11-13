@@ -22,6 +22,11 @@ class XakuMediaError(Exception):
             "details": self.details,
         }
 
+    def __str__(self) -> str:
+        # Keep str() in sync when callers enrich ``message`` after construction
+        # (e.g. attaching cookie remediation context to a parsed error).
+        return self.message
+
 
 # Configuration & Environment
 class ConfigurationError(XakuMediaError):

@@ -109,6 +109,14 @@ export interface DiscoveredMediaItem {
   filesize_bytes?: number | null;
   available_formats: MediaFormatInfoPayload[];
   created_at: string;
+  provider?: string | null;
+  provider_media_id?: string | null;
+  post_id?: string | null;
+  post_url?: string | null;
+  attachment_index?: number;
+  mime_type?: string | null;
+  extension?: string | null;
+  is_thumbnail?: boolean;
 }
 
 export interface ScanHistoryRecord {
@@ -124,6 +132,136 @@ export interface ScanHistoryRecord {
   is_supported: boolean;
   scanned_at: string;
   preview_thumbnail?: string | null;
+  status?: string | null;
+  provider?: string | null;
+  posts_count?: number;
+  images_count?: number;
+  videos_count?: number;
+  pages_fetched?: number;
+  stop_reason?: string | null;
+  completed_at?: string | null;
+}
+
+export interface ProviderCapabilities {
+  provider: string;
+  label: string;
+  source_type: string;
+  profile_bulk: boolean;
+  individual_posts: boolean;
+  albums: boolean;
+  images: boolean;
+  videos: boolean;
+  pagination: boolean;
+  requires_auth: boolean;
+  has_cookies: boolean;
+  notes?: string | null;
+}
+
+export type ScanPostType =
+  | "video"
+  | "image"
+  | "album"
+  | "slideshow"
+  | "mixed"
+  | "unknown";
+
+export interface ScanPost {
+  id: string;
+  provider: string;
+  provider_post_id?: string | null;
+  source_url: string;
+  post_url?: string | null;
+  author: string;
+  title?: string | null;
+  post_type: ScanPostType;
+  media_items: DiscoveredMediaItem[];
+  created_at?: string | null;
+  metadata_extra: Record<string, unknown>;
+}
+
+export interface ScanProgressPayload {
+  posts_discovered: number;
+  media_discovered: number;
+  images_discovered: number;
+  videos_discovered: number;
+  pages_fetched: number;
+  duplicates_skipped: number;
+  current_page?: number | null;
+  limit_applied: boolean;
+}
+
+export type ScanJobStatus = "queued" | "running" | "completed" | "cancelled" | "failed";
+
+export interface ScanJobSnapshot {
+  job_id: string;
+  scan_id?: string | null;
+  url: string;
+  provider?: string | null;
+  status: ScanJobStatus;
+  capabilities?: ProviderCapabilities | null;
+  classified_url?: ClassifiedUrlInfo | null;
+  progress: ScanProgressPayload;
+  posts: ScanPost[];
+  warnings: string[];
+  error?: string | null;
+  error_category?: string | null;
+  error_details?: Record<string, unknown>;
+  stop_reason?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+export interface ScanOptionsPayload {
+  max_posts?: number | null;
+  max_media?: number | null;
+  include_images?: boolean;
+  include_videos?: boolean;
+}
+
+export interface ScanStartedPayload {
+  job_id: string;
+  scan_id?: string | null;
+  url: string;
+  provider?: string | null;
+  capabilities?: ProviderCapabilities | null;
+  classified_url?: ClassifiedUrlInfo | null;
+}
+
+export interface ScanPostEventPayload {
+  job_id: string;
+  scan_id?: string | null;
+  post: ScanPost;
+  progress: ScanProgressPayload;
+}
+
+export interface ScanProgressEventPayload {
+  job_id: string;
+  scan_id?: string | null;
+  status: ScanJobStatus;
+  progress: ScanProgressPayload;
+}
+
+export interface ScanFinishedEventPayload {
+  job_id: string;
+  scan_id?: string | null;
+  status: ScanJobStatus;
+  progress: ScanProgressPayload;
+  warnings: string[];
+  error?: string | null;
+  error_category?: string | null;
+  error_details?: Record<string, unknown>;
+  stop_reason?: string | null;
+}
+
+export interface LibraryStats {
+  media_total: number;
+  images: number;
+  videos: number;
+  saved: number;
+  posts: number;
+  scans: number;
+  downloads_completed: number;
+  downloads_active: number;
 }
 
 export interface ScanHistoryResult {
@@ -398,6 +536,57 @@ export interface DesktopApi {
   clearScanHistory: (scanId?: string) => Promise<ClearScanHistoryResult>;
 
   /**
+   * Start a bulk discovery scan job. Returns immediately; results stream in
+   * through the scan:* event subscriptions below.
+   */
+  startScan: (url: string, options?: ScanOptionsPayload) => Promise<ScanJobSnapshot>;
+
+  /**
+   * Cancel a running scan job, keeping any posts discovered so far.
+   */
+  cancelScan: (jobId: string) => Promise<ScanJobSnapshot>;
+
+  /**
+   * Fetch the current snapshot of a scan job.
+   */
+  getScanStatus: (jobId: string) => Promise<ScanJobSnapshot>;
+
+  /**
+   * List recent scan jobs.
+   */
+  listScanJobs: (limit?: number) => Promise<{ jobs: ScanJobSnapshot[]; count: number }>;
+
+  /**
+   * Load persisted posts (with their media) for a completed scan.
+   */
+  getScanPosts: (scanId: string) => Promise<{ posts: ScanPost[] }>;
+
+  /**
+   * Aggregate real library numbers for the overview dashboard.
+   */
+  getLibraryStats: () => Promise<LibraryStats>;
+
+  /**
+   * Describe what a provider can do for a URL before scanning it.
+   */
+  getProviderCapabilities: (url: string) => Promise<{ capabilities: ProviderCapabilities }>;
+
+  /** A scan job started. */
+  onScanStarted: (callback: (data: ScanStartedPayload) => void) => () => void;
+
+  /** A post was discovered. */
+  onScanPost: (callback: (data: ScanPostEventPayload) => void) => () => void;
+
+  /** Scan counters changed. */
+  onScanProgress: (callback: (data: ScanProgressEventPayload) => void) => () => void;
+
+  /** A non-fatal scan warning was reported. */
+  onScanWarning: (callback: (data: { job_id: string; message: string }) => void) => () => void;
+
+  /** A scan finished, was cancelled, or failed. */
+  onScanFinished: (callback: (data: ScanFinishedEventPayload) => void) => () => void;
+
+  /**
    * Retrieve bookmarked/saved media library items.
    */
   getSavedMedia: (mediaType?: string, limit?: number, offset?: number) => Promise<SavedMediaResult>;
@@ -530,6 +719,11 @@ export interface DesktopApi {
    * Open downloaded file or folder in Windows File Explorer.
    */
   openPath?: (targetPath: string) => Promise<void>;
+
+  /**
+   * Open a trusted http(s) help link in the system browser.
+   */
+  openExternalUrl?: (url: string) => Promise<boolean>;
 
   /**
    * Check if FFmpeg and FFprobe binaries are installed and accessible.
@@ -734,6 +928,8 @@ export interface AppPreferences {
   default_image_format: string;
   theme: "dark" | "light" | "system";
   log_level: string;
+  /** Preferred browser for one-click cookie import. */
+  cookie_browser?: string;
   [key: string]: unknown;
 }
 

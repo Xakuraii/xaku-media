@@ -7,7 +7,7 @@ from ..exceptions.base import DatabaseError
 
 logger = get_logger("db.schema")
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 MIGRATION_V1 = """
 -- Schema version tracking
@@ -150,6 +150,81 @@ CREATE INDEX IF NOT EXISTS idx_media_items_author ON media_items(author);
 CREATE INDEX IF NOT EXISTS idx_download_tasks_updated_at ON download_tasks(updated_at DESC);
 """
 
+# V5 makes scans first-class jobs with posts/albums and stable provider identity.
+MIGRATION_V5_TABLES = """
+-- A post (or album) groups the attachments discovered under one source entry.
+CREATE TABLE IF NOT EXISTS posts (
+    id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    provider_post_id TEXT,
+    source_url TEXT NOT NULL,
+    post_url TEXT,
+    author TEXT NOT NULL DEFAULT 'media',
+    title TEXT,
+    post_type TEXT NOT NULL DEFAULT 'unknown',
+    created_at TIMESTAMP,
+    metadata_extra_json TEXT NOT NULL DEFAULT '{}',
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_posts_provider ON posts(provider);
+CREATE INDEX IF NOT EXISTS idx_posts_source_url ON posts(source_url);
+CREATE INDEX IF NOT EXISTS idx_posts_updated_at ON posts(updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_provider_post_id
+    ON posts(provider, provider_post_id)
+    WHERE provider_post_id IS NOT NULL;
+
+-- Junction between a scan event and the posts it discovered.
+CREATE TABLE IF NOT EXISTS scan_history_posts (
+    scan_id TEXT NOT NULL,
+    post_id TEXT NOT NULL,
+    item_order INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (scan_id, post_id),
+    FOREIGN KEY (scan_id) REFERENCES scan_history(id) ON DELETE CASCADE,
+    FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_scan_history_posts_post_id
+    ON scan_history_posts(post_id);
+
+-- One provider asset maps to one media row, so rescans stay idempotent.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_media_items_provider_media
+    ON media_items(provider, provider_media_id)
+    WHERE provider_media_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_media_items_post_id ON media_items(post_id);
+"""
+
+# (table, column, declaration) triples applied only when the column is missing.
+MIGRATION_V5_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("scan_history", "status", "TEXT NOT NULL DEFAULT 'completed'"),
+    ("scan_history", "provider", "TEXT"),
+    ("scan_history", "posts_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("scan_history", "images_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("scan_history", "videos_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("scan_history", "pages_fetched", "INTEGER NOT NULL DEFAULT 0"),
+    ("scan_history", "stop_reason", "TEXT"),
+    ("scan_history", "completed_at", "TIMESTAMP"),
+    ("media_items", "provider", "TEXT"),
+    ("media_items", "provider_media_id", "TEXT"),
+    ("media_items", "post_id", "TEXT"),
+    ("media_items", "post_url", "TEXT"),
+    ("media_items", "attachment_index", "INTEGER NOT NULL DEFAULT 0"),
+    ("media_items", "mime_type", "TEXT"),
+    ("media_items", "extension", "TEXT"),
+    ("media_items", "is_thumbnail", "INTEGER NOT NULL DEFAULT 0"),
+)
+
+
+def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:
+    """Add a column only when the table exists and the column is absent."""
+    cursor = conn.cursor()
+    cursor.execute(f"PRAGMA table_info({table})")
+    existing = {row[1] for row in cursor.fetchall()}
+    if existing and column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
 
 def get_current_version(conn: sqlite3.Connection) -> int:
     """Retrieve the current schema version from the database."""
@@ -198,6 +273,15 @@ def init_schema(conn: sqlite3.Connection) -> None:
             conn.execute("INSERT INTO schema_version (version) VALUES (4)")
             conn.commit()
             logger.info("Database migration V4 applied successfully.")
+
+        if current_v < 5:
+            logger.info("Applying database migration V5...")
+            for table, column, decl in MIGRATION_V5_COLUMNS:
+                _add_column_if_missing(conn, table, column, decl)
+            conn.executescript(MIGRATION_V5_TABLES)
+            conn.execute("INSERT INTO schema_version (version) VALUES (5)")
+            conn.commit()
+            logger.info("Database migration V5 applied successfully.")
 
         # Self-healing column checks for pre-existing local databases
         cursor = conn.cursor()

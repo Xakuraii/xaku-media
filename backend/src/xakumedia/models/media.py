@@ -63,6 +63,18 @@ class MediaItem(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     metadata_extra: dict[str, Any] = Field(default_factory=dict)
 
+    # Source / post relationships and provider identity (added with the bulk
+    # discovery model). These are optional so previously persisted payloads and
+    # direct-URL flows still validate.
+    provider: str | None = None
+    provider_media_id: str | None = None
+    post_id: str | None = None
+    post_url: str | None = None
+    attachment_index: int = 0
+    mime_type: str | None = None
+    extension: str | None = None
+    is_thumbnail: bool = False
+
     @property
     def dimensions_label(self) -> str | None:
         """Formatted human-readable dimensions (e.g., 1920x1080)."""

@@ -19,11 +19,13 @@ import type {
   GetDownloadTasksResult,
   IncrementalScanResult,
   InspectMediaResult,
+  LibraryStats,
   MediaFormatInfoPayload,
   MergeStreamsResult,
   PauseAllDownloadsResult,
   PauseDownloadResult,
   ProgressUpdatePayload,
+  ProviderCapabilities,
   PythonBridgeStatus,
   PythonPingResult,
   PythonSystemInfoResult,
@@ -34,7 +36,14 @@ import type {
   ResumeDownloadResult,
   SavedMediaResult,
   SavedSourceRecord,
+  ScanFinishedEventPayload,
   ScanHistoryResult,
+  ScanJobSnapshot,
+  ScanOptionsPayload,
+  ScanPost,
+  ScanPostEventPayload,
+  ScanProgressEventPayload,
+  ScanStartedPayload,
   SetDownloadConcurrencyResult,
   StartBatchDownloadResult,
   StartDownloadResult,
@@ -85,6 +94,84 @@ const api: DesktopApi = {
   },
   clearScanHistory: async (scanId?: string): Promise<ClearScanHistoryResult> => {
     return ipcRenderer.invoke("python:clearScanHistory", scanId);
+  },
+  startScan: async (url: string, options?: ScanOptionsPayload): Promise<ScanJobSnapshot> => {
+    return ipcRenderer.invoke("python:startScan", url, options);
+  },
+  cancelScan: async (jobId: string): Promise<ScanJobSnapshot> => {
+    return ipcRenderer.invoke("python:cancelScan", jobId);
+  },
+  getScanStatus: async (jobId: string): Promise<ScanJobSnapshot> => {
+    return ipcRenderer.invoke("python:getScanStatus", jobId);
+  },
+  listScanJobs: async (
+    limit?: number
+  ): Promise<{ jobs: ScanJobSnapshot[]; count: number }> => {
+    return ipcRenderer.invoke("python:listScanJobs", limit);
+  },
+  getScanPosts: async (scanId: string): Promise<{ posts: ScanPost[] }> => {
+    return ipcRenderer.invoke("python:getScanPosts", scanId);
+  },
+  getLibraryStats: async (): Promise<LibraryStats> => {
+    return ipcRenderer.invoke("python:getLibraryStats");
+  },
+  getProviderCapabilities: async (
+    url: string
+  ): Promise<{ capabilities: ProviderCapabilities }> => {
+    return ipcRenderer.invoke("python:getProviderCapabilities", url);
+  },
+  onScanStarted: (callback: (data: ScanStartedPayload) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: ScanStartedPayload) =>
+      callback(data);
+    ipcRenderer.on("scan:started", handler);
+    return () => {
+      ipcRenderer.removeListener("scan:started", handler);
+    };
+  },
+  onScanPost: (callback: (data: ScanPostEventPayload) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: ScanPostEventPayload) =>
+      callback(data);
+    ipcRenderer.on("scan:post", handler);
+    return () => {
+      ipcRenderer.removeListener("scan:post", handler);
+    };
+  },
+  onScanProgress: (callback: (data: ScanProgressEventPayload) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: ScanProgressEventPayload) =>
+      callback(data);
+    ipcRenderer.on("scan:progress", handler);
+    return () => {
+      ipcRenderer.removeListener("scan:progress", handler);
+    };
+  },
+  onScanWarning: (
+    callback: (data: { job_id: string; message: string }) => void
+  ): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      data: { job_id: string; message: string }
+    ) => callback(data);
+    ipcRenderer.on("scan:warning", handler);
+    return () => {
+      ipcRenderer.removeListener("scan:warning", handler);
+    };
+  },
+  onScanFinished: (
+    callback: (data: ScanFinishedEventPayload) => void
+  ): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      data: ScanFinishedEventPayload
+    ) => callback(data);
+    ipcRenderer.on("scan:completed", handler);
+    ipcRenderer.on("scan:cancelled", handler);
+    ipcRenderer.on("scan:failed", handler);
+    const remove = () => {
+      ipcRenderer.removeListener("scan:completed", handler);
+      ipcRenderer.removeListener("scan:cancelled", handler);
+      ipcRenderer.removeListener("scan:failed", handler);
+    };
+    return remove;
   },
   getSavedMedia: async (mediaType?: string, limit?: number, offset?: number): Promise<SavedMediaResult> => {
     return ipcRenderer.invoke("python:getSavedMedia", mediaType, limit, offset);
@@ -235,6 +322,9 @@ const api: DesktopApi = {
   },
   openPath: async (targetPath: string): Promise<void> => {
     return ipcRenderer.invoke("app:openPath", targetPath);
+  },
+  openExternalUrl: async (url: string): Promise<boolean> => {
+    return ipcRenderer.invoke("app:openExternal", url);
   },
   getFFmpegInfo: async (): Promise<FFmpegInfoResult> => {
     return ipcRenderer.invoke("python:getFFmpegInfo");

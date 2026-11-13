@@ -58,10 +58,24 @@ import type {
 } from "../../desktop/shared/types";
 import { SettingsView } from "./components/SettingsView";
 import { SavedSourcesView } from "./components/SavedSourcesView";
+import { BulkScanView } from "./components/bulk-scan/BulkScanView";
 import { useDesktopTheme } from "./desktop/theme";
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<string>("scan");
+  const [settingsSection, setSettingsSection] = useState<"cookies" | undefined>(undefined);
+
+  const openExternal = (url: string) => {
+    if (window.api?.openExternalUrl) {
+      void window.api.openExternalUrl(url);
+      return;
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
+
+  useEffect(() => {
+    if (activeTab !== "settings") setSettingsSection(undefined);
+  }, [activeTab]);
   const { preference: themePreference, resolved: resolvedTheme, setPreference: setThemePreference } =
     useDesktopTheme();
   const [ipcStatus, setIpcStatus] = useState<string>("Checking IPC...");
@@ -1173,7 +1187,16 @@ export const App: React.FC = () => {
 
         {/* Main View Content */}
         <div className="flex-1 overflow-y-auto px-8 py-7">
-          {activeTab === "scan" && (
+          {activeTab === "scan" && (window.api?.startScan ? (
+            <BulkScanView
+              onDownloadStarted={() => setActiveTab("downloads")}
+              onOpenSettings={(section) => {
+                setSettingsSection(section ?? "cookies");
+                setActiveTab("settings");
+              }}
+              onOpenExternal={openExternal}
+            />
+          ) : (
             <div className="max-w-4xl mx-auto space-y-6">
               <div>
                 <h1 className="text-2xl font-bold tracking-tight text-ink">
@@ -1910,7 +1933,7 @@ export const App: React.FC = () => {
                 )}
               </div>
             </div>
-          )}
+          ))}
 
           {/* Scan History View */}
           {activeTab === "history" && (
@@ -3054,6 +3077,7 @@ export const App: React.FC = () => {
               systemInfo={systemInfo}
               pythonStatus={pythonStatus}
               ffmpegInfo={ffmpegInfo}
+              initialSection={settingsSection}
               onConcurrencyChange={(val) => setConcurrency(val)}
               onSpeedLimitChange={(val) => setSpeedLimitKbps(val)}
               onThemeChange={(theme) => setThemePreference(theme, { persist: false })}

@@ -145,6 +145,39 @@ function registerIpcHandlers(): void {
     return pythonBridge.sendRequest("clear_scan_history", { scan_id: scanId });
   });
 
+  // Bulk discovery scan jobs. Starting a job returns immediately; posts and
+  // progress arrive as scan:* notifications forwarded by the bridge.
+  ipcMain.handle(
+    "python:startScan",
+    async (_event, url: string, options?: Record<string, unknown>) => {
+      return pythonBridge.sendRequest("start_scan", { url, options });
+    }
+  );
+
+  ipcMain.handle("python:cancelScan", async (_event, jobId: string) => {
+    return pythonBridge.sendRequest("cancel_scan", { job_id: jobId });
+  });
+
+  ipcMain.handle("python:getScanStatus", async (_event, jobId: string) => {
+    return pythonBridge.sendRequest("get_scan_status", { job_id: jobId });
+  });
+
+  ipcMain.handle("python:listScanJobs", async (_event, limit?: number) => {
+    return pythonBridge.sendRequest("list_scan_jobs", { limit });
+  });
+
+  ipcMain.handle("python:getScanPosts", async (_event, scanId: string) => {
+    return pythonBridge.sendRequest("get_scan_posts", { scan_id: scanId });
+  });
+
+  ipcMain.handle("python:getLibraryStats", async () => {
+    return pythonBridge.sendRequest("get_library_stats");
+  });
+
+  ipcMain.handle("python:getProviderCapabilities", async (_event, url: string) => {
+    return pythonBridge.sendRequest("get_provider_capabilities", { url });
+  });
+
   ipcMain.handle(
     "python:getSavedMedia",
     async (_event, mediaType?: string, limit?: number, offset?: number) => {
@@ -359,6 +392,22 @@ function registerIpcHandlers(): void {
       }
     } catch (err) {
       console.warn(`[desktop] Failed to open path ${targetPath}:`, err);
+    }
+  });
+
+  ipcMain.handle("app:openExternal", async (_event, url: string): Promise<boolean> => {
+    if (!url || typeof url !== "string") return false;
+    try {
+      const parsed = new URL(url.trim());
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        console.warn(`[desktop] Blocked non-web external URL: ${parsed.protocol}`);
+        return false;
+      }
+      await shell.openExternal(parsed.toString());
+      return true;
+    } catch (err) {
+      console.warn("[desktop] Failed to open external URL:", err);
+      return false;
     }
   });
 
@@ -679,6 +728,27 @@ function createWindow(): void {
         }>("get_saved_sources");
         console.log(
           `[smoke-test] Saved sources verified over IPC: count=${savedSourcesResponse.count}`
+        );
+
+        // Verify bulk discovery API surface over IPC (offline checks only)
+        const statsResponse = await pythonBridge.sendRequest<{
+          media_total: number;
+          posts: number;
+          scans: number;
+        }>("get_library_stats");
+        const capabilitiesResponse = await pythonBridge.sendRequest<{
+          capabilities: { provider: string; profile_bulk: boolean; pagination: boolean };
+        }>("get_provider_capabilities", {
+          url: "https://www.youtube.com/@YouTube/videos",
+        });
+        const scanJobsResponse = await pythonBridge.sendRequest<{ count: number }>(
+          "list_scan_jobs"
+        );
+        console.log(
+          `[smoke-test] Bulk discovery verified over IPC: posts=${statsResponse.posts}, scans=${statsResponse.scans}, ` +
+            `provider=${capabilitiesResponse.capabilities.provider}, ` +
+            `bulk=${capabilitiesResponse.capabilities.profile_bulk}, ` +
+            `jobs=${scanJobsResponse.count}`
         );
       } catch (err) {
         console.error("[smoke-test] FAILED: Python ping request failed:", err);

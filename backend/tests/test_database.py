@@ -27,11 +27,11 @@ def repo(temp_db: Path) -> MediaRepository:
 
 
 def test_schema_initialization(temp_db: Path) -> None:
-    """Verify that init_schema creates all tables and sets schema version to 3."""
+    """Verify that init_schema creates all tables and sets the current schema version."""
     conn = get_db_connection(temp_db)
     try:
         init_schema(conn)
-        assert get_current_version(conn) == 4
+        assert get_current_version(conn) == 5
 
         cursor = conn.cursor()
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -47,6 +47,8 @@ def test_schema_initialization(temp_db: Path) -> None:
             "cookie_profiles",
             "domain_headers",
             "saved_sources",
+            "posts",
+            "scan_history_posts",
         }
         assert expected_tables.issubset(tables)
 

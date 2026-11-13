@@ -11,6 +11,7 @@ from ..core.config import default_config
 from ..core.logging import get_logger
 from ..exceptions.base import DatabaseError
 from ..models.media import MediaFormatInfo, MediaItem, MediaType
+from ..models.post import Post, PostType
 from ..models.quality import ImageFormat, VideoContainer, VideoResolution
 from ..models.queue import DownloadTask, TaskStatus
 from ..models.url import ClassifiedUrl
@@ -27,21 +28,32 @@ class MediaRepository:
         ensure_database_initialized(self.db_path)
         self.load_saved_preferences()
 
-    def _row_to_media_item(self, row: sqlite3.Row) -> MediaItem:
-        """Transform a SQLite media_items row into a typed MediaItem domain model."""
+    def _row_to_media_item(
+        self,
+        row: sqlite3.Row,
+        id_key: str = "id",
+        created_key: str = "created_at",
+    ) -> MediaItem:
+        """Transform a SQLite media_items row into a typed MediaItem domain model.
+
+        Joined queries alias the media columns (``m_id``, ``m_created_at``)
+        because ``t.*`` exposes a task ``id``/``created_at`` under the same
+        names, and sqlite3.Row resolves duplicates to the first column.
+        """
         formats_raw = json.loads(row["available_formats_json"] or "[]")
         formats = [MediaFormatInfo.model_validate(f) for f in formats_raw]
         metadata_extra = json.loads(row["metadata_extra_json"] or "{}")
 
-        created_at = row["created_at"]
+        created_at = row[created_key]
         if isinstance(created_at, str):
             try:
                 created_at = datetime.fromisoformat(created_at)
             except ValueError:
                 created_at = datetime.now(UTC)
 
+        columns = set(row.keys())
         return MediaItem(
-            id=row["id"],
+            id=row[id_key],
             source_url=row["source_url"],
             media_type=MediaType(row["media_type"]),
             title=row["title"],
@@ -55,47 +67,125 @@ class MediaRepository:
             available_formats=formats,
             created_at=created_at,
             metadata_extra=metadata_extra,
+            provider=row["provider"] if "provider" in columns else None,
+            provider_media_id=row["provider_media_id"] if "provider_media_id" in columns else None,
+            post_id=row["post_id"] if "post_id" in columns else None,
+            post_url=row["post_url"] if "post_url" in columns else None,
+            attachment_index=row["attachment_index"] if "attachment_index" in columns else 0,
+            mime_type=row["mime_type"] if "mime_type" in columns else None,
+            extension=row["extension"] if "extension" in columns else None,
+            is_thumbnail=bool(row["is_thumbnail"]) if "is_thumbnail" in columns else False,
         )
 
-    def save_scan_result(
+    @staticmethod
+    def _media_row(
+        item: MediaItem, now: str, is_saved: int = 0, media_id: str | None = None
+    ) -> tuple[Any, ...]:
+        """Serialize a MediaItem into the full media_items column tuple (V5)."""
+        return (
+            media_id or item.id,
+            item.source_url,
+            str(item.media_type),
+            item.title,
+            item.author,
+            item.thumbnail_url,
+            item.original_url,
+            item.duration_seconds,
+            item.width,
+            item.height,
+            item.filesize_bytes,
+            json.dumps([f.model_dump() for f in item.available_formats]),
+            json.dumps(item.metadata_extra),
+            item.provider,
+            item.provider_media_id,
+            item.post_id,
+            item.post_url,
+            item.attachment_index,
+            item.mime_type,
+            item.extension,
+            1 if item.is_thumbnail else 0,
+            is_saved,
+            now,
+        )
+
+    _MEDIA_INSERT_SQL = """
+        INSERT INTO media_items (
+            id, source_url, media_type, title, author,
+            thumbnail_url, original_url, duration_seconds,
+            width, height, filesize_bytes,
+            available_formats_json, metadata_extra_json,
+            provider, provider_media_id, post_id, post_url,
+            attachment_index, mime_type, extension, is_thumbnail,
+            is_saved, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            title = excluded.title,
+            author = excluded.author,
+            thumbnail_url = excluded.thumbnail_url,
+            available_formats_json = excluded.available_formats_json,
+            metadata_extra_json = excluded.metadata_extra_json,
+            provider = excluded.provider,
+            provider_media_id = excluded.provider_media_id,
+            post_id = excluded.post_id,
+            post_url = excluded.post_url,
+            attachment_index = excluded.attachment_index,
+            mime_type = excluded.mime_type,
+            extension = excluded.extension,
+            is_thumbnail = excluded.is_thumbnail,
+            is_saved = MAX(media_items.is_saved, excluded.is_saved)
+    """
+
+    def _canonical_media_id(self, conn: sqlite3.Connection, item: MediaItem) -> str:
+        """Reuse the stored row id when this provider identity already exists.
+
+        The partial unique index on ``(provider, provider_media_id)`` is stricter
+        than the primary key, so an identity-aware lookup keeps legacy or
+        reseeded rows from colliding on insert.
+        """
+        if not item.provider_media_id:
+            return item.id
+        row = conn.execute(
+            "SELECT id FROM media_items WHERE provider = ? AND provider_media_id = ?",
+            (item.provider, item.provider_media_id),
+        ).fetchone()
+        return str(row["id"]) if row else item.id
+
+    def _upsert_media(
+        self,
+        conn: sqlite3.Connection,
+        item: MediaItem,
+        now: str,
+        is_saved: int = 0,
+    ) -> bool:
+        """Insert or update one media row; returns True when it was new."""
+        media_id = self._canonical_media_id(conn, item)
+        existed = (
+            conn.execute("SELECT 1 FROM media_items WHERE id = ?", (media_id,)).fetchone()
+            is not None
+        )
+        conn.execute(
+            self._MEDIA_INSERT_SQL,
+            self._media_row(item, now, is_saved, media_id=media_id),
+        )
+        return not existed
+
+    def create_scan(
         self,
         classified: ClassifiedUrl,
-        items: list[MediaItem],
+        provider: str | None = None,
+        status: str = "running",
     ) -> str:
-        """Persist a completed scan event and its discovered media items into the database."""
+        """Create a scan history row up front so progress can be persisted incrementally."""
         scan_id = str(uuid.uuid4())
         now = datetime.now(UTC).isoformat()
-
-        media_rows = []
-        junction_rows = []
-        for idx, item in enumerate(items):
-            media_rows.append(
-                (
-                    item.id,
-                    item.source_url,
-                    str(item.media_type),
-                    item.title,
-                    item.author,
-                    item.thumbnail_url,
-                    item.original_url,
-                    item.duration_seconds,
-                    item.width,
-                    item.height,
-                    item.filesize_bytes,
-                    json.dumps([f.model_dump() for f in item.available_formats]),
-                    json.dumps(item.metadata_extra),
-                    now,
-                )
-            )
-            junction_rows.append((scan_id, item.id, idx))
-
         with get_db_session(self.db_path) as conn:
             conn.execute(
                 """
                 INSERT INTO scan_history (
                     id, raw_url, normalized_url, category, platform,
-                    domain, title_hint, author_hint, item_count, is_supported, scanned_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    domain, title_hint, author_hint, item_count, is_supported,
+                    scanned_at, status, provider
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
                 """,
                 (
                     scan_id,
@@ -106,29 +196,221 @@ class MediaRepository:
                     classified.domain,
                     classified.title_hint,
                     classified.author_hint,
-                    len(items),
                     1 if classified.is_supported else 0,
+                    now,
+                    status,
+                    provider,
+                ),
+            )
+        return scan_id
+
+    def save_scan_post(self, scan_id: str, post: Post, order: int = 0) -> int:
+        """Persist one post, its attachments, and the scan junction rows.
+
+        Returns the number of newly inserted media rows (duplicates are skipped
+        by stable identity, so rescans do not inflate the library).
+        """
+        now = datetime.now(UTC).isoformat()
+        was_new = 0
+        with get_db_session(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO posts (
+                    id, provider, provider_post_id, source_url, post_url,
+                    author, title, post_type, created_at, metadata_extra_json, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    author = excluded.author,
+                    title = excluded.title,
+                    post_type = excluded.post_type,
+                    metadata_extra_json = excluded.metadata_extra_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    post.id,
+                    post.provider,
+                    post.provider_post_id,
+                    post.source_url,
+                    post.post_url,
+                    post.author,
+                    post.title,
+                    str(post.post_type),
+                    post.created_at.isoformat() if post.created_at else None,
+                    json.dumps(post.metadata_extra),
                     now,
                 ),
             )
+            conn.execute(
+                """
+                INSERT INTO scan_history_posts (scan_id, post_id, item_order)
+                VALUES (?, ?, ?)
+                ON CONFLICT(scan_id, post_id) DO UPDATE SET item_order = excluded.item_order
+                """,
+                (scan_id, post.id, order),
+            )
 
-            if media_rows:
-                conn.executemany(
+            for item in post.media_items:
+                if self._upsert_media(conn, item, now):
+                    was_new += 1
+                conn.execute(
                     """
-                    INSERT INTO media_items (
-                        id, source_url, media_type, title, author,
-                        thumbnail_url, original_url, duration_seconds,
-                        width, height, filesize_bytes,
-                        available_formats_json, metadata_extra_json, is_saved, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
-                    ON CONFLICT(id) DO UPDATE SET
-                        title = excluded.title,
-                        thumbnail_url = excluded.thumbnail_url,
-                        available_formats_json = excluded.available_formats_json,
-                        metadata_extra_json = excluded.metadata_extra_json
+                    INSERT OR IGNORE INTO scan_history_items (scan_id, media_id, item_order)
+                    VALUES (?, ?, ?)
                     """,
-                    media_rows,
+                    (
+                        scan_id,
+                        self._canonical_media_id(conn, item),
+                        order * 1000 + item.attachment_index,
+                    ),
                 )
+        return was_new
+
+    def finalize_scan(
+        self,
+        scan_id: str,
+        status: str,
+        *,
+        posts_count: int = 0,
+        images_count: int = 0,
+        videos_count: int = 0,
+        pages_fetched: int = 0,
+        stop_reason: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        """Mark a scan finished and store its aggregate counts."""
+        now = datetime.now(UTC).isoformat()
+        with get_db_session(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE scan_history SET
+                    status = ?,
+                    item_count = ?,
+                    posts_count = ?,
+                    images_count = ?,
+                    videos_count = ?,
+                    pages_fetched = ?,
+                    stop_reason = ?,
+                    completed_at = ?,
+                    platform = COALESCE(platform, NULL)
+                WHERE id = ?
+                """,
+                (
+                    status,
+                    images_count + videos_count,
+                    posts_count,
+                    images_count,
+                    videos_count,
+                    pages_fetched,
+                    stop_reason or error,
+                    now,
+                    scan_id,
+                ),
+            )
+
+    def get_scan_posts(self, scan_id: str) -> list[Post]:
+        """Load the posts discovered by a scan, each with its media items."""
+        conn = get_db_connection(self.db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT p.*
+                FROM scan_history_posts shp
+                JOIN posts p ON shp.post_id = p.id
+                WHERE shp.scan_id = ?
+                ORDER BY shp.item_order ASC
+                """,
+                (scan_id,),
+            )
+            post_rows = cursor.fetchall()
+            posts: list[Post] = []
+            for row in post_rows:
+                item_rows = cursor.execute(
+                    "SELECT * FROM media_items WHERE post_id = ? "
+                    "ORDER BY attachment_index ASC",
+                    (row["id"],),
+                ).fetchall()
+                posts.append(
+                    Post(
+                        id=row["id"],
+                        provider=row["provider"],
+                        provider_post_id=row["provider_post_id"],
+                        source_url=row["source_url"],
+                        post_url=row["post_url"],
+                        author=row["author"],
+                        title=row["title"],
+                        post_type=PostType(row["post_type"]),
+                        media_items=[self._row_to_media_item(r) for r in item_rows],
+                        created_at=datetime.fromisoformat(row["created_at"])
+                        if row["created_at"]
+                        else None,
+                        metadata_extra=json.loads(row["metadata_extra_json"] or "{}"),
+                    )
+                )
+            return posts
+        finally:
+            conn.close()
+
+    def get_library_stats(self) -> dict[str, Any]:
+        """Aggregate real library numbers for the overview dashboard."""
+        conn = get_db_connection(self.db_path)
+        try:
+            cursor = conn.cursor()
+            media = cursor.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN media_type = 'image' THEN 1 ELSE 0 END) AS images,
+                    SUM(CASE WHEN media_type = 'video' THEN 1 ELSE 0 END) AS videos,
+                    SUM(CASE WHEN is_saved = 1 THEN 1 ELSE 0 END) AS saved
+                FROM media_items
+                """
+            ).fetchone()
+            scans = cursor.execute(
+                "SELECT COUNT(*) AS total FROM scan_history WHERE status = 'completed'"
+            ).fetchone()
+            posts = cursor.execute("SELECT COUNT(*) AS total FROM posts").fetchone()
+            downloads = cursor.execute(
+                """
+                SELECT
+                    SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
+                    SUM(CASE WHEN status IN ('queued','downloading','merging') THEN 1 ELSE 0 END)
+                        AS active
+                FROM download_tasks
+                """
+            ).fetchone()
+            return {
+                "media_total": int(media["total"] or 0),
+                "images": int(media["images"] or 0),
+                "videos": int(media["videos"] or 0),
+                "saved": int(media["saved"] or 0),
+                "posts": int(posts["total"] or 0),
+                "scans": int(scans["total"] or 0),
+                "downloads_completed": int(downloads["completed"] or 0),
+                "downloads_active": int(downloads["active"] or 0),
+            }
+        finally:
+            conn.close()
+
+
+    def save_scan_result(
+        self,
+        classified: ClassifiedUrl,
+        items: list[MediaItem],
+    ) -> str:
+        """Persist a completed scan event and its discovered media items into the database."""
+        provider = next((item.provider for item in items if item.provider), None)
+        scan_id = self.create_scan(classified, provider=provider, status="completed")
+        now = datetime.now(UTC).isoformat()
+
+        media_rows = [self._media_row(item, now) for item in items]
+        junction_rows = [(scan_id, item.id, idx) for idx, item in enumerate(items)]
+        images = sum(1 for item in items if item.media_type == MediaType.IMAGE)
+        videos = sum(1 for item in items if item.media_type == MediaType.VIDEO)
+
+        with get_db_session(self.db_path) as conn:
+            if media_rows:
+                conn.executemany(self._MEDIA_INSERT_SQL, media_rows)
                 conn.executemany(
                     """
                     INSERT OR IGNORE INTO scan_history_items (scan_id, media_id, item_order)
@@ -136,6 +418,15 @@ class MediaRepository:
                     """,
                     junction_rows,
                 )
+            conn.execute(
+                """
+                UPDATE scan_history SET
+                    item_count = ?, images_count = ?, videos_count = ?,
+                    pages_fetched = 1, completed_at = ?
+                WHERE id = ?
+                """,
+                (len(items), images, videos, now, scan_id),
+            )
 
         logger.info(f"Saved scan result {scan_id} with {len(items)} items.")
         return scan_id
@@ -159,6 +450,14 @@ class MediaRepository:
                     s.item_count,
                     s.is_supported,
                     s.scanned_at,
+                    s.status,
+                    s.provider,
+                    s.posts_count,
+                    s.images_count,
+                    s.videos_count,
+                    s.pages_fetched,
+                    s.stop_reason,
+                    s.completed_at,
                     (
                         SELECT m.thumbnail_url
                         FROM scan_history_items shi
@@ -194,7 +493,22 @@ class MediaRepository:
                 (scan_id,),
             )
             rows = cursor.fetchall()
-            return [self._row_to_media_item(r) for r in rows]
+            if rows:
+                return [self._row_to_media_item(r) for r in rows]
+
+            # Bulk scans persist posts/attachments instead of scan_history_items,
+            # so fall back to the post linkage for V5-era scans.
+            cursor.execute(
+                """
+                SELECT m.*
+                FROM scan_history_posts shp
+                JOIN media_items m ON m.post_id = shp.post_id
+                WHERE shp.scan_id = ?
+                ORDER BY shp.item_order ASC, m.attachment_index ASC, m.id ASC
+                """,
+                (scan_id,),
+            )
+            return [self._row_to_media_item(r) for r in cursor.fetchall()]
         finally:
             conn.close()
 
@@ -224,46 +538,10 @@ class MediaRepository:
             return
 
         now = datetime.now(UTC).isoformat()
-        rows = [
-            (
-                item.id,
-                item.source_url,
-                str(item.media_type),
-                item.title,
-                item.author,
-                item.thumbnail_url,
-                item.original_url,
-                item.duration_seconds,
-                item.width,
-                item.height,
-                item.filesize_bytes,
-                json.dumps([f.model_dump() for f in item.available_formats]),
-                json.dumps(item.metadata_extra),
-                1 if is_saved else 0,
-                now,
-            )
-            for item in items
-        ]
 
         with get_db_session(self.db_path) as conn:
-            conn.executemany(
-                """
-                INSERT INTO media_items (
-                    id, source_url, media_type, title, author,
-                    thumbnail_url, original_url, duration_seconds,
-                    width, height, filesize_bytes,
-                    available_formats_json, metadata_extra_json, is_saved, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    title = excluded.title,
-                    author = excluded.author,
-                    thumbnail_url = excluded.thumbnail_url,
-                    available_formats_json = excluded.available_formats_json,
-                    metadata_extra_json = excluded.metadata_extra_json,
-                    is_saved = excluded.is_saved
-                """,
-                rows,
-            )
+            for item in items:
+                self._upsert_media(conn, item, now, 1 if is_saved else 0)
 
     def save_media_item(self, item: MediaItem, is_saved: bool = True) -> None:
         """Persist or bookmark a single media item in the media library."""
@@ -429,37 +707,41 @@ class MediaRepository:
         self.save_media_items([t.media_item for t in tasks], is_saved=False)
 
         now = datetime.now(UTC).isoformat()
-        rows = []
-        for task in tasks:
-            format_json = (
-                json.dumps(task.selected_format.model_dump())
-                if task.selected_format
-                else None
-            )
-            created_at_str = task.created_at.isoformat() if task.created_at else now
-            completed_at_str = (
-                task.completed_at.isoformat() if task.completed_at else None
-            )
-            rows.append(
-                (
-                    task.id,
-                    task.media_item.id,
-                    str(task.status),
-                    format_json,
-                    str(task.destination_path) if task.destination_path else None,
-                    str(task.temp_path) if task.temp_path else None,
-                    task.bytes_downloaded,
-                    task.total_bytes,
-                    task.progress_percent,
-                    task.error_message,
-                    task.retry_count,
-                    created_at_str,
-                    now,
-                    completed_at_str,
-                )
-            )
 
         with get_db_session(self.db_path) as conn:
+            rows = []
+            for task in tasks:
+                format_json = (
+                    json.dumps(task.selected_format.model_dump())
+                    if task.selected_format
+                    else None
+                )
+                created_at_str = task.created_at.isoformat() if task.created_at else now
+                completed_at_str = (
+                    task.completed_at.isoformat() if task.completed_at else None
+                )
+                # The provider identity may map to an existing media row with a
+                # different id; the FK must point at the row actually stored.
+                media_id = self._canonical_media_id(conn, task.media_item)
+                rows.append(
+                    (
+                        task.id,
+                        media_id,
+                        str(task.status),
+                        format_json,
+                        str(task.destination_path) if task.destination_path else None,
+                        str(task.temp_path) if task.temp_path else None,
+                        task.bytes_downloaded,
+                        task.total_bytes,
+                        task.progress_percent,
+                        task.error_message,
+                        task.retry_count,
+                        created_at_str,
+                        now,
+                        completed_at_str,
+                    )
+                )
+
             conn.executemany(
                 """
                 INSERT INTO download_tasks (
@@ -489,7 +771,7 @@ class MediaRepository:
 
     def _row_to_download_task(self, row: Any) -> DownloadTask:
         """Helper to deserialize a sqlite3.Row into a typed DownloadTask model."""
-        media_item = self._row_to_media_item(row)
+        media_item = self._row_to_media_item(row, id_key="m_id", created_key="m_created_at")
         fmt = (
             MediaFormatInfo.model_validate(json.loads(row["selected_format_json"]))
             if row["selected_format_json"]
@@ -528,7 +810,7 @@ class MediaRepository:
         try:
             cursor = conn.cursor()
             query = """
-                SELECT t.*, m.*, t.id AS task_id, m.id AS m_id
+                SELECT t.*, m.*, t.id AS task_id, m.id AS m_id, m.created_at AS m_created_at
                 FROM download_tasks t
                 JOIN media_items m ON t.media_id = m.id
             """
@@ -554,7 +836,7 @@ class MediaRepository:
         try:
             cursor = conn.cursor()
             query = """
-                SELECT t.*, m.*, t.id AS task_id, m.id AS m_id
+                SELECT t.*, m.*, t.id AS task_id, m.id AS m_id, m.created_at AS m_created_at
                 FROM download_tasks t
                 JOIN media_items m ON t.media_id = m.id
                 WHERE t.status IN ('downloading', 'merging', 'scanning', 'queued')
@@ -572,7 +854,7 @@ class MediaRepository:
         try:
             cursor = conn.cursor()
             query = """
-                SELECT t.*, m.*, t.id AS task_id, m.id AS m_id
+                SELECT t.*, m.*, t.id AS task_id, m.id AS m_id, m.created_at AS m_created_at
                 FROM download_tasks t
                 JOIN media_items m ON t.media_id = m.id
                 WHERE t.id = ?
@@ -692,6 +974,7 @@ class MediaRepository:
             else str(default_config.default_image_format),
             "theme": default_config.theme,
             "log_level": default_config.log_level,
+            "cookie_browser": "chrome",
         }
         stored = self.get_all_stored_preferences()
         defaults.update(stored)
