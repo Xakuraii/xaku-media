@@ -43,7 +43,7 @@ interface SettingsViewProps {
   initialSection?: "cookies";
   onConcurrencyChange?: (val: number) => void;
   onSpeedLimitChange?: (val: number) => void;
-  onThemeChange?: (theme: "dark" | "light" | "system") => void;
+  onThemeChange?: (theme: "dark" | "light" | "system", origin?: HTMLElement | null) => void;
   theme?: "dark" | "light" | "system";
 }
 
@@ -315,7 +315,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }, 2800);
   };
 
-  const handleDraftChange = (updates: Partial<AppPreferences>) => {
+  const handleDraftChange = (
+    updates: Partial<AppPreferences>,
+    origin?: HTMLElement | null
+  ) => {
     setDraft((prev) => ({ ...prev, ...updates }));
     // Apply runtime side effects immediately for responsiveness; Save persists to DB.
     if (updates.max_concurrent_downloads !== undefined) {
@@ -329,7 +332,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       window.api?.setSpeedLimit?.(val).catch(() => undefined);
     }
     if (updates.theme && onThemeChange) {
-      onThemeChange(updates.theme);
+      onThemeChange(updates.theme, origin);
     }
   };
 
@@ -1135,7 +1138,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <button
                 key={theme.id}
                 type="button"
-                onClick={() => handleDraftChange({ theme: theme.id as any })}
+                onClick={(e) =>
+                  handleDraftChange({ theme: theme.id as any }, e.currentTarget)
+                }
                 className={`p-3 rounded-xl border text-left flex flex-col space-y-1 transition-all ${
                   (activeTheme ?? draft.theme) === theme.id
                     ? "bg-accent/10 border-accent/40 text-ink shadow-sm shadow-accent/10"

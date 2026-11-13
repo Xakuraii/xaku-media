@@ -1131,7 +1131,7 @@ export const App: React.FC = () => {
             >
               <button
                 type="button"
-                onClick={() => setThemePreference("light")}
+                onClick={(e) => setThemePreference("light", { origin: e.currentTarget })}
                 aria-pressed={resolvedTheme === "light"}
                 aria-label="Use light theme"
                 className={`rounded-full p-1.5 transition-colors ${
@@ -1144,7 +1144,7 @@ export const App: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => setThemePreference("dark")}
+                onClick={(e) => setThemePreference("dark", { origin: e.currentTarget })}
                 aria-pressed={resolvedTheme === "dark"}
                 aria-label="Use dark theme"
                 className={`rounded-full p-1.5 transition-colors ${
@@ -3087,7 +3087,9 @@ export const App: React.FC = () => {
               initialSection={settingsSection}
               onConcurrencyChange={(val) => setConcurrency(val)}
               onSpeedLimitChange={(val) => setSpeedLimitKbps(val)}
-              onThemeChange={(theme) => setThemePreference(theme, { persist: false })}
+              onThemeChange={(theme, origin) =>
+                setThemePreference(theme, { persist: false, origin })
+              }
               theme={themePreference}
             />
           )}

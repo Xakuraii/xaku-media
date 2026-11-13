@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { runThemeCircleTransition } from "../lib/themeTransition";
 
 export type Theme = "light" | "dark";
 
@@ -57,15 +58,18 @@ export function useTheme() {
     return () => query.removeEventListener("change", onChange);
   }, []);
 
-  const toggleTheme = () => {
+  const toggleTheme = (origin?: HTMLElement | null) => {
     const next: Theme = theme === "dark" ? "light" : "dark";
     hasExplicitChoice.current = true;
-    setTheme(next);
     try {
       localStorage.setItem(STORAGE_KEY, next);
     } catch {
       // Ignore localStorage exceptions in private browsing.
     }
+    runThemeCircleTransition(() => {
+      applyTheme(next);
+      setTheme(next);
+    }, origin);
   };
 
   return { theme, toggleTheme };

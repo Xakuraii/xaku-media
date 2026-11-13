@@ -52,7 +52,7 @@ export const Navbar: React.FC = () => {
           {/* Light / dark mode toggle */}
           <button
             type="button"
-            onClick={toggleTheme}
+            onClick={(e) => toggleTheme(e.currentTarget)}
             className="grid place-items-center w-9 h-9 rounded-lg text-muted hover:text-ink hover:bg-raised transition-colors duration-150"
             aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
             title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
@@ -89,7 +89,7 @@ export const Navbar: React.FC = () => {
         <div className="flex md:hidden items-center space-x-1">
           <button
             type="button"
-            onClick={toggleTheme}
+            onClick={(e) => toggleTheme(e.currentTarget)}
             className="grid place-items-center w-9 h-9 rounded-lg text-muted hover:text-ink transition-colors duration-150"
             aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
           >

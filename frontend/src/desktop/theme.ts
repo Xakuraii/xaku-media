@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { runThemeCircleTransition } from "../lib/themeTransition";
 
 export type ThemePreference = "dark" | "light" | "system";
 export type ResolvedTheme = "dark" | "light";
@@ -97,10 +98,27 @@ export function useDesktopTheme() {
    * opt out of persistence when it already writes preferences through its own
    * update call (e.g. the Settings form).
    */
-  const setPreference = (next: ThemePreference, options?: { persist?: boolean }) => {
+  const setPreference = (
+    next: ThemePreference,
+    options?: { persist?: boolean; origin?: HTMLElement | null }
+  ) => {
     interacted.current = true;
-    setPreferenceState(next);
-    setResolved(applyTheme(next));
+    const currentResolved: ResolvedTheme =
+      typeof document !== "undefined" && document.documentElement.classList.contains("dark")
+        ? "dark"
+        : "light";
+    const nextResolved = resolveTheme(next);
+
+    const commit = () => {
+      setPreferenceState(next);
+      setResolved(applyTheme(next));
+    };
+
+    if (options?.origin && nextResolved !== currentResolved) {
+      runThemeCircleTransition(commit, options.origin);
+    } else {
+      commit();
+    }
 
     if (options?.persist === false) return;
     window.api?.updatePreferences?.({ theme: next }).catch((err) => {
