@@ -1,31 +1,31 @@
 import React from "react";
-import { Search, CheckSquare, SlidersHorizontal, Download } from "lucide-react";
+import { Search, Sparkles, SlidersHorizontal, Download } from "lucide-react";
 
 export const WorkflowSection: React.FC = () => {
   const steps = [
     {
       num: "01",
       icon: Search,
-      title: "Paste URL",
-      desc: "Paste any video, album, or direct media link. XakuMedia scans the source in seconds.",
+      title: "Paste your sources",
+      desc: "Drop in one or many profile, channel, album, or media URLs. Bookmark a link in the same step if you want to rescan it later.",
     },
     {
       num: "02",
-      icon: CheckSquare,
-      title: "Inspect & select",
-      desc: "Preview thumbnail cards, check video resolutions or codecs, and select individual files.",
+      icon: Sparkles,
+      title: "Watch the gallery fill",
+      desc: "Background jobs page through supported sources and stream posts and media into a live gallery, so you can start reviewing before the scan finishes.",
     },
     {
       num: "03",
       icon: SlidersHorizontal,
-      title: "Choose quality",
-      desc: "Pick your preferred resolution (up to 4K), container format, and destination directory.",
+      title: "Select only what's new",
+      desc: "Filter images, videos, or albums, then use Select all or Select new. Preview the quality and expected size chosen by your saved settings.",
     },
     {
       num: "04",
       icon: Download,
-      title: "Download",
-      desc: "Files stream directly to your disk with range resumption and are cataloged in your library.",
+      title: "Download, merge, done",
+      desc: "Files download with concurrent workers and Range resumption, merged losslessly when needed, and cataloged in your local library and scan history.",
     },
   ];
 
@@ -35,7 +35,7 @@ export const WorkflowSection: React.FC = () => {
         <div className="max-w-xl">
           <h2 className="section-title">How it works</h2>
           <p className="section-lead">
-            Four simple steps from URL to organized local media.
+            From a list of links to a reviewed, downloaded collection — bulk first.
           </p>
         </div>
 

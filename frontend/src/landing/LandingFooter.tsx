@@ -8,6 +8,7 @@ export const LandingFooter: React.FC = () => {
     { label: "How it works", href: "#workflow" },
     { label: "Requirements", href: "#requirements" },
     { label: "Installation", href: "#installation" },
+    { label: "Cookies", href: "#cookies" },
     { label: "Privacy", href: "#security" },
     { label: "FAQ", href: "#faq" },
   ];

@@ -2,13 +2,51 @@ import React, { useState } from "react";
 import { ChevronDown, ExternalLink } from "lucide-react";
 import { RELEASE_CONFIG } from "./downloadConfig";
 
+const COOKIE_EXTENSION_URL =
+  "https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc";
+
 export const FaqSection: React.FC = () => {
   const [openIndex, setOpenIndex] = useState<number | null>(0);
 
-  const faqs = [
+  const faqs: Array<{ q: string; a: React.ReactNode }> = [
     {
       q: "Is XakuMedia completely free?",
       a: "Yes. XakuMedia is 100% free and open-source. There are no subscriptions, paid upgrades, or advertisements.",
+    },
+    {
+      q: "Can I scan an entire profile or channel?",
+      a: "Yes, for supported sources. Paste profile, channel, album, or post URLs into the bulk scan box (one per line) and set optional post/media limits. Jobs page through results and stream new posts into the gallery while the scan is still running. Coverage depends on the provider, and auth-heavy sites may need cookies.",
+    },
+    {
+      q: "Why does a site say it needs cookies?",
+      a: (
+        <>
+          Some sources only serve media to a signed-in session. Export a Netscape{" "}
+          <span className="font-mono text-ink">cookies.txt</span> with the{" "}
+          <a
+            href={COOKIE_EXTENSION_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-accent underline underline-offset-4 decoration-1 hover:decoration-2"
+          >
+            Get cookies.txt LOCALLY
+          </a>{" "}
+          browser extension, then import it in Settings → Session Credentials (Chrome is
+          the default browser choice). Cookie files stay on your machine. If a scan still
+          fails, the error panel names the cause and the next step.{" "}
+          <a
+            href="#cookies"
+            className="text-accent underline underline-offset-4 decoration-1 hover:decoration-2"
+          >
+            Read the full cookie guide
+          </a>{" "}
+          for export steps, format, and troubleshooting.
+        </>
+      ),
+    },
+    {
+      q: "What does “Select new” do?",
+      a: "It selects only the media the app has not downloaded before, so rescanning a profile or channel is a one-click incremental download. Already-downloaded cards are marked with a badge, and Select all still picks everything in the current view.",
     },
     {
       q: "Why does Windows SmartScreen show an unrecognized app prompt?",
@@ -20,11 +58,11 @@ export const FaqSection: React.FC = () => {
     },
     {
       q: "Can I limit the download speed?",
-      a: "Yes. You can configure global speed limits (such as 512 KB/s, 2 MB/s, 10 MB/s, or Unlimited) from Settings or the active Downloads toolbar to avoid saturating your bandwidth.",
+      a: "Yes. Set a global bandwidth limit (such as 500 KB/s, 2 MB/s, 10 MB/s, or Unlimited) in Settings or from the Downloads toolbar. The limiter is shared across all active workers and applies immediately.",
     },
     {
       q: "Can I download 4K video streams?",
-      a: "Yes. When a source provides 4K or high-framerate streams, XakuMedia detects them and uses bundled FFmpeg to merge high-res video and audio tracks losslessly (-c copy) into MP4, MKV, or WebM.",
+      a: "Yes. When a source provides 4K or high-framerate streams, XakuMedia detects them and uses bundled FFmpeg to merge high-res video and audio tracks losslessly (-c copy) into MP4, MKV, or WebM. Choose the preferred resolution in Settings; the scan gallery previews the size for that quality.",
     },
     {
       q: "Where can I report bugs or suggest features?",
@@ -38,7 +76,7 @@ export const FaqSection: React.FC = () => {
         <div className="max-w-xl">
           <h2 className="section-title">Frequently asked questions</h2>
           <p className="section-lead">
-            Quick answers about installation, privacy, and media downloading.
+            Quick answers about bulk scanning, cookies, privacy, and downloads.
           </p>
         </div>
 
@@ -79,9 +117,9 @@ export const FaqSection: React.FC = () => {
                   }`}
                 >
                   <div className="overflow-hidden">
-                    <p className="pb-5 pr-6 sm:pr-10 text-sm text-muted leading-relaxed">
+                    <div className="pb-5 pr-6 sm:pr-10 text-sm text-muted leading-relaxed">
                       {faq.a}
-                    </p>
+                    </div>
                   </div>
                 </div>
               </div>

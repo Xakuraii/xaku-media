@@ -6,7 +6,7 @@ export const SecurityPrivacySection: React.FC = () => {
     {
       icon: ServerOff,
       title: "100% local-first storage",
-      desc: "All metadata, history, and queue records are stored exclusively in your local SQLite database. No external cloud backend or remote servers.",
+      desc: "All metadata, history, queue records, and imported cookie files stay on your machine in local SQLite and app data. There is no external cloud backend or remote account.",
     },
     {
       icon: EyeOff,

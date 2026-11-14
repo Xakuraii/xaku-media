@@ -1,10 +1,10 @@
 import React from "react";
 import {
   Search,
+  Sparkles,
   Film,
   Gauge,
-  Layers,
-  HardDrive,
+  Database,
   Cookie,
 } from "lucide-react";
 
@@ -12,39 +12,39 @@ export const FeaturesSection: React.FC = () => {
   const features = [
     {
       icon: Search,
-      title: "Smart URL scanner",
+      title: "Bulk profile & channel scans",
       description:
-        "Automatically identifies direct video links, multi-item image galleries, and supported platform channels with zero manual configuration.",
+        "Paste multiple profile, channel, album, or post URLs at once. Background scan jobs page through supported sources and stream posts and media into one gallery as they are discovered.",
+    },
+    {
+      icon: Sparkles,
+      title: "Select all, select only new",
+      description:
+        "Filter by images, videos, or albums, then pick everything or only the items you have never downloaded. Downloaded badges and per-scan focus keep large rescans quick to review.",
     },
     {
       icon: Film,
       title: "Lossless stream merging",
       description:
-        "Merges separate high-definition video and audio streams using bundled FFmpeg with copy mode (-c copy). No CPU re-encoding or quality loss.",
+        "Prefers a muxed stream when one exists; otherwise it downloads the best video track plus the best audio track and merges them with bundled FFmpeg in copy mode — with cancellation and timeout safeguards.",
     },
     {
       icon: Gauge,
-      title: "Bandwidth speed limiting",
+      title: "Speed & concurrency control",
       description:
-        "Cap download speeds dynamically (512 KB/s to Unlimited) so large media batches don't saturate your home or office internet connection.",
+        "A global token-bucket limiter (Unlimited to custom KB/s) and configurable download worker slots keep large batches inside your bandwidth budget without throttling unrelated traffic.",
     },
     {
-      icon: Layers,
-      title: "Concurrent queue & resumption",
+      icon: Database,
+      title: "Local library & scan history",
       description:
-        "Configurable worker slots (1 to 10 downloads). Interrupted transfers resume automatically where they left off using HTTP Range requests.",
-    },
-    {
-      icon: HardDrive,
-      title: "Local SQLite media library",
-      description:
-        "Every scan, task, and bookmark is cataloged locally in SQLite with WAL mode. Search, filter by file container, and sort offline in milliseconds.",
+        "Every scan, post, media item, and task lives in local SQLite. Bookmark links, rescan a history entry with its URL prefilled, and search or sort your collection entirely offline.",
     },
     {
       icon: Cookie,
-      title: "Browser cookie importer",
+      title: "Cookie-aware sign-in help",
       description:
-        "Import authenticated session cookies directly from Chrome, Edge, Firefox, Brave, Opera, or Vivaldi using secure Windows DPAPI decryption.",
+        "Import a Netscape cookies.txt (Chrome by default) for sources that require a session. When a site still fails, the error names the cause and the exact next step instead of a generic failure.",
     },
   ];
 
@@ -54,11 +54,11 @@ export const FeaturesSection: React.FC = () => {
         {/* Section heading */}
         <div className="max-w-xl">
           <h2 className="section-title">
-            Designed for speed, clarity, and control
+            Built for bulk discovery, tuned for control
           </h2>
           <p className="section-lead">
-            Everything you need for bulk downloading — none of the bloat of
-            web-based tools.
+            The same workspace you see in the desktop preview — profile scanning,
+            gallery selection, and downloads that stay on your machine.
           </p>
         </div>
 
@@ -84,6 +84,12 @@ export const FeaturesSection: React.FC = () => {
             );
           })}
         </div>
+
+        <p className="mt-4 font-mono text-xs text-faint">
+          Provider coverage is honest by design: verified direct URLs, native video hosts,
+          and gallery-dl platforms work out of the box; auth-heavy sites need your own
+          cookies.
+        </p>
       </div>
     </section>
   );

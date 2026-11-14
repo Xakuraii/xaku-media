@@ -4,12 +4,14 @@ import { RELEASE_CONFIG } from "./downloadConfig";
 
 export const ReleaseChangelogSection: React.FC = () => {
   const highlights = [
-    "Process-isolated Python engine with typed JSON-RPC 2.0 stdio communication",
-    "Multi-provider extraction integrating direct HTTP probes, yt-dlp, and gallery-dl",
-    "Lossless FFmpeg stream multiplexing (video + audio copy mode with zero re-encoding)",
-    "Token-bucket bandwidth rate limiter for dynamic network speed regulation",
-    "Local SQLite database (V1-V4 migrations) with automated interrupted task recovery",
-    "Complete automated regression suite with 140 passing test cases",
+    "Bulk profile and channel scanning with paginated, cancellable background jobs",
+    "Gallery workspace with Select all, Select only new, downloaded badges, and per-scan focus",
+    "Scan History Rescan prefills the Scan tab; bookmark links are saved as sources",
+    "Stable media identity and identity-aware upserts keep rescans duplicate-free",
+    "Cookie import (Chrome default) plus actionable, cookie-aware scan errors",
+    "Lossless FFmpeg video + audio merging with timeout, cancel, and best-audio fallback",
+    "Local SQLite library, scan history, and settings with explicit Save persistence",
+    "Backend regression suite and Electron desktop smoke tests cover the scan and download flows",
   ];
 
   return (

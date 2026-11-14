@@ -5,6 +5,7 @@ import { FeaturesSection } from "./FeaturesSection";
 import { WorkflowSection } from "./WorkflowSection";
 import { RequirementsSection } from "./RequirementsSection";
 import { InstallationSection } from "./InstallationSection";
+import { CookieGuideSection } from "./CookieGuideSection";
 import { SecurityPrivacySection } from "./SecurityPrivacySection";
 import { ReleaseChangelogSection } from "./ReleaseChangelogSection";
 import { FaqSection } from "./FaqSection";
@@ -57,13 +58,16 @@ export const LandingPage: React.FC = () => {
         {/* 5. Installation & troubleshooting */}
         <InstallationSection />
 
-        {/* 6. Security, privacy & limits */}
+        {/* 6. Cookies and session access for strict sites */}
+        <CookieGuideSection />
+
+        {/* 7. Security, privacy & limits */}
         <SecurityPrivacySection />
 
-        {/* 7. Current version & changelog */}
+        {/* 8. Current version & changelog */}
         <ReleaseChangelogSection />
 
-        {/* 8. Frequently asked questions */}
+        {/* 9. Frequently asked questions */}
         <FaqSection />
       </main>
 
