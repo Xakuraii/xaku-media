@@ -221,10 +221,13 @@ class GalleryDlProvider(BaseProvider):
             from ..db import default_repository
 
             profile = default_repository.get_cookie_profile_for_domain(safe_url)
-            if profile and profile.cookie_file_path:
+            category = getattr(extractor, "category", None)
+            if category and profile and profile.cookie_file_path:
                 cookie_path = Path(profile.cookie_file_path)
                 if cookie_path.exists() and cookie_path.is_file():
-                    gdl_config.set(("extractor",), "cookies", str(cookie_path))
+                    # Scope cookies to this site's extractor instead of leaking
+                    # one site's session to every gallery-dl request.
+                    gdl_config.set(("extractor", category), "cookies", str(cookie_path))
         except Exception:
             pass
         extractor.initialize()

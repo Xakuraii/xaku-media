@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -145,6 +146,152 @@ def get_ffmpeg_info() -> dict[str, Any]:
     }
 
 
+# Container extension -> FFmpeg muxer. Staging files such as ``name.mp4.part``
+# have an extension that FFmpeg cannot map, so callers must pass the real
+# container and the command must name the muxer explicitly with ``-f``.
+_CONTAINER_MUXERS = {
+    "mp4": "mp4",
+    "m4v": "mp4",
+    "mov": "mov",
+    "mkv": "matroska",
+    "mka": "matroska",
+    "webm": "webm",
+    "ts": "mpegts",
+    "avi": "avi",
+    "flv": "flv",
+}
+
+
+def muxer_for_container(container: str | None) -> str:
+    """Map a file extension/container name to an explicit FFmpeg muxer."""
+    key = (container or "").lower().lstrip(".")
+    if key in _CONTAINER_MUXERS:
+        return _CONTAINER_MUXERS[key]
+    # Unknown or staging extensions (``part``/``tmp``) are safest in Matroska.
+    return "matroska"
+
+
+def _probe_stream_codecs(
+    file_path: Path, ffprobe_path: Path | None = None
+) -> tuple[str | None, str | None]:
+    """Return the first video and audio codec names, or ``(None, None)``."""
+    probe_bin = ffprobe_path or find_ffprobe()
+    if not probe_bin:
+        return None, None
+    try:
+        proc = subprocess.run(
+            [
+                str(probe_bin),
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_streams",
+                str(file_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=20.0,
+        )
+        data = json.loads(proc.stdout or "{}")
+    except Exception as exc:  # probing is best-effort; merge still attempts copy
+        logger.debug(f"Could not probe codecs for {file_path.name}: {exc}")
+        return None, None
+
+    video_codec: str | None = None
+    audio_codec: str | None = None
+    for stream in data.get("streams", []):
+        codec_type = stream.get("codec_type")
+        if codec_type == "video" and video_codec is None:
+            video_codec = stream.get("codec_name")
+        elif codec_type == "audio" and audio_codec is None:
+            audio_codec = stream.get("codec_name")
+    return video_codec, audio_codec
+
+
+def _terminate_process(proc: subprocess.Popen) -> None:
+    """Terminate a child process and guarantee it is reaped."""
+    proc.terminate()
+    try:
+        proc.wait(timeout=3.0)
+        return
+    except subprocess.TimeoutExpired:
+        proc.kill()
+    try:
+        proc.wait(timeout=3.0)
+    except subprocess.TimeoutExpired:
+        logger.warning("FFmpeg process did not exit after kill signal")
+
+
+def _run_ffmpeg_command(
+    args: list[str],
+    *,
+    output_path: Path,
+    is_cancelled: Callable[[], bool] | None = None,
+    timeout_seconds: float = 600.0,
+    operation: str = "FFmpeg operation",
+) -> tuple[int, str]:
+    """Run FFmpeg with drained stderr, cancellation, timeout, and no deadlocks.
+
+    stderr is written to an anonymous temp file instead of a pipe: FFmpeg emits
+    progress continuously and a full pipe would block the process forever when
+    the parent is not reading it.
+    """
+    with tempfile.TemporaryFile(
+        mode="w+", encoding="utf-8", errors="replace"
+    ) as err_file:
+        try:
+            proc = subprocess.Popen(
+                args,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=err_file,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except OSError as exc:
+            raise FFmpegNotFoundError(f"Could not start FFmpeg: {exc}") from exc
+
+        started = time.monotonic()
+        try:
+            while True:
+                if is_cancelled and is_cancelled():
+                    _terminate_process(proc)
+                    logger.warning(f"Cancellation received during {operation}")
+                    if output_path.exists():
+                        try:
+                            output_path.unlink()
+                        except OSError:
+                            pass
+                    raise DownloadCancelledError(f"{operation} cancelled by user")
+
+                if time.monotonic() - started > timeout_seconds:
+                    _terminate_process(proc)
+                    if output_path.exists():
+                        try:
+                            output_path.unlink()
+                        except OSError:
+                            pass
+                    raise StreamMergeError(
+                        f"{operation} timed out after {int(timeout_seconds)}s"
+                    )
+
+                try:
+                    returncode = proc.wait(timeout=0.15)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+        finally:
+            if proc.poll() is None:
+                _terminate_process(proc)
+
+        err_file.seek(0)
+        stderr_text = err_file.read().strip()
+    return returncode, stderr_text
+
+
 def inspect_media(file_path: Path, ffprobe_path: Path | None = None) -> dict[str, Any]:
     """Inspect media container, duration, format, and stream tracks via FFprobe.
 
@@ -252,100 +399,88 @@ def merge_video_audio(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     container = (output_container or output_path.suffix.lstrip(".")).lower()
+    if container in ("", "part", "tmp"):
+        # A staging filename (e.g. ``clip.mp4.part``) carries no usable
+        # extension. Matroska accepts virtually every codec combination.
+        container = "mkv"
+    muxer = muxer_for_container(container)
 
-    # Step 1: Attempt lossless stream copy (-c:v copy -c:a copy)
-    cmd = [
-        str(bin_path),
-        "-y",
-        "-nostdin",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-i",
-        str(video_path),
-        "-i",
-        str(audio_path),
-        "-c:v",
-        "copy",
-        "-c:a",
-        "copy",
+    video_codec, _ = _probe_stream_codecs(video_path)
+    _, audio_codec = _probe_stream_codecs(audio_path)
+    logger.info(
+        f"Merging streams: {video_path.name} ({video_codec or '?'}) + "
+        f"{audio_path.name} ({audio_codec or '?'}) -> {output_path.name} [{muxer}]"
+    )
+
+    # Each attempt is a complete mux command. Copy first, then transcode only
+    # what the container rejects: audio for MP4, everything for WebM when the
+    # source video codec is not WebM-compatible.
+    audio_transcode = (
+        ["-c:a", "libopus", "-b:a", "160k"]
+        if muxer == "webm"
+        else ["-c:a", "aac", "-b:a", "192k"]
+    )
+    if muxer == "webm":
+        video_transcode = [
+            "-c:v",
+            "libvpx-vp9",
+            "-crf",
+            "32",
+            "-b:v",
+            "0",
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "160k",
+        ]
+    else:
+        video_transcode = [
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "20",
+            "-pix_fmt",
+            "yuv420p",
+            *audio_transcode,
+        ]
+
+    attempts: list[tuple[str, list[str]]] = [
+        ("lossless copy", ["-c:v", "copy", "-c:a", "copy"]),
+        ("copy video + transcode audio", ["-c:v", "copy", *audio_transcode]),
+        ("transcode video + audio", video_transcode),
     ]
 
-    # Web-friendly MP4 flags
-    if container == "mp4":
-        cmd.extend(["-movflags", "+faststart"])
+    last_error = ""
+    for index, (label, codec_args) in enumerate(attempts):
+        # Attempting to stream-copy VP8/VP9 into MP4 or H.264 into WebM is a
+        # guaranteed failure on older FFmpeg builds; skip straight to transcode.
+        if index == 0 and muxer == "webm" and video_codec and video_codec not in {
+            "vp8",
+            "vp9",
+            "av1",
+        }:
+            last_error = f"video codec {video_codec} is not WebM-compatible"
+            continue
+        if index == 0 and muxer in ("mp4", "mov") and video_codec in {
+            "vp8",
+            "theora",
+            "wmv1",
+            "wmv2",
+            "wmv3",
+            "msmpeg4v3",
+        }:
+            last_error = f"video codec {video_codec} is not MP4-compatible"
+            continue
 
-    cmd.append(str(output_path))
-
-    logger.info(f"Merging streams: {video_path.name} + {audio_path.name} -> {output_path.name}")
-
-    def _execute_ffmpeg_proc(arguments: list[str]) -> tuple[int, str]:
-        # stdout/stderr must be drained while running or ffmpeg can block on full pipes.
-        proc = subprocess.Popen(
-            arguments,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        stderr = ""
-        started = time.monotonic()
-        timeout_seconds = 600.0
-        while True:
-            if is_cancelled and is_cancelled():
-                logger.warning(f"Cancellation received during FFmpeg merge of {output_path.name}")
-                proc.terminate()
-                try:
-                    proc.wait(timeout=2.0)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                if output_path.exists():
-                    try:
-                        output_path.unlink()
-                    except OSError:
-                        pass
-                raise DownloadCancelledError("Stream merge cancelled by user")
-
-            if time.monotonic() - started > timeout_seconds:
-                logger.error(f"FFmpeg merge timed out after {timeout_seconds}s: {output_path.name}")
-                proc.kill()
-                try:
-                    _, stderr = proc.communicate(timeout=5.0)
-                except Exception:
-                    stderr = stderr or "timed out"
-                if output_path.exists():
-                    try:
-                        output_path.unlink()
-                    except OSError:
-                        pass
-                raise StreamMergeError(
-                    f"FFmpeg merge timed out after {int(timeout_seconds)}s"
-                )
-
-            try:
-                _, chunk = proc.communicate(timeout=0.2)
-                stderr = chunk or ""
-                return proc.returncode or 0, stderr
-            except subprocess.TimeoutExpired:
-                continue
-
-    returncode, stderr = _execute_ffmpeg_proc(cmd)
-
-    # Step 2: Fallback if lossless copy failed due to container/codec incompatibility
-    # (e.g. YouTube Opus audio cannot be stream-copied into an MP4 container in some versions)
-    if returncode != 0:
-        logger.warning(
-            f"Lossless copy failed for {output_path.name} ({stderr.strip()}). "
-            "Falling back to AAC audio transcoding for MP4 compatibility..."
-        )
         if output_path.exists():
             try:
                 output_path.unlink()
             except OSError:
                 pass
 
-        fallback_cmd = [
+        cmd = [
             str(bin_path),
             "-y",
             "-nostdin",
@@ -356,32 +491,68 @@ def merge_video_audio(
             str(video_path),
             "-i",
             str(audio_path),
-            "-c:v",
-            "copy",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            *codec_args,
         ]
         if container == "mp4":
-            fallback_cmd.extend(["-movflags", "+faststart"])
-        fallback_cmd.append(str(output_path))
+            cmd.extend(["-movflags", "+faststart"])
+        cmd.extend(["-f", muxer, str(output_path)])
 
-        returncode, stderr = _execute_ffmpeg_proc(fallback_cmd)
-        if returncode != 0:
-            if output_path.exists():
-                try:
-                    output_path.unlink()
-                except OSError:
-                    pass
-            raise StreamMergeError(f"FFmpeg stream merge failed: {stderr.strip()}")
+        logger.info(f"Stream merge attempt {index + 1} ({label}) for {output_path.name}")
+        try:
+            returncode, stderr = _run_ffmpeg_command(
+                cmd,
+                output_path=output_path,
+                is_cancelled=is_cancelled,
+                operation="Stream merge",
+            )
+        except StreamMergeError:
+            raise
+        except DownloadCancelledError:
+            raise
+        except FFmpegNotFoundError:
+            raise
+        except Exception as exc:  # keep trying safer encodings
+            last_error = str(exc)
+            logger.warning(f"Stream merge attempt {index + 1} errored: {exc}")
+            continue
 
-    if not output_path.is_file() or output_path.stat().st_size == 0:
-        raise StreamMergeError(f"FFmpeg produced an empty or missing output file: {output_path}")
+        if returncode == 0 and output_path.is_file() and output_path.stat().st_size > 0:
+            # Never report success on a video-only file: verify both tracks.
+            merged_video, merged_audio = _probe_stream_codecs(output_path)
+            if merged_video and merged_audio:
+                size_bytes = output_path.stat().st_size
+                logger.info(
+                    f"Stream merge completed successfully: {output_path} "
+                    f"({size_bytes} bytes, {label})"
+                )
+                return output_path
+            last_error = (
+                "output is missing an audio or video stream "
+                f"(video={merged_video or 'none'}, audio={merged_audio or 'none'})"
+            )
+            logger.warning(f"Merge attempt {index + 1} produced an incomplete file: {last_error}")
 
-    size_bytes = output_path.stat().st_size
-    logger.info(f"Stream merge completed successfully: {output_path} ({size_bytes} bytes)")
-    return output_path
+        last_error = stderr.strip()[-800:] if stderr.strip() else last_error
+        logger.warning(f"Stream merge attempt {index + 1} failed: {last_error}")
+        if output_path.exists():
+            try:
+                output_path.unlink()
+            except OSError:
+                pass
+
+    raise StreamMergeError(
+        "FFmpeg stream merge failed after all fallbacks"
+        + (f": {last_error}" if last_error else ""),
+        details={
+            "video_codec": video_codec,
+            "audio_codec": audio_codec,
+            "container": container,
+        },
+    )
 
 
 def convert_container(
@@ -400,51 +571,76 @@ def convert_container(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     container = output_path.suffix.lstrip(".").lower()
+    muxer = muxer_for_container(container)
 
-    cmd = [
-        str(bin_path),
-        "-y",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-i",
-        str(input_path),
-        "-c",
-        "copy",
-    ]
-    if container == "mp4":
-        cmd.extend(["-movflags", "+faststart"])
-    cmd.append(str(output_path))
+    def build(codec_args: list[str]) -> list[str]:
+        args = [
+            str(bin_path),
+            "-y",
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(input_path),
+            *codec_args,
+        ]
+        if container == "mp4":
+            args.extend(["-movflags", "+faststart"])
+        args.extend(["-f", muxer, str(output_path)])
+        return args
 
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+    transcode_args = (
+        ["-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0", "-c:a", "libopus", "-b:a", "160k"]
+        if muxer == "webm"
+        else [
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "20",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+        ]
     )
 
-    while proc.poll() is None:
-        if is_cancelled and is_cancelled():
-            proc.terminate()
-            try:
-                proc.wait(timeout=2.0)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-            if output_path.exists():
-                output_path.unlink()
-            raise DownloadCancelledError("Format conversion cancelled by user")
-        time.sleep(0.1)
-
-    _, stderr = proc.communicate()
-    if proc.returncode != 0:
+    last_error = ""
+    for index, codec_args in enumerate((["-c", "copy"], transcode_args)):
         if output_path.exists():
             try:
                 output_path.unlink()
             except OSError:
                 pass
-        raise FormatConversionError(f"FFmpeg container conversion failed: {stderr.strip()}")
+        try:
+            returncode, stderr = _run_ffmpeg_command(
+                build(codec_args),
+                output_path=output_path,
+                is_cancelled=is_cancelled,
+                operation="Container conversion",
+            )
+        except DownloadCancelledError:
+            raise
+        except FFmpegNotFoundError:
+            raise
+        except StreamMergeError as exc:
+            raise FormatConversionError(exc.message, details=exc.details) from exc
 
-    return output_path
+        if returncode == 0 and output_path.is_file() and output_path.stat().st_size > 0:
+            return output_path
+        last_error = stderr or f"attempt {index + 1} failed"
+        logger.warning(f"Container conversion attempt {index + 1} failed: {last_error}")
+
+    if output_path.exists():
+        try:
+            output_path.unlink()
+        except OSError:
+            pass
+    raise FormatConversionError(f"FFmpeg container conversion failed: {last_error}")
 
 
 def extract_audio(
@@ -465,10 +661,21 @@ def extract_audio(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    codec = "libmp3lame" if audio_format.lower() == "mp3" else "aac"
+    audio_format_lower = audio_format.lower()
+    codec = "libmp3lame" if audio_format_lower == "mp3" else "aac"
+    muxer = (
+        "mp3"
+        if audio_format_lower == "mp3"
+        else "wav"
+        if audio_format_lower == "wav"
+        else "ipod"
+        if audio_format_lower in ("m4a", "aac", "mp4")
+        else "mp3"
+    )
     cmd = [
         str(bin_path),
         "-y",
+        "-nostdin",
         "-hide_banner",
         "-loglevel",
         "error",
@@ -479,35 +686,29 @@ def extract_audio(
         codec,
         "-b:a",
         bitrate,
+        "-f",
+        muxer,
         str(output_path),
     ]
 
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    try:
+        returncode, stderr = _run_ffmpeg_command(
+            cmd,
+            output_path=output_path,
+            is_cancelled=is_cancelled,
+            operation="Audio extraction",
+        )
+    except DownloadCancelledError:
+        raise
+    except StreamMergeError as exc:
+        raise FormatConversionError(exc.message, details=exc.details) from exc
 
-    while proc.poll() is None:
-        if is_cancelled and is_cancelled():
-            proc.terminate()
-            try:
-                proc.wait(timeout=2.0)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-            if output_path.exists():
-                output_path.unlink()
-            raise DownloadCancelledError("Audio extraction cancelled by user")
-        time.sleep(0.1)
-
-    _, stderr = proc.communicate()
-    if proc.returncode != 0:
+    if returncode != 0 or not output_path.is_file() or output_path.stat().st_size == 0:
         if output_path.exists():
             try:
                 output_path.unlink()
             except OSError:
                 pass
-        raise FormatConversionError(f"Audio extraction failed: {stderr.strip()}")
+        raise FormatConversionError(f"Audio extraction failed: {stderr}")
 
     return output_path

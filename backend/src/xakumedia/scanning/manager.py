@@ -222,6 +222,24 @@ class ScanManager:
         seen_media: set[str] = set()
         order = 0
         max_media = options.max_media
+        pending_persist: list[tuple[Post, int]] = []
+        last_persist = time.monotonic()
+
+        def flush_persist(force: bool = False) -> None:
+            """Write queued posts in batches instead of one transaction each."""
+            nonlocal last_persist
+            if not pending_persist:
+                return
+            now = time.monotonic()
+            if not force and len(pending_persist) < 25 and (now - last_persist) < 1.0:
+                return
+            batch = list(pending_persist)
+            pending_persist.clear()
+            try:
+                self.repository.save_scan_posts(job.scan_id, batch)
+            except Exception as exc:  # persistence must not abort discovery
+                logger.warning(f"Could not persist scan batch for {job.scan_id}: {exc}")
+            last_persist = now
 
         def emit_progress(force: bool = False) -> None:
             nonlocal last_progress
@@ -294,7 +312,8 @@ class ScanManager:
                 )
 
                 try:
-                    self.repository.save_scan_post(job.scan_id, post, order)
+                    pending_persist.append((post, order))
+                    flush_persist()
                 except Exception as exc:  # persistence must not abort discovery
                     logger.warning(f"Could not persist post {post.id}: {exc}")
                 order += 1
@@ -321,6 +340,9 @@ class ScanManager:
                     job.progress.limit_applied = True
                     job.stop_reason = "post_limit"
                     break
+            # Persist before the job is marked complete so readers never see a
+            # completed scan whose posts are still queued in memory.
+            flush_persist(force=True)
         except Exception as exc:
             logger.warning(f"Scan job {job.job_id} failed: {exc}")
             job.status = ScanStatus.FAILED
@@ -338,6 +360,7 @@ class ScanManager:
                 job.status = ScanStatus.COMPLETED
                 job.stop_reason = job.stop_reason or "completed"
         finally:
+            flush_persist(force=True)
             job.finished_at = datetime.now(UTC)
             try:
                 self.repository.finalize_scan(

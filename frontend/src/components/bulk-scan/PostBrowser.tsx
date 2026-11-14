@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from "react";
 import {
   CheckSquare,
   Download,
@@ -12,6 +13,9 @@ import {
 import type { DiscoveredMediaItem } from "../../../../desktop/shared/types";
 import { isItemDownloaded, type MediaFilter, type PostWithScan } from "./types";
 import { chooseFormat, formatBytes, visibleMedia } from "./utils";
+
+/** Keep the DOM small while a large scan is still streaming in. */
+const RENDER_PAGE_SIZE = 120;
 
 interface PostBrowserProps {
   filteredPosts: PostWithScan[];
@@ -58,8 +62,22 @@ export function PostBrowser({
   onClearSelection,
   onDownload,
 }: PostBrowserProps) {
-  const visibleItems = filteredPosts.flatMap((post) => visibleMedia(post, filter));
+  const visibleItems = useMemo(
+    () => filteredPosts.flatMap((post) => visibleMedia(post, filter)),
+    [filteredPosts, filter]
+  );
   const newCount = visibleItems.filter((item) => !isItemDownloaded(item, downloaded)).length;
+
+  const [renderLimit, setRenderLimit] = useState(RENDER_PAGE_SIZE);
+  useEffect(() => {
+    setRenderLimit(RENDER_PAGE_SIZE);
+  }, [filter, search, focusedScanLabel]);
+
+  const displayedItems = useMemo(
+    () => visibleItems.slice(0, renderLimit),
+    [visibleItems, renderLimit]
+  );
+  const remainingCount = Math.max(0, visibleItems.length - displayedItems.length);
 
   return (
     <div className="space-y-4">
@@ -160,7 +178,7 @@ export function PostBrowser({
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-          {visibleItems.map((item, index) => {
+          {displayedItems.map((item, index) => {
             const isSelected = selected.has(item.id);
             const wasDownloaded = isItemDownloaded(item, downloaded);
             const chosen = chooseFormat(item, preferredResolution);
@@ -176,6 +194,19 @@ export function PostBrowser({
               />
             );
           })}
+        </div>
+      )}
+
+      {remainingCount > 0 && (
+        <div className="flex justify-center pt-2">
+          <button
+            type="button"
+            onClick={() => setRenderLimit((limit) => limit + RENDER_PAGE_SIZE)}
+            className="rounded-lg border border-hairline bg-surface px-4 py-2 text-xs font-medium text-muted transition-colors hover:border-accent/40 hover:text-ink"
+          >
+            Show {Math.min(RENDER_PAGE_SIZE, remainingCount)} more
+            <span className="ml-1 text-faint">({remainingCount} remaining)</span>
+          </button>
         </div>
       )}
     </div>

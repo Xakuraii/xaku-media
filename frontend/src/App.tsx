@@ -59,6 +59,7 @@ import type {
 import { SettingsView } from "./components/SettingsView";
 import { SavedSourcesView } from "./components/SavedSourcesView";
 import { BulkScanView } from "./components/bulk-scan/BulkScanView";
+import { chooseFormat } from "./components/bulk-scan/utils";
 import { useDesktopTheme } from "./desktop/theme";
 
 export const App: React.FC = () => {
@@ -498,8 +499,8 @@ export const App: React.FC = () => {
       const res = await window.api.classifyUrl(urlToScan.trim());
       setScanResult(res);
       setGalleryPage(1);
-      if (res.media_item?.available_formats && res.media_item.available_formats.length > 0) {
-        setSelectedFormat(res.media_item.available_formats[0]);
+      if (res.media_item) {
+        setSelectedFormat(chooseFormat(res.media_item));
       } else {
         setSelectedFormat(null);
       }
@@ -603,7 +604,7 @@ export const App: React.FC = () => {
     try {
       const payload = items.map((item) => ({
         media_item: item,
-        selected_format: item.available_formats?.[0] || null,
+        selected_format: chooseFormat(item),
       }));
       const res = await window.api.startBatchDownload(payload, targetDir);
       setDownloadTasks((prev) => {
@@ -1123,39 +1124,27 @@ export const App: React.FC = () => {
             <span className="truncate text-[13px] font-semibold text-ink">{currentTabLabel}</span>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <div
-              className="flex items-center rounded-full border border-hairline bg-surface p-0.5 shadow-sm"
-              role="group"
-              aria-label="Theme"
-              title={`Theme: ${themePreference}`}
+            <button
+              type="button"
+              onClick={(e) =>
+                setThemePreference(resolvedTheme === "dark" ? "light" : "dark", {
+                  origin: e.currentTarget,
+                })
+              }
+              aria-label={
+                resolvedTheme === "dark" ? "Switch to light theme" : "Switch to dark theme"
+              }
+              title={
+                resolvedTheme === "dark" ? "Switch to light theme" : "Switch to dark theme"
+              }
+              className="grid h-8 w-8 place-items-center rounded-lg text-muted transition-colors duration-150 hover:bg-raised hover:text-ink"
             >
-              <button
-                type="button"
-                onClick={(e) => setThemePreference("light", { origin: e.currentTarget })}
-                aria-pressed={resolvedTheme === "light"}
-                aria-label="Use light theme"
-                className={`rounded-full p-1.5 transition-colors ${
-                  resolvedTheme === "light"
-                    ? "bg-accent text-on-accent"
-                    : "text-muted hover:text-ink"
-                }`}
-              >
-                <Sun className="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={(e) => setThemePreference("dark", { origin: e.currentTarget })}
-                aria-pressed={resolvedTheme === "dark"}
-                aria-label="Use dark theme"
-                className={`rounded-full p-1.5 transition-colors ${
-                  resolvedTheme === "dark"
-                    ? "bg-accent text-on-accent"
-                    : "text-muted hover:text-ink"
-                }`}
-              >
-                <Moon className="h-3.5 w-3.5" />
-              </button>
-            </div>
+              {resolvedTheme === "dark" ? (
+                <Sun className="h-4 w-4" />
+              ) : (
+                <Moon className="h-4 w-4" />
+              )}
+            </button>
             {activeTaskCount > 0 && (
               <button
                 type="button"

@@ -22,7 +22,7 @@ from xakumedia.providers.base import media_identity
 from xakumedia.providers.direct import DirectProvider
 from xakumedia.providers.gallerydl import GalleryDlProvider
 from xakumedia.providers.registry import provider_capabilities, resolve_provider
-from xakumedia.providers.ytdlp import YtDlpProvider
+from xakumedia.providers.ytdlp import YtDlpProvider, collection_urls
 from xakumedia.utils.stable_ids import canonical_media_url, stable_id
 
 
@@ -127,6 +127,29 @@ def test_youtube_collection_detection_is_offline() -> None:
     assert not provider.capabilities_for(
         "https://www.youtube.com/watch?v=abcdefghijk"
     ).profile_bulk
+
+
+def test_channel_root_enumerates_videos_shorts_and_streams() -> None:
+    """A channel root must scan every upload tab, not only /videos."""
+    assert collection_urls("https://www.youtube.com/@SomeChannel") == [
+        "https://www.youtube.com/@SomeChannel/videos",
+        "https://www.youtube.com/@SomeChannel/shorts",
+        "https://www.youtube.com/@SomeChannel/streams",
+    ]
+    assert collection_urls("https://www.youtube.com/@SomeChannel/") == [
+        "https://www.youtube.com/@SomeChannel/videos",
+        "https://www.youtube.com/@SomeChannel/shorts",
+        "https://www.youtube.com/@SomeChannel/streams",
+    ]
+
+
+def test_explicit_channel_tab_and_playlist_are_not_expanded() -> None:
+    """Explicit tab/playlist URLs are scanned exactly as requested."""
+    assert collection_urls("https://www.youtube.com/@SomeChannel/shorts") == [
+        "https://www.youtube.com/@SomeChannel/shorts"
+    ]
+    playlist = "https://www.youtube.com/playlist?list=PL123"
+    assert collection_urls(playlist) == [playlist]
 
 
 def test_direct_provider_assigns_stable_identity(monkeypatch: pytest.MonkeyPatch) -> None:

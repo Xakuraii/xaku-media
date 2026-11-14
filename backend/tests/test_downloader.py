@@ -279,3 +279,184 @@ def test_dispatcher_download_rpc(
             res_cancel = dispatcher.dispatch(req_cancel)
             assert res_cancel.error is None
             assert "cancelled" in res_cancel.result
+
+
+def _video_item_with(formats: list[MediaFormatInfo]) -> MediaItem:
+    return MediaItem(
+        id="item-video-merge",
+        source_url="https://example.com/watch/merge",
+        original_url=formats[0].url or "https://cdn.example.com/video.mp4",
+        media_type=MediaType.VIDEO,
+        title="Merge target",
+        author="creator",
+        available_formats=formats,
+    )
+
+
+def test_download_manager_merges_video_with_best_audio(
+    temp_dest_dir: Path, tmp_path: Path
+) -> None:
+    """A video-only selection downloads the best audio track and merges both."""
+    repo = MediaRepository(tmp_path / "merge_test.db")
+    manager = DownloadManager(max_concurrent=1, repository=repo)
+
+    video = MediaFormatInfo(
+        format_id="v1080",
+        container="mp4",
+        height=1080,
+        video_codec="h264",
+        url="https://cdn.example.com/video-1080.mp4",
+        requires_merge=True,
+    )
+    audio_low = MediaFormatInfo(
+        format_id="a-low",
+        container="m4a",
+        audio_codec="aac",
+        filesize_bytes=1000,
+        url="https://cdn.example.com/audio-low.m4a",
+    )
+    audio_high = MediaFormatInfo(
+        format_id="a-high",
+        container="webm",
+        audio_codec="opus",
+        filesize_bytes=9000,
+        url="https://cdn.example.com/audio-high.webm",
+    )
+    item = _video_item_with([video, audio_low, audio_high])
+
+    streamed_urls: list[str] = []
+    merge_calls: list[tuple[Path, Path, Path, str | None]] = []
+
+    import xakumedia.downloader.manager as dm_mod
+
+    def fake_stream(url: str, destination_path: Path, **kwargs: Any) -> Path:
+        streamed_urls.append(url)
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        destination_path.write_bytes(b"stream:" + url.encode())
+        return destination_path
+
+    def fake_merge(
+        *,
+        video_path: Path,
+        audio_path: Path,
+        output_path: Path,
+        output_container: str | None = None,
+        **kwargs: Any,
+    ) -> Path:
+        merge_calls.append((video_path, audio_path, output_path, output_container))
+        output_path.write_bytes(b"merged-output")
+        return output_path
+
+    with (
+        patch.object(dm_mod, "download_stream", side_effect=fake_stream),
+        patch("xakumedia.processor.ffmpeg.merge_video_audio", side_effect=fake_merge),
+    ):
+        task = manager.start_download(media_item=item, selected_format=video)
+        assert task is not None
+        manager._executor.shutdown(wait=True)
+
+    stored = repo.get_download_tasks(limit=5)[0]
+    assert stored.status == TaskStatus.COMPLETED
+    assert "https://cdn.example.com/video-1080.mp4" in streamed_urls
+    # Highest-quality audio codec wins over the smaller AAC track.
+    assert "https://cdn.example.com/audio-high.webm" in streamed_urls
+    assert len(merge_calls) == 1
+
+    video_part, audio_part, merged_temp, container = merge_calls[0]
+    assert container == "mp4"
+    # Output must carry the real container suffix, never a bare ``.part`` name.
+    assert merged_temp.suffix == ".mp4"
+    assert ".merged" in merged_temp.name
+    assert not video_part.exists()
+    assert not audio_part.exists()
+    destination = stored.destination_path
+    assert destination is not None and destination.is_file()
+    assert destination.read_bytes() == b"merged-output"
+
+
+def test_download_manager_falls_back_to_muxed_when_no_audio_track(
+    temp_dest_dir: Path, tmp_path: Path
+) -> None:
+    """Without an audio-only stream, use the best complete stream instead of a silent file."""
+    repo = MediaRepository(tmp_path / "muxed_fallback.db")
+    manager = DownloadManager(max_concurrent=1, repository=repo)
+
+    video_only = MediaFormatInfo(
+        format_id="v1080",
+        container="mp4",
+        height=1080,
+        video_codec="h264",
+        url="https://cdn.example.com/video-1080.mp4",
+        requires_merge=True,
+    )
+    muxed = MediaFormatInfo(
+        format_id="muxed720",
+        container="webm",
+        height=720,
+        video_codec="vp9",
+        audio_codec="opus",
+        url="https://cdn.example.com/muxed-720.webm",
+    )
+    item = _video_item_with([video_only, muxed])
+
+    streamed_urls: list[str] = []
+
+    import xakumedia.downloader.manager as dm_mod
+
+    def fake_stream(url: str, destination_path: Path, **kwargs: Any) -> Path:
+        streamed_urls.append(url)
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        destination_path.write_bytes(b"muxed")
+        return destination_path
+
+    with (
+        patch.object(dm_mod, "download_stream", side_effect=fake_stream),
+        patch("xakumedia.processor.ffmpeg.merge_video_audio") as merge_mock,
+    ):
+        manager.start_download(media_item=item, selected_format=video_only)
+        manager._executor.shutdown(wait=True)
+
+    stored = repo.get_download_tasks(limit=5)[0]
+    assert stored.status == TaskStatus.COMPLETED
+    assert streamed_urls == ["https://cdn.example.com/muxed-720.webm"]
+    assert stored.selected_format is not None
+    assert stored.selected_format.format_id == "muxed720"
+    # The destination extension follows the fallback container, not the
+    # originally requested MP4 quality.
+    assert stored.destination_path is not None
+    assert stored.destination_path.suffix == ".webm"
+    merge_mock.assert_not_called()
+
+
+def test_download_manager_fails_clearly_when_only_video_exists(
+    temp_dest_dir: Path, tmp_path: Path
+) -> None:
+    """A video-only source with no audio or muxed stream fails instead of saving silence."""
+    repo = MediaRepository(tmp_path / "silent_video.db")
+    manager = DownloadManager(max_concurrent=1, repository=repo)
+
+    video_only = MediaFormatInfo(
+        format_id="v1080",
+        container="mp4",
+        height=1080,
+        video_codec="h264",
+        url="https://cdn.example.com/video-1080.mp4",
+        requires_merge=True,
+    )
+    item = _video_item_with([video_only])
+
+    import xakumedia.downloader.manager as dm_mod
+
+    with (
+        patch.object(dm_mod, "download_stream") as stream_mock,
+        patch("xakumedia.processor.ffmpeg.merge_video_audio") as merge_mock,
+    ):
+        manager.start_download(media_item=item, selected_format=video_only)
+        manager._executor.shutdown(wait=True)
+
+    stored = repo.get_download_tasks(limit=5)[0]
+    assert stored.status == TaskStatus.FAILED
+    assert stored.error_message is not None
+    assert "silent video" in stored.error_message.lower()
+    stream_mock.assert_not_called()
+    merge_mock.assert_not_called()

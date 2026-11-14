@@ -210,59 +210,70 @@ class MediaRepository:
         Returns the number of newly inserted media rows (duplicates are skipped
         by stable identity, so rescans do not inflate the library).
         """
+        return self.save_scan_posts(scan_id, [(post, order)])
+
+    def save_scan_posts(self, scan_id: str, posts: list[tuple[Post, int]]) -> int:
+        """Persist many posts in a single transaction.
+
+        One session per post makes large channel scans thousands of tiny
+        transactions; batching keeps discovery fast while remaining incremental.
+        """
+        if not posts:
+            return 0
         now = datetime.now(UTC).isoformat()
         was_new = 0
         with get_db_session(self.db_path) as conn:
-            conn.execute(
-                """
-                INSERT INTO posts (
-                    id, provider, provider_post_id, source_url, post_url,
-                    author, title, post_type, created_at, metadata_extra_json, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    author = excluded.author,
-                    title = excluded.title,
-                    post_type = excluded.post_type,
-                    metadata_extra_json = excluded.metadata_extra_json,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    post.id,
-                    post.provider,
-                    post.provider_post_id,
-                    post.source_url,
-                    post.post_url,
-                    post.author,
-                    post.title,
-                    str(post.post_type),
-                    post.created_at.isoformat() if post.created_at else None,
-                    json.dumps(post.metadata_extra),
-                    now,
-                ),
-            )
-            conn.execute(
-                """
-                INSERT INTO scan_history_posts (scan_id, post_id, item_order)
-                VALUES (?, ?, ?)
-                ON CONFLICT(scan_id, post_id) DO UPDATE SET item_order = excluded.item_order
-                """,
-                (scan_id, post.id, order),
-            )
-
-            for item in post.media_items:
-                if self._upsert_media(conn, item, now):
-                    was_new += 1
+            for post, order in posts:
                 conn.execute(
                     """
-                    INSERT OR IGNORE INTO scan_history_items (scan_id, media_id, item_order)
-                    VALUES (?, ?, ?)
+                    INSERT INTO posts (
+                        id, provider, provider_post_id, source_url, post_url,
+                        author, title, post_type, created_at, metadata_extra_json, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        author = excluded.author,
+                        title = excluded.title,
+                        post_type = excluded.post_type,
+                        metadata_extra_json = excluded.metadata_extra_json,
+                        updated_at = excluded.updated_at
                     """,
                     (
-                        scan_id,
-                        self._canonical_media_id(conn, item),
-                        order * 1000 + item.attachment_index,
+                        post.id,
+                        post.provider,
+                        post.provider_post_id,
+                        post.source_url,
+                        post.post_url,
+                        post.author,
+                        post.title,
+                        str(post.post_type),
+                        post.created_at.isoformat() if post.created_at else None,
+                        json.dumps(post.metadata_extra),
+                        now,
                     ),
                 )
+                conn.execute(
+                    """
+                    INSERT INTO scan_history_posts (scan_id, post_id, item_order)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(scan_id, post_id) DO UPDATE SET item_order = excluded.item_order
+                    """,
+                    (scan_id, post.id, order),
+                )
+
+                for item in post.media_items:
+                    if self._upsert_media(conn, item, now):
+                        was_new += 1
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO scan_history_items (scan_id, media_id, item_order)
+                        VALUES (?, ?, ?)
+                        """,
+                        (
+                            scan_id,
+                            self._canonical_media_id(conn, item),
+                            order * 1000 + item.attachment_index,
+                        ),
+                    )
         return was_new
 
     def finalize_scan(

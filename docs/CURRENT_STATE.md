@@ -1,6 +1,6 @@
 # XakuMedia — Current Project State
 
-**Last Updated:** November 13, 2026
+**Last Updated:** November 14, 2026
 **Active Milestone:** Milestone 29 - Bulk Profile Discovery, Posts/Albums & Progressive Scan Jobs
 **Overall Status:** In Progress - Bulk-first workflow implemented for verified sources; gallery-dl platforms remain subject to site/auth coverage
 
@@ -57,6 +57,8 @@ The system relies on a secure 3-tier desktop architecture:
 **Follow-up hardening (same milestone):** Nested `Message.Queue` entries are expanded recursively (depth 3) with SSRF validation and shared limits, so profile URLs that return queues instead of media still yield posts. Provider media ids are stable (`media_identity`) and repository writes resolve `(provider, provider_media_id)` to the stored row id, fixing duplicate-row/`UNIQUE constraint` failures on rescans and the `FOREIGN KEY` failure caused by joined download queries returning the task id as the media id. `ScanManager.start` now catches classification failures and returns a `failed` job instead of raising out of the RPC. Failed scans carry `error_category` + `error_details` (site, `requires_cookies`, `has_cookies`, remediation), and the UI explains each error with remediation actions. New `app:openExternal` IPC opens only http(s) help links; Settings defaults cookie import to Chrome, persists `cookie_browser`, links the "Get cookies.txt LOCALLY" extension, auto-detects the profile domain from pasted cookies, and reports save failures. The oversized bulk-scan view was split into `frontend/src/components/bulk-scan/` modules (`types`, `utils`, `errors`, `useScanJobs`, `useScanSelection`, `ScanErrorPanel`, `JobStatusList`, `ScanSourceForm`, `PostBrowser`, `BulkScanView`). Known limitations: Instagram/Twitter/TikTok need real session cookies (errors now say so), Reddit is blocked by this environment (HTTP 403), and SSRF validation covers source/queued URLs but not redirects followed inside yt-dlp/gallery-dl.
 
 **Public homepage resync (same milestone):** `frontend/src/landing/` now mirrors the redesigned desktop shell instead of the previous generic scan mock. `HeroSection` renders a persistent Workspace/Sources/System sidebar, breadcrumb header, bulk-scan source row, progressive scan-job rows, the All/Images/Videos/Albums + Select all / Select new toolbar, and a 6-column gallery with downloaded badges — the same layout and semantic theme tokens used by the app. `FeaturesSection`, `WorkflowSection`, and `FaqSection` were rewritten around bulk profile/channel scans, Select new, cookie-aware remediation, and quality-aware merging; `ReleaseChangelogSection` and the Open Graph/Twitter descriptions were updated to match. A dedicated `#cookies` guide (`CookieGuideSection`) now documents export/import steps, Netscape format, strict-site troubleshooting, and local-only cookie security. Verification: `npm run typecheck:frontend` clean, `npm run build:frontend` and `npm run build:desktop` clean, `pytest backend/` **159 passed**, and an Electron offscreen check of the built landing page reported no horizontal overflow at 1440 px and 390 px. |
+
+**Reliability pass — merging, scan completeness, and desktop polish (same milestone):** The video+audio merge failure was reproduced and fixed at the root: FFmpeg was asked to write to `name.mp4.part`, could not infer a muxer, and failed with `Unable to find a suitable output format`. `merge_video_audio` now maps the real container to an explicit `-f` muxer, writes to `name.merged.<ext>` staging output, drains FFmpeg stderr through a temp file (no pipe deadlocks), honours cancellation/timeouts, verifies the output contains both streams with ffprobe, and falls back from stream copy → audio transcode → full transcode. `DownloadManager` now plans each task explicitly: a muxed stream when possible; otherwise the highest-ranked audio-only track plus the selected video; if no audio track exists it falls back to the best complete stream, and if none exists the task fails with an actionable message instead of silently saving a silent video. Regression tests cover `.mp4.part` staging names, VP9/Opus → MP4, muxed fallback, and the no-audio failure path. Channel scans now expand bare YouTube channels to Videos + Shorts + Streams, de-duplicate entries across tabs, and hydrate up to six videos concurrently with a bounded, cancellable worker window; scan persistence batches up to 25 posts or one second per transaction; gallery-dl cookies are scoped to the matching extractor instead of leaking globally. On the frontend, `chooseFormat` now requires a direct URL, considers every playable video track within the target resolution (a 1080p merge beats a 720p muxed stream), requires an audio partner for video-only tracks, and is also used by the legacy batch path; the progressive gallery renders 120 cards at a time with “Show more”. The desktop header theme control is now a single landing-style icon button that runs the same circular view transition while preserving SQLite preference persistence. Verification: `pytest backend/` **166 passed**, `ruff` clean, `npm run typecheck:frontend`, `npm run build:frontend`, `npm run build:desktop`, and `npm run test:desktop` all passed.
 
 ---
 
@@ -236,12 +238,12 @@ The system relies on a secure 3-tier desktop architecture:
   - **Provider layer (`backend/src/xakumedia/providers/`):**
     - `registry.resolve_provider` routes direct media → native yt-dlp hosts → gallery-dl profile sources → gallery-dl galleries → `UnsupportedSourceError`.
     - `ProviderCapabilities` reports `profile_bulk`, `pagination`, `albums`, `images`, `videos`, and `requires_auth` so the UI never over-promises support.
-    - `YtDlpProvider` normalizes YouTube channel roots to the Videos tab, enumerates collections with `extract_flat`, and hydrates each entry lazily so results stream without waiting for the whole channel.
-    - `GalleryDlProvider` consumes gallery-dl's lazy `Message.Url|Directory|Queue` iterator and groups attachments into posts by provider post key.
+    - `YtDlpProvider` expands a bare channel root to its Videos, Shorts, and Streams tabs, enumerates with `extract_flat`, de-duplicates entries across tabs, and hydrates up to six videos concurrently through a bounded, cancellable worker window.
+    - `GalleryDlProvider` consumes gallery-dl's lazy `Message.Url|Directory|Queue` iterator and groups attachments into posts by provider post key; imported cookies are scoped to the matching extractor category.
     - `DirectProvider` wraps a single direct media URL as one post.
   - **Scan job engine (`backend/src/xakumedia/scanning/manager.py`):**
     - Jobs run on a bounded thread pool and support cancellation with partial results kept.
-    - Per-post persistence (`save_scan_post`) and aggregate finalization (`finalize_scan`) make long scans durable while they run.
+    - Batched post persistence (`save_scan_posts`, flushing every 25 posts or one second) and aggregate finalization (`finalize_scan`) make long scans durable without thousands of tiny transactions.
     - Stable post/media IDs and a partial unique media index make rescans idempotent (verified: second identical scan inserts 0 new rows).
     - Emits dual-format `scan:*` / `scan_*` notifications for started, post, progress, warning, and completed/cancelled/failed.
   - **Schema V5 (`db/schema.py`) and repository (`db/repository.py`):**
@@ -250,10 +252,10 @@ The system relies on a secure 3-tier desktop architecture:
   - **IPC and UI:**
     - RPC methods `start_scan`, `cancel_scan`, `get_scan_status`, `list_scan_jobs`, `get_scan_posts`, `get_library_stats`, `get_provider_capabilities`.
     - Electron IPC handlers, preload bindings, and `DesktopApi` types for every method plus `onScanStarted/Post/Progress/Warning/Finished`.
-    - `BulkScanView.tsx` supports multiple URLs (paste, drag/drop), scan limits and media-type options, progressive post/album rendering, filters, selection actions, per-source cancellation, and bulk download using each item's best muxed/preferred format.
+    - `BulkScanView.tsx` supports multiple URLs (paste, drag/drop), scan limits and media-type options, progressive post/album rendering, filters, selection actions, per-source cancellation, and bulk download using `chooseFormat` (highest playable quality within the target; muxed preferred at equal resolution; video-only choices require an audio partner).
   - **Verification evidence:**
-    - `backend/tests/test_providers.py` and `backend/tests/test_scan_manager.py`: 12 passed (registry routing, capability honesty, stable IDs, gallery grouping, media limits, completion, idempotent rescan, cancellation with partial results, history fallback to posts).
-    - Full backend suite: **152 passed**.
+    - `backend/tests/test_providers.py` and `backend/tests/test_scan_manager.py`: 21 passed (registry routing, capability honesty, channel tab expansion, stable IDs, gallery grouping, media limits, completion, idempotent rescan, cancellation with partial results, history fallback to posts).
+    - Full backend suite: **166 passed**.
     - `ruff check backend/src backend/tests`: clean.
     - `npm run typecheck:frontend`: clean; `npm run build:frontend`: clean; `npm run build:desktop`: clean; `npm run test:desktop`: all smoke tests passed, including the bulk discovery IPC check.
 
@@ -262,7 +264,7 @@ The system relies on a secure 3-tier desktop architecture:
 ## 4. Known Bugs & Current Limitations
 
 - Code signing certificate is not configured (packaging displays standard Electron builder unsigned notice).
-- **Bulk discovery coverage is honest but uneven:** YouTube channels/playlists/single videos are the verified bulk provider. gallery-dl profile support depends on each site's extractor and session cookies; live profile extraction was blocked in this environment (Reddit network security block, Pinterest test pin unavailable) and must be verified per platform before claiming support.
+- **Bulk discovery coverage is honest but uneven:** YouTube channels/playlists/single videos are the verified bulk provider; bare channel scans include Videos, Shorts, and Streams, while members-only and playlist-only content still requires its direct URL. gallery-dl profile support depends on each site's extractor and session cookies; live profile extraction was blocked in this environment (Reddit network security block, Pinterest test pin unavailable) and must be verified per platform before claiming support.
 - **Scan jobs are retained in memory** for the current engine session (up to 100 jobs). Completed posts are persisted in SQLite and can be reloaded via `get_scan_posts`, but running-job snapshots do not survive a backend restart.
 - **SSRF validation covers the initial source URL only.** yt-dlp/gallery-dl follow redirects internally; redirect targets are not re-validated against private ranges.
 

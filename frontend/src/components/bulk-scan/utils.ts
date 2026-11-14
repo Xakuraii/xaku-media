@@ -61,6 +61,40 @@ function resolutionHeight(resolution?: string | null): number {
   return match ? parseInt(match[1], 10) : 0;
 }
 
+function hasVideo(format: MediaFormatInfoPayload): boolean {
+  return Boolean(format.video_codec && format.video_codec !== "none");
+}
+
+function hasAudio(format: MediaFormatInfoPayload): boolean {
+  return Boolean(format.audio_codec && format.audio_codec !== "none");
+}
+
+function formatSize(format: MediaFormatInfoPayload): number {
+  return format.filesize_bytes ?? 0;
+}
+
+/**
+ * Rank candidate video tracks: highest resolution first, then complete streams
+ * (no FFmpeg merge), then largest file. `targetHeight` is Infinity for "best".
+ */
+function pickVideoTrack(
+  tracks: MediaFormatInfoPayload[],
+  targetHeight: number
+): MediaFormatInfoPayload | null {
+  if (tracks.length === 0) return null;
+  const ranked = [...tracks].sort(
+    (a, b) =>
+      (b.height || 0) - (a.height || 0) ||
+      Number(hasAudio(b)) - Number(hasAudio(a)) ||
+      formatSize(b) - formatSize(a)
+  );
+  if (!Number.isFinite(targetHeight)) return ranked[0];
+  const within = ranked.filter((format) => (format.height || 0) <= targetHeight);
+  if (within.length > 0) return within[0];
+  // Nothing at or below the requested quality: take the closest above it.
+  return ranked[ranked.length - 1];
+}
+
 export function chooseFormat(
   item: DiscoveredMediaItem,
   preferredResolution?: string | null
@@ -68,43 +102,27 @@ export function chooseFormat(
   const formats = item.available_formats || [];
   if (formats.length === 0) return null;
 
+  // Only formats with a direct URL can be downloaded. Providers occasionally
+  // omit URLs; fall back to the raw list so cards still show useful metadata.
+  const downloadable = formats.filter((format) => Boolean(format.url));
+  const pool = downloadable.length > 0 ? downloadable : formats;
+
   if (item.media_type === "video") {
     const pref = (preferredResolution || "").toLowerCase();
-    const target = pref === "best" || pref === "original" ? Infinity : resolutionHeight(pref);
+    const targetHeight =
+      pref === "best" || pref === "original" ? Infinity : resolutionHeight(pref);
 
-    const muxedWithAudio = formats.filter(
-      (format) =>
-        !format.requires_merge &&
-        format.video_codec &&
-        format.video_codec !== "none" &&
-        format.audio_codec &&
-        format.audio_codec !== "none"
-    );
-    const pickMuxed = () => {
-      if (muxedWithAudio.length === 0) return null;
-      if (Number.isFinite(target)) {
-        const within = muxedWithAudio.filter((format) => (format.height || 0) <= target);
-        if (within.length > 0) return within[0];
-      }
-      return muxedWithAudio[0];
-    };
-    const chosenMuxed = pickMuxed();
-    if (chosenMuxed) return chosenMuxed;
-
-    const videoTracks = formats.filter(
-      (format) => format.video_codec && format.video_codec !== "none"
-    );
-    if (videoTracks.length > 0) {
-      if (Number.isFinite(target)) {
-        const within = videoTracks.filter((format) => (format.height || 0) <= target);
-        if (within.length > 0) return within[0];
-      }
-      return videoTracks[0];
-    }
+    const videoTracks = pool.filter(hasVideo);
+    const hasAudioPartner = pool.some((format) => hasAudio(format) && !hasVideo(format));
+    // A video-only track is usable only when a matching audio-only stream
+    // exists; otherwise it would download as a silent file.
+    const playable = videoTracks.filter((format) => hasAudio(format) || hasAudioPartner);
+    const chosen = pickVideoTrack(playable, targetHeight);
+    if (chosen) return chosen;
   }
 
-  const muxed = formats.find((format) => !format.requires_merge);
-  return muxed || formats[0];
+  const direct = pool.find((format) => !format.requires_merge && Boolean(format.url));
+  return direct ?? pool[0] ?? null;
 }
 
 export function postMatchesFilter(post: PostWithScan, filter: MediaFilter): boolean {

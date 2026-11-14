@@ -147,6 +147,92 @@ def test_real_stream_merge_and_inspect(tmp_path: Path, sample_media_tracks):
     assert details["audio_stream"]["codec"] == "aac"
 
 
+def test_merge_video_audio_with_staging_suffix(
+    tmp_path: Path, sample_media_tracks
+):
+    """A ``.mp4.part`` staging name must still produce a valid multiplexed MP4.
+
+    FFmpeg cannot infer a muxer from a ``.part`` extension, so this is the exact
+    regression that previously made merged downloads fail with
+    "Unable to find a suitable output format".
+    """
+    video_path, audio_path = sample_media_tracks
+    output_path = tmp_path / "merged_staging.mp4.part"
+
+    result = merge_video_audio(
+        video_path=video_path,
+        audio_path=audio_path,
+        output_path=output_path,
+        output_container="mp4",
+    )
+
+    assert result == output_path
+    assert result.is_file() and result.stat().st_size > 0
+    details = inspect_media(result)
+    assert details["video_stream"] is not None
+    assert details["audio_stream"] is not None
+
+
+@pytest.fixture(scope="module")
+def sample_webm_tracks(tmp_path_factory) -> tuple[Path, Path]:
+    """Generate VP9 video and Opus audio tracks for container fallback tests."""
+    ffmpeg_bin = find_ffmpeg()
+    if not ffmpeg_bin:
+        pytest.skip("FFmpeg not available on system")
+
+    temp_dir = tmp_path_factory.mktemp("ffmpeg_webm_samples")
+    video_path = temp_dir / "sample_vp9.webm"
+    audio_path = temp_dir / "sample_opus.webm"
+
+    v_cmd = [
+        str(ffmpeg_bin),
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=duration=1:size=320x240:rate=10",
+        "-c:v",
+        "libvpx-vp9",
+        "-b:v",
+        "200k",
+        str(video_path),
+    ]
+    a_cmd = [
+        str(ffmpeg_bin),
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=1000:duration=1",
+        "-c:a",
+        "libopus",
+        str(audio_path),
+    ]
+    try:
+        subprocess.run(v_cmd, capture_output=True, check=True)
+        subprocess.run(a_cmd, capture_output=True, check=True)
+    except subprocess.CalledProcessError:
+        pytest.skip("VP9/Opus encoders unavailable in this FFmpeg build")
+    return video_path, audio_path
+
+
+def test_merge_vp9_opus_into_mp4(tmp_path: Path, sample_webm_tracks):
+    """VP9/Opus tracks must merge into MP4 via copy or a safe transcode fallback."""
+    video_path, audio_path = sample_webm_tracks
+    output_path = tmp_path / "vp9_opus_merged.mp4"
+
+    result = merge_video_audio(
+        video_path=video_path,
+        audio_path=audio_path,
+        output_path=output_path,
+        output_container="mp4",
+    )
+
+    details = inspect_media(result)
+    assert details["video_stream"] is not None
+    assert details["audio_stream"] is not None
+
+
 def test_real_container_conversion(tmp_path: Path, sample_media_tracks):
     """Test converting container format from mp4 to mkv using stream copy."""
     video_path, _ = sample_media_tracks

@@ -84,11 +84,14 @@ export function useScanJobs() {
           const entry = prev[data.job_id];
           if (!entry) return prev;
           const post = tagPosts([data.post], data.job_id, data.scan_id)[0];
+          // Backend de-duplicates posts before emitting, so append directly:
+          // rebuilding the whole list per event is quadratic on large scans.
+          const alreadyPresent = entry.posts.some((existing) => existing.id === post.id);
           return {
             ...prev,
             [data.job_id]: {
               snapshot: { ...entry.snapshot, status: "running", progress: data.progress },
-              posts: dedupePosts([...entry.posts, post] as PostWithScan[]),
+              posts: alreadyPresent ? entry.posts : [...entry.posts, post],
             },
           };
         });
