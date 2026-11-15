@@ -20,7 +20,7 @@ from ..models.url import ClassifiedUrl
 from .base import BaseProvider, host_of
 from .direct import DirectProvider
 from .gallerydl import PROFILE_SUBCATEGORIES, GalleryDlProvider
-from .ytdlp import VIDEO_HOSTS, YOUTUBE_HOSTS, YtDlpProvider
+from .ytdlp import TIKTOK_HOSTS, VIDEO_HOSTS, YOUTUBE_HOSTS, YtDlpProvider
 
 _DIRECT = DirectProvider()
 _GALLERYDL = GalleryDlProvider()
@@ -39,7 +39,7 @@ def resolve_provider(url: str) -> BaseProvider:
         return _DIRECT
 
     host = host_of(url)
-    if host in YOUTUBE_HOSTS or host in VIDEO_HOSTS:
+    if host in YOUTUBE_HOSTS or host in VIDEO_HOSTS or host in TIKTOK_HOSTS:
         return _YTDLP
 
     if _GALLERYDL.match(url):

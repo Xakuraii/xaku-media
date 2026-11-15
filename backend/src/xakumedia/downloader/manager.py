@@ -7,11 +7,20 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from ..core.config import default_config
 from ..core.logging import get_logger
 from ..db import default_repository
-from ..exceptions import DownloadError, DownloadPausedError
+from ..exceptions import (
+    DownloadError,
+    DownloadPausedError,
+    MediaUnavailableError,
+    NetworkTimeoutError,
+    PrivateMediaError,
+)
 from ..models.media import MediaFormatInfo, MediaItem, MediaType
+from ..models.post import ScanOptions
 from ..models.queue import DownloadTask, ProgressUpdate, TaskStatus
 from ..server.loop import send_notification
 from ..server.protocol import JsonRpcNotification
@@ -515,6 +524,175 @@ class DownloadManager:
             return dest
         return dest.with_suffix(f".{ext}")
 
+    def _plan_streams(
+        self,
+        media_item: MediaItem,
+        selected: MediaFormatInfo | None,
+    ) -> tuple[MediaFormatInfo | None, MediaFormatInfo | None, str]:
+        """Resolve a complete plan: direct/muxed stream, or video plus audio.
+
+        Never returns a video-only plan when a separate audio track exists.
+        """
+        if selected is None and media_item.available_formats:
+            selected = media_item.find_best_format()
+
+        if (
+            selected
+            and self._format_has_video(selected)
+            and not self._format_has_audio(selected)
+        ):
+            audio_format = self._best_audio_format(media_item)
+            if audio_format and audio_format.url:
+                return (
+                    selected,
+                    audio_format,
+                    selected.url or media_item.original_url,
+                )
+
+            muxed = self._best_muxed_format(media_item, selected.height)
+            if muxed and muxed.url:
+                logger.warning(
+                    f"No audio-only track for {selected.format_id}; "
+                    f"falling back to muxed format {muxed.format_id} "
+                    f"({muxed.height or '?'}p)"
+                )
+                return muxed, None, muxed.url
+
+            raise DownloadError(
+                "The selected quality is a video-only stream, and this source "
+                "did not expose a matching audio track. XakuMedia will not save "
+                "a silent video. Rescan the source or choose another quality."
+            )
+
+        url = (
+            selected.url
+            if selected and selected.url
+            else media_item.original_url
+        )
+        return selected, None, url
+
+    def _match_format(
+        self,
+        media_item: MediaItem,
+        old: MediaFormatInfo | None,
+    ) -> MediaFormatInfo | None:
+        """Map a previously selected format onto a freshly extracted item."""
+        if old is None:
+            return None
+
+        for candidate in media_item.available_formats:
+            if candidate.format_id == old.format_id:
+                return candidate
+
+        if self._format_has_audio(old) and not self._format_has_video(old):
+            return self._best_audio_format(media_item)
+
+        if self._format_has_video(old):
+            videos = [
+                candidate
+                for candidate in media_item.available_formats
+                if self._format_has_video(candidate) and candidate.url
+            ]
+            if not videos:
+                return None
+            target_height = old.height or 0
+            return min(
+                videos,
+                key=lambda candidate: abs((candidate.height or 0) - target_height),
+            )
+
+        return media_item.available_formats[0] if media_item.available_formats else None
+
+    def _refresh_media_item(self, media_item: MediaItem) -> MediaItem | None:
+        """Re-extract the owning post to replace expired or signed CDN URLs.
+
+        yt-dlp and gallery-dl URLs can expire while a task waits in the queue.
+        Re-running the provider for the same post returns a fresh stream URL and
+        the headers needed to fetch it.
+        """
+        provider_name = (media_item.provider or "").lower()
+        if provider_name == "gallerydl":
+            from ..providers.gallerydl import GalleryDlProvider
+
+            provider = GalleryDlProvider()
+        elif provider_name == "ytdlp":
+            from ..providers.ytdlp import YtDlpProvider
+
+            provider = YtDlpProvider()
+        else:
+            return None
+
+        page_url = (
+            media_item.post_url
+            or media_item.original_url
+            or media_item.source_url
+        )
+        if not page_url.lower().startswith(("http://", "https://")):
+            return None
+
+        try:
+            posts = list(
+                provider.iter_posts(
+                    page_url,
+                    ScanOptions(
+                        include_images=True,
+                        include_videos=True,
+                        max_posts=25,
+                    ),
+                    threading.Event(),
+                )
+            )
+        except Exception as exc:
+            logger.warning(
+                f"Could not refresh media URLs for {page_url}: {exc}"
+            )
+            return None
+
+        candidates = [item for post in posts for item in post.media_items if item]
+        if not candidates:
+            return None
+
+        if media_item.provider_media_id:
+            for candidate in candidates:
+                if candidate.provider_media_id == media_item.provider_media_id:
+                    logger.info(
+                        f"Refreshed media URL for {media_item.provider_media_id} "
+                        f"via {provider_name}."
+                    )
+                    return candidate
+
+        same_type = [
+            candidate
+            for candidate in candidates
+            if candidate.media_type == media_item.media_type
+        ]
+        if len(same_type) == 1:
+            return same_type[0]
+
+        for candidate in same_type:
+            if candidate.attachment_index == media_item.attachment_index:
+                return candidate
+
+        return None
+
+    def _align_destination(
+        self, task: DownloadTask, dest: Path, selected: MediaFormatInfo | None
+    ) -> Path:
+        """Match the destination suffix to the selected container."""
+        if not selected or not selected.container:
+            return dest
+        aligned = self._destination_for_container(dest, selected.container)
+        if aligned == dest:
+            return dest
+        logger.info(
+            f"Task {task.id}: destination extension adjusted "
+            f"{dest.name} -> {aligned.name}"
+        )
+        task.destination_path = aligned
+        task.temp_path = aligned.with_suffix(aligned.suffix + ".part")
+        self.repository.save_download_task(task)
+        return aligned
+
     def _run_task(
         self,
         task: DownloadTask,
@@ -553,10 +731,10 @@ class DownloadManager:
         media_item = task.media_item
         dest = task.destination_path
         audio_format: MediaFormatInfo | None = None
-        requires_merge = False
         video_part: Path | None = None
         audio_part: Path | None = None
         merged_temp: Path | None = None
+        video_bytes = 0
 
         try:
             if not dest:
@@ -564,176 +742,188 @@ class DownloadManager:
                     "Download destination path is missing; the task cannot be started."
                 )
 
-            if (
-                selected
-                and self._format_has_video(selected)
-                and not self._format_has_audio(selected)
-            ):
-                audio_format = self._best_audio_format(media_item)
-                if audio_format and audio_format.url:
-                    requires_merge = True
-                else:
-                    muxed = self._best_muxed_format(media_item, selected.height)
-                    if muxed and muxed.url:
-                        logger.warning(
-                            f"Task {task.id}: no audio-only track for {selected.format_id}; "
-                            f"falling back to muxed format {muxed.format_id} "
-                            f"({muxed.height or '?'}p)"
-                        )
-                        task.selected_format = muxed
-                        selected = muxed
-                        url = muxed.url
-                    else:
-                        raise DownloadError(
-                            "The selected quality is a video-only stream, and this source "
-                            "did not expose a matching audio track. XakuMedia will not save "
-                            "a silent video. Rescan the source or choose another quality."
-                        )
-
+            selected, audio_format, url = self._plan_streams(media_item, selected)
+            task.selected_format = selected
             # Sync the file extension with the actual stream container. A muxed
             # fallback or caller-supplied path can otherwise yield WebM bytes in
             # a ``.mp4`` file, which players may refuse to open.
-            if selected and selected.container:
-                aligned = self._destination_for_container(dest, selected.container)
-                if aligned != dest:
+            dest = self._align_destination(task, dest, selected)
+
+            def run_plan() -> Path:
+                """Execute the current stream plan once."""
+                nonlocal selected, audio_format, url, media_item, dest
+                nonlocal video_part, audio_part, merged_temp, video_bytes
+
+                if audio_format and audio_format.url:
+                    v_fmt_id = selected.format_id if selected else "unknown"
+                    a_fmt_id = audio_format.format_id
                     logger.info(
-                        f"Task {task.id}: destination extension adjusted "
-                        f"{dest.name} -> {aligned.name}"
+                        f"Task {task.id} requires FFmpeg merge "
+                        f"(video: {v_fmt_id}, audio: {a_fmt_id})"
                     )
-                    dest = aligned
-                    task.destination_path = dest
-                    task.temp_path = dest.with_suffix(dest.suffix + ".part")
-                    self.repository.save_download_task(task)
+                    video_part = dest.with_name(f"{dest.name}.video")
+                    audio_part = dest.with_name(f"{dest.name}.audio")
+                    merged_temp = dest.with_name(f"{dest.stem}.merged{dest.suffix}")
+                    try:
+                        merged_temp.unlink(missing_ok=True)
+                    except OSError:
+                        pass
 
-            if requires_merge and audio_format and audio_format.url:
-                v_fmt_id = selected.format_id if selected else "unknown"
-                a_fmt_id = audio_format.format_id
-                logger.info(
-                    f"Task {task.id} requires FFmpeg merge (video: {v_fmt_id}, audio: {a_fmt_id})"
-                )
-                video_part = dest.with_name(f"{dest.name}.video")
-                audio_part = dest.with_name(f"{dest.name}.audio")
-                merged_temp = dest.with_name(f"{dest.stem}.merged{dest.suffix}")
-                try:
-                    merged_temp.unlink(missing_ok=True)
-                except OSError:
-                    pass
+                    video_bytes = 0
 
-                video_bytes = 0
-
-                # 1. Download video track (0-85% of the task)
-                def video_progress(up: ProgressUpdate) -> None:
-                    nonlocal video_bytes
-                    video_bytes = up.bytes_downloaded
-                    progress_callback(
-                        ProgressUpdate(
-                            task_id=task.id,
-                            status=TaskStatus.DOWNLOADING,
-                            bytes_downloaded=up.bytes_downloaded,
-                            total_bytes=up.total_bytes,
-                            progress_percent=round(up.progress_percent * 0.85, 1),
-                            speed_bytes_sec=up.speed_bytes_sec,
-                            eta_seconds=up.eta_seconds,
-                            detail_message="Downloading video track...",
+                    # 1. Download video track (0-85% of the task)
+                    def video_progress(up: ProgressUpdate) -> None:
+                        nonlocal video_bytes
+                        video_bytes = up.bytes_downloaded
+                        progress_callback(
+                            ProgressUpdate(
+                                task_id=task.id,
+                                status=TaskStatus.DOWNLOADING,
+                                bytes_downloaded=up.bytes_downloaded,
+                                total_bytes=up.total_bytes,
+                                progress_percent=round(up.progress_percent * 0.85, 1),
+                                speed_bytes_sec=up.speed_bytes_sec,
+                                eta_seconds=up.eta_seconds,
+                                detail_message="Downloading video track...",
+                            )
                         )
-                    )
 
-                download_stream(
-                    url=url,
-                    destination_path=video_part,
-                    task_id=task.id,
-                    progress_callback=video_progress,
-                    cancel_event=cancel_event,
-                    pause_event=pause_event,
-                    throttler=self.throttler,
-                )
-                try:
-                    video_bytes = video_part.stat().st_size
-                except OSError:
-                    pass
-
-                # 2. Download audio track (85-97% of the task)
-                def audio_progress(up: ProgressUpdate) -> None:
-                    total = (
-                        video_bytes + up.total_bytes if up.total_bytes else up.total_bytes
-                    )
-                    progress_callback(
-                        ProgressUpdate(
-                            task_id=task.id,
-                            status=TaskStatus.DOWNLOADING,
-                            bytes_downloaded=video_bytes + up.bytes_downloaded,
-                            total_bytes=total,
-                            progress_percent=round(85.0 + (up.progress_percent * 0.12), 1),
-                            speed_bytes_sec=up.speed_bytes_sec,
-                            eta_seconds=up.eta_seconds,
-                            detail_message="Downloading audio track...",
-                        )
-                    )
-
-                download_stream(
-                    url=audio_format.url,
-                    destination_path=audio_part,
-                    task_id=task.id,
-                    progress_callback=audio_progress,
-                    cancel_event=cancel_event,
-                    pause_event=pause_event,
-                    throttler=self.throttler,
-                )
-
-                # 3. Transition to MERGING state
-                task.status = TaskStatus.MERGING
-                task.progress_percent = 97.0
-                self.repository.save_download_task(task)
-                _broadcast(
-                    "progress",
-                    ProgressUpdate(
+                    download_stream(
+                        url=url,
+                        destination_path=video_part,
                         task_id=task.id,
-                        status=TaskStatus.MERGING,
-                        bytes_downloaded=task.bytes_downloaded,
-                        total_bytes=task.total_bytes,
-                        progress_percent=97.0,
-                        detail_message="Merging audio and video tracks with FFmpeg...",
-                    ).model_dump(mode="json"),
-                )
+                        progress_callback=video_progress,
+                        cancel_event=cancel_event,
+                        pause_event=pause_event,
+                        headers=selected.http_headers if selected else None,
+                        throttler=self.throttler,
+                    )
+                    try:
+                        video_bytes = video_part.stat().st_size
+                    except OSError:
+                        pass
 
-                # 4. Perform FFmpeg multiplexing into a correctly suffixed temp file
-                from ..processor.ffmpeg import merge_video_audio
+                    # 2. Download audio track (85-97% of the task)
+                    def audio_progress(up: ProgressUpdate) -> None:
+                        total = (
+                            video_bytes + up.total_bytes
+                            if up.total_bytes
+                            else up.total_bytes
+                        )
+                        progress_callback(
+                            ProgressUpdate(
+                                task_id=task.id,
+                                status=TaskStatus.DOWNLOADING,
+                                bytes_downloaded=video_bytes + up.bytes_downloaded,
+                                total_bytes=total,
+                                progress_percent=round(
+                                    85.0 + (up.progress_percent * 0.12), 1
+                                ),
+                                speed_bytes_sec=up.speed_bytes_sec,
+                                eta_seconds=up.eta_seconds,
+                                detail_message="Downloading audio track...",
+                            )
+                        )
 
-                container = (
-                    selected.container
-                    if selected and selected.container
-                    else dest.suffix.lstrip(".")
-                )
-                merge_video_audio(
-                    video_path=video_part,
-                    audio_path=audio_part,
-                    output_path=merged_temp,
-                    output_container=container,
-                    is_cancelled=cancel_event.is_set,
-                )
+                    download_stream(
+                        url=audio_format.url,
+                        destination_path=audio_part,
+                        task_id=task.id,
+                        progress_callback=audio_progress,
+                        cancel_event=cancel_event,
+                        pause_event=pause_event,
+                        headers=audio_format.http_headers or None,
+                        throttler=self.throttler,
+                    )
 
-                # 5. Clean up temporary parts and atomically finalize
-                video_part.unlink(missing_ok=True)
-                audio_part.unlink(missing_ok=True)
-                video_part = None
-                audio_part = None
+                    # 3. Transition to MERGING state
+                    task.status = TaskStatus.MERGING
+                    task.progress_percent = 97.0
+                    self.repository.save_download_task(task)
+                    _broadcast(
+                        "progress",
+                        ProgressUpdate(
+                            task_id=task.id,
+                            status=TaskStatus.MERGING,
+                            bytes_downloaded=task.bytes_downloaded,
+                            total_bytes=task.total_bytes,
+                            progress_percent=97.0,
+                            detail_message="Merging audio and video tracks with FFmpeg...",
+                        ).model_dump(mode="json"),
+                    )
 
-                import os
+                    # 4. Perform FFmpeg multiplexing into a correctly suffixed temp file
+                    from ..processor.ffmpeg import merge_video_audio
 
-                os.replace(str(merged_temp), str(dest))
-                merged_temp = None
-                final_path = dest
-            else:
+                    container = (
+                        selected.container
+                        if selected and selected.container
+                        else dest.suffix.lstrip(".")
+                    )
+                    merge_video_audio(
+                        video_path=video_part,
+                        audio_path=audio_part,
+                        output_path=merged_temp,
+                        output_container=container,
+                        is_cancelled=cancel_event.is_set,
+                    )
+
+                    # 5. Clean up temporary parts and atomically finalize
+                    video_part.unlink(missing_ok=True)
+                    audio_part.unlink(missing_ok=True)
+                    video_part = None
+                    audio_part = None
+
+                    import os
+
+                    os.replace(str(merged_temp), str(dest))
+                    merged_temp = None
+                    return dest
+
                 # Direct single-stream download
-                final_path = download_stream(
+                return download_stream(
                     url=url,
                     destination_path=dest,
                     task_id=task.id,
                     progress_callback=progress_callback,
                     cancel_event=cancel_event,
                     pause_event=pause_event,
+                    headers=selected.http_headers if selected else None,
                     throttler=self.throttler,
                 )
+
+            try:
+                final_path = run_plan()
+            except (
+                PrivateMediaError,
+                MediaUnavailableError,
+                NetworkTimeoutError,
+                httpx.TransportError,
+            ) as exc:
+                # Signed CDN URLs expire while a task waits in the queue. Ask
+                # the owning provider for a fresh URL and retry exactly once.
+                logger.warning(
+                    f"Task {task.id}: stream request failed ({exc}); "
+                    "refreshing media URLs from the source provider."
+                )
+                refreshed_item = self._refresh_media_item(media_item)
+                if refreshed_item is None:
+                    raise
+                fresh_selected = self._match_format(refreshed_item, selected)
+                fresh_audio = (
+                    self._match_format(refreshed_item, audio_format)
+                    if audio_format
+                    else None
+                )
+                media_item = refreshed_item
+                task.media_item = media_item
+                selected = fresh_selected
+                audio_format = fresh_audio
+                selected, audio_format, url = self._plan_streams(media_item, selected)
+                task.selected_format = selected
+                dest = self._align_destination(task, dest, selected)
+                self.repository.save_download_task(task)
+                final_path = run_plan()
 
             task.mark_completed(final_path)
             self.repository.save_download_task(task)

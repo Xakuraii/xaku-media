@@ -201,9 +201,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       const filePath = await window.api.selectCookieFile();
       if (!filePath) return;
       const res = await window.api.importCookiesFile(filePath);
+      const profiles = res.profiles ?? [];
+      const primary = res.profile ?? profiles[0] ?? null;
+      const count = res.count ?? profiles.length;
+      if (!primary) throw new Error("No valid cookies found in the selected file.");
       setAuthFeedback({
         type: "success",
-        message: `Imported ${res.profile.cookie_count} cookies for '${res.profile.domain}' from file.`,
+        message:
+          count > 1
+            ? `Imported ${count} site profiles (${profiles
+                .map((p) => p.domain)
+                .slice(0, 4)
+                .join(", ")}${count > 4 ? ", …" : ""}) from file.`
+            : `Imported ${primary.cookie_count} cookies for '${primary.domain}' from file.`,
       });
       await loadAuthData();
     } catch (err: any) {

@@ -398,6 +398,14 @@ export interface CookieProfileRecord {
   updated_at: string;
 }
 
+export interface ImportCookiesFileResult {
+  /** First (or only) imported profile. Kept for older callers. */
+  profile: CookieProfileRecord | null;
+  /** Every site profile created from a multi-site cookies.txt export. */
+  profiles: CookieProfileRecord[];
+  count: number;
+}
+
 export interface DomainHeaderRecord {
   domain: string;
   headers: Record<string, string>;
@@ -847,7 +855,7 @@ export interface DesktopApi {
   importCookiesFile?: (
     filePath: string,
     domain?: string
-  ) => Promise<{ profile: CookieProfileRecord }>;
+  ) => Promise<ImportCookiesFileResult>;
 
   /**
    * List all saved cookie profiles in SQLite.

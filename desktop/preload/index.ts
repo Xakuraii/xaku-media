@@ -17,6 +17,7 @@ import type {
   ExportMetadataResult,
   FFmpegInfoResult,
   GetDownloadTasksResult,
+  ImportCookiesFileResult,
   IncrementalScanResult,
   InspectMediaResult,
   LibraryStats,
@@ -421,7 +422,7 @@ const api: DesktopApi = {
   importCookiesFile: async (
     filePath: string,
     domain?: string
-  ): Promise<{ profile: CookieProfileRecord }> => {
+  ): Promise<ImportCookiesFileResult> => {
     return ipcRenderer.invoke("python:importCookiesFile", filePath, domain);
   },
   listCookieProfiles: async (): Promise<{ profiles: CookieProfileRecord[]; count: number }> => {

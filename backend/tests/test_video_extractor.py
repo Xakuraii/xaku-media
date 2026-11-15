@@ -84,6 +84,35 @@ def test_normalize_formats() -> None:
     assert formats[2].audio_codec == "mp4a.40.2"
 
 
+def test_normalize_formats_propagates_http_headers() -> None:
+    root_headers = {"Referer": "https://www.tiktok.com/", "User-Agent": "Chrome"}
+    raw_formats = [
+        {
+            "format_id": "h264",
+            "ext": "mp4",
+            "vcodec": "h264",
+            "acodec": "aac",
+            "url": "https://cdn.example.com/video.mp4",
+        },
+        {
+            "format_id": "audio",
+            "ext": "m4a",
+            "vcodec": "none",
+            "acodec": "aac",
+            "url": "https://cdn.example.com/audio.m4a",
+            "http_headers": {"Referer": "https://cdn.example.com/"},
+        },
+    ]
+
+    formats = normalize_formats(raw_formats, root_headers)
+
+    assert formats[0].http_headers == root_headers
+    assert formats[1].http_headers == {
+        "Referer": "https://cdn.example.com/",
+        "User-Agent": "Chrome",
+    }
+
+
 def test_parse_yt_dlp_errors() -> None:
     url = "https://example.com/video"
 

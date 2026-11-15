@@ -57,9 +57,22 @@ def parse_yt_dlp_error(error_message: str, url: str) -> ExtractionError:
     return ExtractionError(f"Extraction failed: {error_message}", details={"url": url})
 
 
-def normalize_formats(raw_formats: list[dict[str, Any]]) -> list[MediaFormatInfo]:
-    """Parse and normalize raw yt-dlp format dictionaries into MediaFormatInfo models."""
+def normalize_formats(
+    raw_formats: list[dict[str, Any]],
+    default_headers: dict[str, str] | None = None,
+) -> list[MediaFormatInfo]:
+    """Parse and normalize raw yt-dlp format dictionaries into MediaFormatInfo models.
+
+    ``default_headers`` carries the extractor-level ``http_headers`` that yt-dlp
+    attaches to the post (Referer, User-Agent, cookies-dependent headers). Some
+    CDNs reject the stream without them even when the URL is still valid.
+    """
     normalized: list[MediaFormatInfo] = []
+    base_headers = {
+        str(key): str(value)
+        for key, value in (default_headers or {}).items()
+        if value is not None
+    }
 
     for f in raw_formats:
         vcodec = f.get("vcodec") or "none"
@@ -86,6 +99,15 @@ def normalize_formats(raw_formats: list[dict[str, Any]]) -> list[MediaFormatInfo
 
         resolution_str = f"{height}p" if height else (f.get("resolution") or None)
 
+        format_headers = {
+            **base_headers,
+            **{
+                str(key): str(value)
+                for key, value in (f.get("http_headers") or {}).items()
+                if value is not None
+            },
+        }
+
         normalized.append(
             MediaFormatInfo(
                 format_id=format_id,
@@ -101,6 +123,7 @@ def normalize_formats(raw_formats: list[dict[str, Any]]) -> list[MediaFormatInfo
                 url=f.get("url"),
                 requires_merge=requires_merge,
                 format_note=f.get("format_note"),
+                http_headers=format_headers,
             )
         )
 
@@ -193,7 +216,7 @@ def extract_video_info(
     extractor_key = info.get("extractor_key") or info.get("extractor") or "Generic"
     webpage_url = info.get("webpage_url") or safe_url
 
-    formats = normalize_formats(info.get("formats", []))
+    formats = normalize_formats(info.get("formats", []), info.get("http_headers"))
 
     # Calculate overall filesize estimate from best format if root filesize is missing
     filesize = info.get("filesize") or info.get("filesize_approx")

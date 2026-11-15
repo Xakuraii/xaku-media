@@ -34,6 +34,7 @@ from .base import BaseProvider, PageCallback, host_of, make_media_item, make_pos
 logger = get_logger("providers.ytdlp")
 
 YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "music.youtube.com"}
+TIKTOK_HOSTS = {"tiktok.com", "www.tiktok.com", "m.tiktok.com"}
 VIDEO_HOSTS = {
     "vimeo.com",
     "www.vimeo.com",
@@ -51,10 +52,45 @@ HYDRATE_WORKERS = 6
 
 _CHANNEL_PATH = re.compile(r"^/(@[^/]+|channel/[^/]+|c/[^/]+|user/[^/]+)/?$")
 _CHANNEL_TABS = ("videos", "shorts", "streams")
+_TIKTOK_PROFILE_PATH = re.compile(r"^/@[^/]+/?$")
+
+_IMPERSONATION_TARGET: Any | None = None
+_IMPERSONATION_READY = False
 
 
 def is_youtube(url: str) -> bool:
     return host_of(url) in YOUTUBE_HOSTS
+
+
+def is_tiktok(url: str) -> bool:
+    return host_of(url) in TIKTOK_HOSTS
+
+
+def tiktok_impersonation_target() -> Any | None:
+    """Return yt-dlp's Chrome impersonation target when its backend is usable.
+
+    TikTok serves a JavaScript challenge to plain clients and returns 403. The
+    impersonation target makes curl_cffi emulate Chrome's TLS fingerprint, which
+    is the difference between "cookies saved but still forbidden" and a working
+    scan. A missing or incompatible curl_cffi degrades to a normal request.
+    """
+    global _IMPERSONATION_TARGET, _IMPERSONATION_READY
+    if _IMPERSONATION_READY:
+        return _IMPERSONATION_TARGET
+    _IMPERSONATION_READY = True
+    try:
+        import importlib
+
+        importlib.import_module("yt_dlp.networking._curlcffi")
+        from yt_dlp.networking.impersonate import ImpersonateTarget
+
+        _IMPERSONATION_TARGET = ImpersonateTarget("chrome")
+    except Exception as exc:
+        logger.warning(
+            f"TikTok browser impersonation unavailable; scans may be blocked: {exc}"
+        )
+        _IMPERSONATION_TARGET = None
+    return _IMPERSONATION_TARGET
 
 
 def is_collection_url(url: str) -> bool:
@@ -69,6 +105,8 @@ def is_collection_url(url: str) -> bool:
         return bool(re.match(r"^/@[^/]+/(videos|shorts|streams|playlists)/?$", parts.path))
     if host in VIDEO_HOSTS:
         return "/playlist" in parts.path or "/channel" in parts.path or "/user" in parts.path
+    if host in TIKTOK_HOSTS:
+        return _TIKTOK_PROFILE_PATH.match(parts.path) is not None
     return False
 
 
@@ -104,6 +142,8 @@ def platform_label(url: str) -> str:
     host = host_of(url)
     if host in YOUTUBE_HOSTS:
         return "youtube"
+    if host in TIKTOK_HOSTS:
+        return "tiktok"
     return "yt-dlp"
 
 
@@ -173,7 +213,7 @@ class YtDlpProvider(BaseProvider):
     @classmethod
     def match(cls, url: str) -> bool:
         host = host_of(url)
-        if host in YOUTUBE_HOSTS or host in VIDEO_HOSTS:
+        if host in YOUTUBE_HOSTS or host in VIDEO_HOSTS or host in TIKTOK_HOSTS:
             return True
         return False
 
@@ -203,7 +243,14 @@ class YtDlpProvider(BaseProvider):
                 "YouTube channel Videos, Shorts, and Streams tabs are enumerated. "
                 "Members-only and playlist-only content still require their direct URLs."
                 if youtube
-                else "Playlist/channel enumeration depends on the site extractor."
+                else (
+                    "TikTok profiles are enumerated through yt-dlp with Chrome "
+                    "impersonation. A cookie profile makes private/follow-only "
+                    "uploads available; photo posts are read through gallery-dl "
+                    "so each slide is discovered as an image."
+                    if is_tiktok(url)
+                    else "Playlist/channel enumeration depends on the site extractor."
+                )
             ),
         )
 
@@ -248,6 +295,10 @@ class YtDlpProvider(BaseProvider):
             headers = default_repository.get_domain_headers(url)
             if headers:
                 opts["http_headers"] = headers
+            if host_of(url) in TIKTOK_HOSTS:
+                target = tiktok_impersonation_target()
+                if target is not None:
+                    opts["impersonate"] = target
         except Exception as exc:  # pragma: no cover - defensive auth wiring
             logger.debug(f"Cookie/header lookup skipped for {url}: {exc}")
 
@@ -259,6 +310,7 @@ class YtDlpProvider(BaseProvider):
         cancel_event: threading.Event,
         warn: Callable[[str], None],
         source_url: str,
+        options: ScanOptions,
     ) -> Iterator[Post]:
         """Hydrate entries concurrently while streaming posts in completion order.
 
@@ -321,8 +373,20 @@ class YtDlpProvider(BaseProvider):
                         logger.debug(f"Hydration failed for {label}: {error}")
                         submit_next()
                         continue
+                    post = self._post_from_info(info, source_url, warn)
+                    if post is None:
+                        # TikTok photo post with no retrievable slides. The
+                        # fallback already warned; never emit the audio track.
+                        submit_next()
+                        continue
+                    if not options.include_videos and not any(
+                        item.media_type == MediaType.IMAGE
+                        for item in post.media_items
+                    ):
+                        submit_next()
+                        continue
                     emitted += 1
-                    yield self._post_from_info(info, source_url)
+                    yield post
                     if emitted >= limit:
                         return
                     submit_next()
@@ -334,9 +398,96 @@ class YtDlpProvider(BaseProvider):
             if not pending:
                 hydrator.close()
 
-    def _post_from_info(self, info: dict[str, Any], source_url: str) -> Post:
-        formats = normalize_formats(info.get("formats", []))
-        best = formats[0] if formats else None
+    def _tiktok_image_post(
+        self,
+        page_url: str,
+        source_url: str,
+        info: dict[str, Any],
+        warn: Callable[[str], None] | None = None,
+    ) -> Post | None:
+        """Build a TikTok slideshow post from gallery-dl image entries.
+
+        yt-dlp only exposes the background audio track for photo-mode posts, so
+        a normal video item would download as an MP3. gallery-dl's TikTok
+        extractor returns one image URL per slide; use it instead and never
+        surface the audio as a video.
+        """
+        from .gallerydl import GalleryDlProvider
+
+        try:
+            gallery = GalleryDlProvider()
+            posts = list(
+                gallery.iter_posts(
+                    page_url,
+                    ScanOptions(include_images=True, include_videos=False),
+                    threading.Event(),
+                )
+            )
+        except Exception as exc:
+            if warn:
+                warn(f"Could not load TikTok slideshow images: {exc}")
+            logger.warning(f"TikTok slideshow fallback failed for {page_url}: {exc}")
+            return None
+
+        images = [
+            item
+            for post in posts
+            for item in post.media_items
+            if item.media_type == MediaType.IMAGE
+        ]
+        if not images:
+            if warn:
+                warn("A TikTok photo post did not return any slide images.")
+            return None
+
+        video_id = str(
+            info.get("id")
+            or info.get("display_id")
+            or page_url.rstrip("/").rsplit("/", 1)[-1]
+        )
+        author = str(
+            info.get("uploader")
+            or info.get("channel")
+            or info.get("creator")
+            or next((post.author for post in posts if post.author), "media")
+        )
+        post_key = f"tiktok:{video_id}"
+        post = make_post(
+            provider=self.name,
+            source_url=source_url,
+            post_key=post_key,
+            provider_post_id=video_id,
+            author=author,
+            title=info.get("title") or next((post.title for post in posts if post.title), None),
+            media_items=images,
+            post_url=page_url,
+            metadata_extra={
+                "extractor": "TikTok",
+                "slideshow": True,
+                "media_provider": GalleryDlProvider.name,
+            },
+        )
+        return post
+
+    def _post_from_info(
+        self,
+        info: dict[str, Any],
+        source_url: str,
+        warn: Callable[[str], None] | None = None,
+    ) -> Post | None:
+        formats = normalize_formats(
+            info.get("formats", []), info.get("http_headers")
+        )
+        page_url = info.get("webpage_url") or source_url
+        video_formats = [fmt for fmt in formats if fmt.video_codec]
+
+        if is_tiktok(source_url) and not video_formats:
+            # Photo-mode posts only expose their background audio to yt-dlp.
+            # Return the slide images when gallery-dl can provide them, and no
+            # post at all when it cannot, so an MP3 is never presented as video.
+            return self._tiktok_image_post(page_url, source_url, info, warn)
+
+        best = video_formats[0] if video_formats else (formats[0] if formats else None)
         stream_url = (
             (best.url if best and best.url else None)
             or info.get("webpage_url")
@@ -350,7 +501,6 @@ class YtDlpProvider(BaseProvider):
             or info.get("uploader_id")
             or "media"
         )
-        page_url = info.get("webpage_url") or source_url
         post_key = f"{platform_label(source_url)}:{video_id}"
         post = make_post(
             provider=self.name,
@@ -406,7 +556,9 @@ class YtDlpProvider(BaseProvider):
         collection = is_collection_url(safe_url)
         warn = on_warning or (lambda _msg: None)
 
-        if not options.include_videos:
+        if not options.include_videos and not (
+            options.include_images and is_tiktok(safe_url)
+        ):
             return
 
         if not collection:
@@ -416,12 +568,25 @@ class YtDlpProvider(BaseProvider):
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     info = ydl.extract_info(safe_url, download=False)
             except (DownloadError, ExtractorError) as exc:
+                if is_tiktok(safe_url) and options.include_images:
+                    slideshow = self._tiktok_image_post(safe_url, safe_url, {}, warn)
+                    if slideshow is not None:
+                        if on_page:
+                            on_page(1)
+                        yield slideshow
+                        return
                 raise parse_yt_dlp_error(str(exc), safe_url) from exc
             if not info:
                 raise MediaUnavailableError(f"Could not extract video metadata from: {url}")
             if on_page:
                 on_page(1)
-            yield self._post_from_info(info, safe_url)
+            post = self._post_from_info(info, safe_url, warn)
+            if post is None or not post.media_items:
+                raise MediaUnavailableError(
+                    "TikTok returned no downloadable video or slide images for this post. "
+                    "It may be region-restricted, deleted, or still processing."
+                )
+            yield post
             return
 
         limit = options.max_posts or SAFETY_MAX_POSTS
@@ -493,6 +658,7 @@ class YtDlpProvider(BaseProvider):
                 cancel_event,
                 warn,
                 safe_url,
+                options,
             )
         except (DownloadError, ExtractorError) as exc:
             raise parse_yt_dlp_error(str(exc), safe_url) from exc

@@ -12,6 +12,7 @@ can still produce posts, while malicious or runaway queues stay bounded.
 
 from __future__ import annotations
 
+import re
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -39,7 +40,7 @@ from ..exceptions.base import (
     XakuMediaError,
 )
 from ..extractors.gallery import parse_gallery_dl_error
-from ..models.media import MediaFormatInfo, MediaType
+from ..models.media import MediaFormatInfo, MediaItem, MediaType
 from ..models.post import Post, ProviderCapabilities, ScanOptions
 from ..models.url import ClassifiedUrl, UrlCategory
 from ..utils.security import validate_url_security
@@ -74,6 +75,43 @@ POST_KEYS = (
 IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "gif", "avif", "bmp", "tiff", "svg"}
 VIDEO_EXTENSIONS = {"mp4", "webm", "mkv", "mov", "avi", "m4v", "ts"}
 AUDIO_EXTENSIONS = {"mp3", "m4a", "aac", "flac", "ogg", "wav", "opus"}
+AUDIO_CODECS = {
+    "mp3": "mp3",
+    "m4a": "aac",
+    "aac": "aac",
+    "flac": "flac",
+    "ogg": "vorbis",
+    "opus": "opus",
+    "wav": "pcm_s16le",
+}
+# Instagram returns DASH manifests by default. Its extractor can instead expose
+# the progress video URL (``videos = "merged"``), which is a single MP4 with
+# audio and needs no secondary manifest fetch during download.
+MERGED_VIDEO_CATEGORIES = {"instagram"}
+# Sites whose gallery-dl video entries are progressive MP4 files that already
+# contain their audio track. Facebook is intentionally absent: its extractor
+# emits a separate DASH audio item that must be muxed.
+MUXED_VIDEO_CATEGORIES = {"instagram", "twitter", "threads"}
+X_HOSTS = {"x.com", "www.x.com", "mobile.x.com", "twitter.com", "www.twitter.com"}
+_X_TWEETS_PATH = re.compile(r"^/([^/]+)/tweets/?$")
+
+
+def _prefer_media_queue(url: str) -> str:
+    """Point X profile queues at the media tab instead of the full timeline.
+
+    gallery-dl's user extractor queues ``/<user>/tweets``. That walks every
+    text-only tweet until media appears, which is slow and can hit rate limits.
+    The media tab returns exactly the pictures and videos a scan wants.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    host = (parts.hostname or "").lower()
+    match = _X_TWEETS_PATH.match(parts.path)
+    if host in X_HOSTS and match:
+        return f"{parts.scheme or 'https'}://{parts.netloc}/{match.group(1)}/media"
+    return url
 
 
 def _find_extractor(url: str):
@@ -99,6 +137,43 @@ def _extension(meta: dict[str, Any], media_url: str) -> str:
     if "." in path.rsplit("/", 1)[-1]:
         return path.rsplit(".", 1)[-1].lower()
     return "jpg"
+
+
+def _http_headers(meta: dict[str, Any]) -> dict[str, str]:
+    """Copy gallery-dl's per-file request headers into a plain string map."""
+    raw = meta.get("_http_headers") or {}
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(key): str(value)
+        for key, value in raw.items()
+        if value is not None
+    }
+
+
+def _audio_codec(extension: str) -> str:
+    return AUDIO_CODECS.get(extension.lower(), extension.lower() or "aac")
+
+
+def _author_label(meta: dict[str, Any]) -> str:
+    """Return a displayable author from the varied gallery-dl metadata."""
+    value = (
+        meta.get("author")
+        or meta.get("user")
+        or meta.get("username")
+        or meta.get("artist")
+        or "media"
+    )
+    if isinstance(value, dict):
+        return str(
+            value.get("username")
+            or value.get("uniqueId")
+            or value.get("name")
+            or value.get("nickname")
+            or value.get("nick")
+            or "media"
+        )
+    return str(value)
 
 
 @dataclass
@@ -228,9 +303,24 @@ class GalleryDlProvider(BaseProvider):
                     # Scope cookies to this site's extractor instead of leaking
                     # one site's session to every gallery-dl request.
                     gdl_config.set(("extractor", category), "cookies", str(cookie_path))
+            if category in MERGED_VIDEO_CATEGORIES:
+                gdl_config.set(("extractor", category), "videos", "merged")
+            if category in AUTH_HEAVY_CATEGORIES:
+                # These sites reject gallery-dl's default non-browser UA on the
+                # media endpoints even with valid cookies. The ``+`` prefix asks
+                # gallery-dl for its built-in Chrome UA string; without it the
+                # literal value "chrome" would be sent as the User-Agent.
+                gdl_config.set(("extractor", category), "user-agent", "+chrome")
         except Exception:
             pass
         extractor.initialize()
+        log = getattr(extractor, "log", None)
+        if log is not None and not hasattr(log, "traceback"):
+            # gallery-dl's error paths call log.traceback, which only exists on
+            # its own logger adapter. Without this shim a failed extractor raises
+            # "AttributeError: 'Logger' object has no attribute 'traceback'" and
+            # hides the real site error.
+            log.traceback = log.exception
         return extractor
 
     def _no_media_error(self, safe_url: str) -> ExtractionError:
@@ -341,6 +431,34 @@ class GalleryDlProvider(BaseProvider):
         group_meta: dict[str, Any] = {}
         group_items: list = []
         group_ids: set[str] = set()
+        pending_audio: list[tuple[str, dict[str, Any], str]] = []
+
+        def attach_audio_track(
+            item: MediaItem, audio_url: str, meta: dict[str, Any], ext: str
+        ) -> None:
+            """Attach a separate audio stream so the downloader can mux it."""
+            format_id = "audio"
+            existing = {fmt.format_id for fmt in item.available_formats}
+            if format_id in existing:
+                format_id = f"audio-{len(item.available_formats)}"
+            item.available_formats.append(
+                MediaFormatInfo(
+                    format_id=format_id,
+                    container=ext,
+                    audio_codec=_audio_codec(ext),
+                    filesize_bytes=meta.get("filesize") or meta.get("size"),
+                    is_direct_stream=True,
+                    url=audio_url,
+                    requires_merge=False,
+                    format_note="audio",
+                    http_headers=_http_headers(meta),
+                )
+            )
+
+        def attach_pending_audio(item: MediaItem) -> None:
+            while pending_audio:
+                audio_url, meta, ext = pending_audio.pop(0)
+                attach_audio_track(item, audio_url, meta, ext)
 
         def flush() -> Post | None:
             nonlocal group_key, group_meta, group_items, group_ids
@@ -354,13 +472,7 @@ class GalleryDlProvider(BaseProvider):
                 source_url=safe_url,
                 post_key=group_key or safe_url,
                 provider_post_id=_post_key(group_meta) or (group_key or safe_url),
-                author=str(
-                    group_meta.get("author")
-                    or group_meta.get("user")
-                    or group_meta.get("username")
-                    or group_meta.get("artist")
-                    or "media"
-                ),
+                author=_author_label(group_meta),
                 title=group_meta.get("title") or group_meta.get("description"),
                 media_items=list(group_items),
                 post_url=group_meta.get("post_url")
@@ -375,6 +487,7 @@ class GalleryDlProvider(BaseProvider):
             group_items = []
             group_ids = set()
             group_meta = {}
+            pending_audio.clear()
             return post
 
         for message, data, meta in extractor.items():
@@ -385,9 +498,41 @@ class GalleryDlProvider(BaseProvider):
 
             if message == Message.Url:
                 media_url = str(data)
+
+                # gallery-dl hands DASH manifest entries to yt-dlp as
+                # ``ytdl:<page><n>.mp4``. The extractor also records the
+                # progressive fallback URL, which is directly downloadable and
+                # already contains audio. Prefer it so a scan result is always
+                # a real CDN stream.
+                if media_url.startswith("ytdl:"):
+                    fallback = meta.get("_fallback") or ()
+                    fallback_url = str(fallback[0]) if fallback else ""
+                    if not fallback_url:
+                        warn(
+                            "Skipped a DASH-only video stream that has no direct "
+                            "download URL."
+                        )
+                        continue
+                    media_url = fallback_url
+
                 ext = _extension(meta, media_url)
                 if ext in AUDIO_EXTENSIONS:
-                    warn("Audio-only attachment skipped (not part of image/video scans).")
+                    # Facebook (and other DASH sources) emit video and audio as
+                    # separate items. Keep the audio as a format of the current
+                    # video so the download manager can merge them instead of
+                    # saving a silent video.
+                    target = next(
+                        (
+                            item
+                            for item in reversed(group_items)
+                            if item.media_type == MediaType.VIDEO
+                        ),
+                        None,
+                    )
+                    if target is None:
+                        pending_audio.append((media_url, meta, ext))
+                    else:
+                        attach_audio_track(target, media_url, meta, ext)
                     continue
                 is_video = ext in VIDEO_EXTENSIONS
                 if is_video and not state.options.include_videos:
@@ -419,6 +564,11 @@ class GalleryDlProvider(BaseProvider):
                 hint = str(
                     meta.get("id") or meta.get("filename") or url_fingerprint(media_url)
                 )
+                # Multi-file posts (TikTok slideshows, carousels) repeat the post
+                # id on every file. gallery-dl's file counter keeps them distinct.
+                num = meta.get("num")
+                if num not in (None, ""):
+                    hint = f"{hint}:{num}"
                 if hint in group_ids:
                     continue
                 group_ids.add(hint)
@@ -432,6 +582,16 @@ class GalleryDlProvider(BaseProvider):
                     format_id="original",
                     container=ext,
                     resolution=resolution,
+                    video_codec=(
+                        str(meta.get("video_codec") or meta.get("vcodec") or "h264")
+                        if is_video
+                        else None
+                    ),
+                    audio_codec=(
+                        str(meta.get("audio_codec") or "aac")
+                        if is_video and category in MUXED_VIDEO_CATEGORIES
+                        else None
+                    ),
                     width=width,
                     height=height,
                     filesize_bytes=filesize,
@@ -439,6 +599,7 @@ class GalleryDlProvider(BaseProvider):
                     url=media_url,
                     requires_merge=False,
                     format_note=meta.get("format") or "original",
+                    http_headers=_http_headers(meta),
                 )
                 item = make_media_item(
                     provider=self.name,
@@ -447,12 +608,12 @@ class GalleryDlProvider(BaseProvider):
                     media_type=media_type,
                     post_id="",
                     title=meta.get("title") or meta.get("filename"),
-                    author=str(
-                        meta.get("author")
+                    author=(
+                        _author_label(meta)
+                        if meta.get("author")
                         or meta.get("user")
                         or meta.get("username")
-                        or group_meta.get("author")
-                        or "media"
+                        else _author_label(group_meta)
                     ),
                     thumbnail_url=meta.get("thumbnail")
                     or (media_url if media_type == MediaType.IMAGE else None),
@@ -473,6 +634,8 @@ class GalleryDlProvider(BaseProvider):
                     },
                 )
                 group_items.append(item)
+                if is_video:
+                    attach_pending_audio(item)
                 state.media_count += 1
                 if not state.page_reported and on_page:
                     on_page(1)
@@ -488,7 +651,7 @@ class GalleryDlProvider(BaseProvider):
                 group_meta.update({k: v for k, v in meta.items() if v not in (None, "")})
 
             elif message == Message.Queue:
-                queue_url = str(data)
+                queue_url = _prefer_media_queue(str(data))
                 if depth >= MAX_QUEUE_DEPTH:
                     warn(
                         f"Skipped nested collection beyond depth {MAX_QUEUE_DEPTH}: "

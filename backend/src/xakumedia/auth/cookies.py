@@ -18,6 +18,72 @@ NETSCAPE_HEADER = (
 
 SUPPORTED_BROWSERS = ["chrome", "edge", "firefox", "brave", "opera", "vivaldi"]
 
+# Common multi-label public suffixes. Used only to group a cookies.txt export
+# into one profile per site (e.g. "www.example.co.uk" -> "example.co.uk").
+_MULTI_LABEL_SUFFIXES = {
+    "co.uk", "org.uk", "ac.uk", "gov.uk", "me.uk", "net.uk", "sch.uk",
+    "com.au", "net.au", "org.au", "edu.au", "gov.au", "id.au",
+    "co.nz", "net.nz", "org.nz", "govt.nz", "ac.nz", "school.nz",
+    "com.br", "net.br", "org.br", "gov.br", "edu.br",
+    "co.jp", "ne.jp", "or.jp", "go.jp", "ac.jp", "ad.jp",
+    "com.cn", "net.cn", "org.cn", "gov.cn", "edu.cn",
+    "co.in", "net.in", "org.in", "gov.in", "ac.in", "edu.in",
+    "com.mx", "org.mx", "net.mx", "gob.mx", "edu.mx",
+    "co.za", "org.za", "net.za", "gov.za", "ac.za",
+    "com.tr", "net.tr", "org.tr", "gov.tr", "edu.tr",
+    "com.ar", "net.ar", "org.ar", "gov.ar", "edu.ar",
+    "com.sg", "net.sg", "org.sg", "gov.sg", "edu.sg",
+    "com.hk", "net.hk", "org.hk", "gov.hk", "edu.hk",
+    "com.tw", "net.tw", "org.tw", "gov.tw", "edu.tw",
+    "co.kr", "ne.kr", "or.kr", "go.kr", "ac.kr",
+    "com.ph", "net.ph", "org.ph", "gov.ph", "edu.ph",
+    "com.my", "net.my", "org.my", "gov.my", "edu.my",
+    "com.pk", "net.pk", "org.pk", "gov.pk", "edu.pk",
+    "co.il", "net.il", "org.il", "gov.il", "ac.il",
+    "com.ua", "net.ua", "org.ua", "gov.ua", "edu.ua",
+    "co.id", "net.id", "org.id", "go.id", "ac.id",
+    "com.vn", "net.vn", "org.vn", "gov.vn", "edu.vn",
+    "co.th", "net.th", "org.th", "go.th", "ac.th",
+    "com.ru", "net.ru", "org.ru",
+}
+
+
+def normalize_cookie_domain(domain: str) -> str:
+    """Return a lowercase cookie domain without leading dot or port."""
+    host = domain.strip().lower().lstrip(".").split(":", 1)[0].rstrip(".")
+    return host
+
+
+def registrable_domain(domain: str) -> str:
+    """Reduce a cookie domain to its site-level key.
+
+    Cookies exported from a browser frequently mix ".example.com" with
+    "www.example.com" and "sub.example.com". Grouping them under the
+    registrable domain keeps one profile per site while preserving every
+    original cookie domain in the stored file.
+    """
+    host = normalize_cookie_domain(domain)
+    labels = [label for label in host.split(".") if label]
+    if len(labels) <= 2:
+        return ".".join(labels)
+    suffix = ".".join(labels[-2:])
+    if suffix in _MULTI_LABEL_SUFFIXES:
+        return ".".join(labels[-3:])
+    return suffix
+
+
+def group_cookies_by_domain(entries: list[CookieEntry]) -> dict[str, list[CookieEntry]]:
+    """Group cookie entries by registrable domain, most populated site first."""
+    grouped: dict[str, list[CookieEntry]] = {}
+    for entry in entries:
+        domain = registrable_domain(entry.domain)
+        if not domain:
+            continue
+        grouped.setdefault(domain, []).append(entry)
+    for group in grouped.values():
+        group.sort(key=lambda c: (c.domain, c.path or "/", c.name))
+    return dict(sorted(grouped.items(), key=lambda item: (-len(item[1]), item[0])))
+
 
 def parse_netscape_cookies(content: str) -> list[CookieEntry]:
     """Parse raw Netscape HTTP cookie file format text into a list of CookieEntry models.
@@ -132,7 +198,12 @@ def import_cookies_file(
     domain_hint: str | None = None,
     cookies_dir: Path | None = None,
 ) -> tuple[CookieProfileRecord, list[CookieEntry]]:
-    """Import an existing Netscape cookie file from disk into managed storage."""
+    """Import an existing Netscape cookie file from disk into managed storage.
+
+    When ``domain_hint`` is supplied, a single profile is stored for that site
+    (all matching entries). Without a hint, use
+    :func:`import_cookies_file_profiles` so multi-site exports are split per site.
+    """
     src = Path(file_path)
     if not src.exists() or not src.is_file():
         raise FileNotFoundError(f"Cookie file not found: {src}")
@@ -144,20 +215,56 @@ def import_cookies_file(
 
     if domain_hint:
         domain = domain_hint
+        content_out = content
     else:
-        # Infer domain by most frequent occurrence
-        domain_counts: dict[str, int] = {}
-        for c in entries:
-            dom = c.domain.lstrip(".").lower()
-            domain_counts[dom] = domain_counts.get(dom, 0) + 1
-        domain = max(domain_counts, key=domain_counts.get) if domain_counts else "all"
+        grouped = group_cookies_by_domain(entries)
+        domain, group_entries = next(iter(grouped.items()))
+        content_out = format_netscape_cookies(group_entries)
 
     return save_cookies_text(
         domain=domain,
-        content=content,
+        content=content_out,
         browser_source="file",
         cookies_dir=cookies_dir,
     )
+
+
+def import_cookies_file_profiles(
+    file_path: Path | str,
+    cookies_dir: Path | None = None,
+) -> list[CookieProfileRecord]:
+    """Import a cookies.txt export as one profile per site.
+
+    A browser export usually contains cookies for many unrelated sites. Storing
+    the whole file under one inferred domain makes every other site's session
+    invisible to lookup. This splits the export by registrable domain and keeps
+    each site's cookies in its own managed file.
+    """
+    src = Path(file_path)
+    if not src.exists() or not src.is_file():
+        raise FileNotFoundError(f"Cookie file not found: {src}")
+
+    content = src.read_text(encoding="utf-8", errors="replace")
+    entries = parse_netscape_cookies(content)
+    if not entries:
+        raise ValueError(f"No valid cookies found in file: {src.name}")
+
+    grouped = group_cookies_by_domain(entries)
+    profiles: list[CookieProfileRecord] = []
+    for domain, group_entries in grouped.items():
+        profile, _ = save_cookies_text(
+            domain=domain,
+            content=format_netscape_cookies(group_entries),
+            browser_source="file",
+            cookies_dir=cookies_dir,
+        )
+        profiles.append(profile)
+
+    logger.info(
+        f"Imported {len(entries)} cookies from {src.name} into "
+        f"{len(profiles)} site profiles"
+    )
+    return profiles
 
 
 def extract_browser_cookies(

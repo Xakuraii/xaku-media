@@ -660,13 +660,23 @@ class RpcDispatcher:
                 raise TypeError("Parameter 'file_path' is required.")
             domain = params.get("domain")
 
-            from ..auth.cookies import import_cookies_file
+            from ..auth.cookies import import_cookies_file, import_cookies_file_profiles
             from ..db import default_repository
 
             repo = self.repository or default_repository
-            profile, _ = import_cookies_file(str(file_path), domain_hint=domain)
-            repo.save_cookie_profile(profile)
-            return {"profile": profile.model_dump()}
+            if domain:
+                profiles = [import_cookies_file(str(file_path), domain_hint=str(domain))[0]]
+            else:
+                # A cookies.txt export usually covers many sites. Split it into
+                # one profile per site so each site's session is actually found.
+                profiles = import_cookies_file_profiles(str(file_path))
+            for profile in profiles:
+                repo.save_cookie_profile(profile)
+            return {
+                "profiles": [profile.model_dump() for profile in profiles],
+                "profile": profiles[0].model_dump() if profiles else None,
+                "count": len(profiles),
+            }
 
         def list_cookie_profiles_handler(params: dict[str, Any]) -> dict[str, Any]:
             from ..db import default_repository

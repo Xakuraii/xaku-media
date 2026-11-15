@@ -10,9 +10,12 @@ from xakumedia.auth.cookies import (
     extract_browser_cookies,
     format_netscape_cookies,
     get_cookies_dict_from_file,
+    group_cookies_by_domain,
     import_cookies_file,
+    import_cookies_file_profiles,
     list_supported_browsers,
     parse_netscape_cookies,
+    registrable_domain,
     save_cookies_text,
 )
 from xakumedia.auth.headers import (
@@ -238,6 +241,91 @@ def test_save_cookies_text_and_import_file(repo: MediaRepository, cookies_dir: P
     assert imported_profile.cookie_count == 3
     assert len(imported_entries) == 3
     assert Path(imported_profile.cookie_file_path).exists()
+
+
+MULTI_SITE_NETSCAPE_TEXT = """# Netscape HTTP Cookie File
+
+.tiktok.com\tTRUE\t/\tTRUE\t1893456000\tsessionid\ttiktok-session
+www.tiktok.com\tFALSE\t/\tTRUE\t1893456000\tttwid\tttwid-value
+.youtube.com\tTRUE\t/\tTRUE\t1893456000\tHSID\tyoutube-hsid
+www.youtube.com\tFALSE\t/\tFALSE\t1893456000\tSID\tyoutube-sid
+.example.co.uk\tTRUE\t/\tTRUE\t1893456000\tprefs\tuk-prefs
+sub.example.co.uk\tFALSE\t/\tFALSE\t0\tlocale\ten-GB
+"""
+
+
+def test_registrable_domain_groups_subdomains_and_multi_label_suffixes() -> None:
+    assert registrable_domain(".www.tiktok.com") == "tiktok.com"
+    assert registrable_domain("sub.example.co.uk") == "example.co.uk"
+    assert registrable_domain("youtube.com") == "youtube.com"
+    assert registrable_domain("localhost") == "localhost"
+
+
+def test_group_cookies_by_domain_splits_multi_site_export() -> None:
+    grouped = group_cookies_by_domain(parse_netscape_cookies(MULTI_SITE_NETSCAPE_TEXT))
+    assert set(grouped) == {"tiktok.com", "youtube.com", "example.co.uk"}
+    assert [c.name for c in grouped["tiktok.com"]] == ["sessionid", "ttwid"]
+    assert [c.name for c in grouped["youtube.com"]] == ["HSID", "SID"]
+
+
+def test_import_cookies_file_profiles_creates_one_profile_per_site(
+    repo: MediaRepository, tmp_path: Path
+) -> None:
+    source = tmp_path / "cookies.txt"
+    source.write_text(MULTI_SITE_NETSCAPE_TEXT, encoding="utf-8")
+    cookies_dir = tmp_path / "managed_cookies"
+
+    profiles = import_cookies_file_profiles(source, cookies_dir=cookies_dir)
+    assert {profile.domain for profile in profiles} == {
+        "tiktok.com",
+        "youtube.com",
+        "example.co.uk",
+    }
+    assert sum(profile.cookie_count for profile in profiles) == 6
+
+    for profile in profiles:
+        repo.save_cookie_profile(profile)
+
+    tiktok = repo.get_cookie_profile_for_domain("https://www.tiktok.com/@someuser")
+    assert tiktok is not None
+    assert tiktok.domain == "tiktok.com"
+    assert set(get_cookies_dict_from_file(tiktok.cookie_file_path)) == {
+        "sessionid",
+        "ttwid",
+    }
+    # Cookies from unrelated sites must not leak into the TikTok profile.
+    assert "HSID" not in get_cookies_dict_from_file(tiktok.cookie_file_path)
+    assert repo.get_cookie_profile_for_domain("https://www.youtube.com/@channel") is not None
+    assert repo.get_cookie_profile_for_domain("https://example.co.uk/") is not None
+
+
+def test_dispatcher_import_splits_multi_site_file(
+    repo: MediaRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "cookies.txt"
+    source.write_text(MULTI_SITE_NETSCAPE_TEXT, encoding="utf-8")
+    cookies_dir = tmp_path / "dispatcher_cookies"
+
+    import xakumedia.auth.cookies as cookies_module
+
+    def fake_import(_path: str, _cookies_dir=None):
+        return import_cookies_file_profiles(source, cookies_dir=cookies_dir)
+
+    monkeypatch.setattr(cookies_module, "import_cookies_file_profiles", fake_import)
+    dispatcher = RpcDispatcher(repository=repo)
+    req = JsonRpcRequest(
+        id="import-1", method="import_cookies_file", params={"file_path": str(source)}
+    )
+    res = dispatcher.dispatch(req)
+    assert res.error is None
+    result = res.result or {}
+    assert result["count"] == 3
+    assert {profile["domain"] for profile in result["profiles"]} == {
+        "tiktok.com",
+        "youtube.com",
+        "example.co.uk",
+    }
+    assert repo.get_cookie_profile_for_domain("https://www.tiktok.com/@someuser") is not None
 
 
 def test_extract_browser_cookies_mocked(cookies_dir: Path) -> None:

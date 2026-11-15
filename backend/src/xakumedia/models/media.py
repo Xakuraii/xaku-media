@@ -34,6 +34,9 @@ class MediaFormatInfo(BaseModel):
     url: str | None = None
     requires_merge: bool = False
     format_note: str | None = None
+    # Per-stream request headers required by the CDN (for example TikTok's
+    # Referer). Persisted with the task so retries after a restart still work.
+    http_headers: dict[str, str] = Field(default_factory=dict)
 
     @property
     def resolution_sort_key(self) -> int:

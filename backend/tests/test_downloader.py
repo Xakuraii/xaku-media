@@ -374,6 +374,91 @@ def test_download_manager_merges_video_with_best_audio(
     assert destination.read_bytes() == b"merged-output"
 
 
+def test_download_manager_passes_format_headers(
+    temp_dest_dir: Path, tmp_path: Path
+) -> None:
+    """CDN-specific headers (TikTok Referer) must reach the stream request."""
+    repo = MediaRepository(tmp_path / "headers.db")
+    manager = DownloadManager(max_concurrent=1, repository=repo)
+
+    fmt = MediaFormatInfo(
+        format_id="h264",
+        container="mp4",
+        video_codec="h264",
+        audio_codec="aac",
+        url="https://cdn.example.com/headers.mp4",
+        http_headers={"Referer": "https://www.tiktok.com/", "User-Agent": "Chrome"},
+    )
+    item = _video_item_with([fmt])
+    captured: list[dict[str, str] | None] = []
+
+    import xakumedia.downloader.manager as dm_mod
+
+    def fake_stream(url: str, destination_path: Path, **kwargs: Any) -> Path:
+        captured.append(kwargs.get("headers"))
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        destination_path.write_bytes(b"video")
+        return destination_path
+
+    with patch.object(dm_mod, "download_stream", side_effect=fake_stream):
+        manager.start_download(media_item=item, selected_format=fmt)
+        manager._executor.shutdown(wait=True)
+
+    stored = repo.get_download_tasks(limit=5)[0]
+    assert stored.status == TaskStatus.COMPLETED
+    assert captured == [
+        {"Referer": "https://www.tiktok.com/", "User-Agent": "Chrome"}
+    ]
+
+
+def test_download_manager_refreshes_expired_url_once(
+    temp_dest_dir: Path, tmp_path: Path
+) -> None:
+    """A 403/404-style failure re-extracts the post and retries with fresh URLs."""
+    from xakumedia.exceptions.base import PrivateMediaError
+
+    repo = MediaRepository(tmp_path / "refresh.db")
+    manager = DownloadManager(max_concurrent=1, repository=repo)
+
+    stale = MediaFormatInfo(
+        format_id="h264",
+        container="mp4",
+        video_codec="h264",
+        audio_codec="aac",
+        url="https://cdn.example.com/expired.mp4",
+    )
+    item = _video_item_with([stale])
+    fresh_item = item.model_copy(deep=True)
+    fresh_item.available_formats[0].url = "https://cdn.example.com/fresh.mp4"
+    fresh_item.original_url = "https://cdn.example.com/fresh.mp4"
+
+    streamed: list[str] = []
+
+    import xakumedia.downloader.manager as dm_mod
+
+    def fake_stream(url: str, destination_path: Path, **kwargs: Any) -> Path:
+        streamed.append(url)
+        if "expired" in url:
+            raise PrivateMediaError("Signed URL expired")
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        destination_path.write_bytes(b"fresh")
+        return destination_path
+
+    with (
+        patch.object(dm_mod, "download_stream", side_effect=fake_stream),
+        patch.object(manager, "_refresh_media_item", return_value=fresh_item),
+    ):
+        manager.start_download(media_item=item, selected_format=stale)
+        manager._executor.shutdown(wait=True)
+
+    stored = repo.get_download_tasks(limit=5)[0]
+    assert stored.status == TaskStatus.COMPLETED
+    assert streamed == [
+        "https://cdn.example.com/expired.mp4",
+        "https://cdn.example.com/fresh.mp4",
+    ]
+
+
 def test_download_manager_falls_back_to_muxed_when_no_audio_track(
     temp_dest_dir: Path, tmp_path: Path
 ) -> None:

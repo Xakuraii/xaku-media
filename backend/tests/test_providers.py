@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from types import SimpleNamespace
 
 import pytest
 from gallery_dl.exception import NotFoundError
@@ -18,6 +19,7 @@ from xakumedia.models.post import ScanOptions
 from xakumedia.models.url import ClassifiedUrl, UrlCategory
 from xakumedia.providers import direct as direct_module
 from xakumedia.providers import gallerydl as gallery_module
+from xakumedia.providers import ytdlp as ytdlp_module
 from xakumedia.providers.base import media_identity
 from xakumedia.providers.direct import DirectProvider
 from xakumedia.providers.gallerydl import GalleryDlProvider
@@ -31,6 +33,41 @@ def test_registry_routes_known_sources() -> None:
     assert resolve_provider("https://www.youtube.com/playlist?list=PL123").name == "ytdlp"
     assert resolve_provider("https://www.reddit.com/r/pics/").name == "gallerydl"
     assert resolve_provider("https://example.com/picture.jpg").name == "direct"
+
+
+def test_registry_routes_tiktok_to_ytdlp() -> None:
+    """TikTok needs yt-dlp's Chrome impersonation; gallery-dl gets a JS challenge."""
+    provider = resolve_provider("https://www.tiktok.com/@someuser")
+    assert provider.name == "ytdlp"
+    assert provider.capabilities_for("https://www.tiktok.com/@someuser").profile_bulk
+    assert resolve_provider("https://www.tiktok.com/@someuser/video/123").name == "ytdlp"
+
+
+def test_tiktok_profile_is_bulk_and_single_video_is_not() -> None:
+    provider = YtDlpProvider()
+    profile_caps = provider.capabilities_for("https://www.tiktok.com/@someuser")
+    assert profile_caps.source_type == "channel"
+    assert profile_caps.videos is True
+    assert profile_caps.pagination is True
+    video_caps = provider.capabilities_for("https://www.tiktok.com/@someuser/video/123")
+    assert video_caps.source_type == "video"
+    assert video_caps.profile_bulk is False
+    assert provider.classify("https://www.tiktok.com/@someuser").platform == "tiktok"
+
+
+def test_tiktok_auth_opts_enable_chrome_impersonation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = YtDlpProvider()
+    sentinel = object()
+    monkeypatch.setattr(ytdlp_module, "tiktok_impersonation_target", lambda: sentinel)
+    opts: dict[str, object] = {}
+    provider._apply_auth("https://www.tiktok.com/@someuser", opts)
+    assert opts.get("impersonate") is sentinel
+
+    opts = {}
+    provider._apply_auth("https://www.youtube.com/watch?v=abcdefghijk", opts)
+    assert "impersonate" not in opts
 
 
 def test_registry_rejects_unknown_source() -> None:
@@ -227,6 +264,192 @@ def test_gallerydl_expands_nested_queues(monkeypatch: pytest.MonkeyPatch) -> Non
     assert len(posts) == 1
     assert posts[0].media_items[0].original_url == "https://cdn.example.com/a.jpg"
     assert not any("Skipped nested queue" in warning for warning in warnings)
+
+
+def test_gallerydl_pairs_separate_audio_with_video(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Facebook-style DASH entries become one video plus an audio format."""
+    items = [
+        (Message.Directory, "", {"post_id": "p1", "user": "Facebook"}),
+        (
+            Message.Url,
+            "https://cdn.example.com/reel.mp4",
+            {"post_id": "p1", "id": "v1", "type": "video", "extension": "mp4"},
+        ),
+        (
+            Message.Url,
+            "https://cdn.example.com/reel.m4a",
+            {"post_id": "p1", "id": "v1", "type": "audio", "extension": "m4a"},
+        ),
+    ]
+    monkeypatch.setattr(
+        GalleryDlProvider, "_prepare_extractor", lambda self, url: _FakeExtractor(items)
+    )
+    monkeypatch.setattr(gallery_module, "validate_url_security", lambda url: url)
+
+    posts = list(
+        GalleryDlProvider().iter_posts(
+            "https://fake.example/reel/1",
+            ScanOptions(),
+            threading.Event(),
+        )
+    )
+
+    assert len(posts) == 1
+    assert len(posts[0].media_items) == 1
+    item = posts[0].media_items[0]
+    assert item.media_type == MediaType.VIDEO
+    formats = {fmt.format_id: fmt for fmt in item.available_formats}
+    assert formats["original"].url == "https://cdn.example.com/reel.mp4"
+    assert formats["original"].video_codec == "h264"
+    assert formats["original"].audio_codec is None
+    assert formats["audio"].url == "https://cdn.example.com/reel.m4a"
+    assert formats["audio"].audio_codec == "aac"
+    assert formats["audio"].video_codec is None
+
+
+def test_gallerydl_keeps_every_file_with_repeated_post_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Slideshow/carousel files share a post id but must stay separate items."""
+    author = {"id": 7015676321389511706, "uniqueId": "hxung_d_xakuraii"}
+    items = [
+        (
+            Message.Url,
+            "https://cdn.example.com/slide-1.jpg",
+            {"post_id": "p1", "id": "video1", "num": 1, "author": author},
+        ),
+        (
+            Message.Url,
+            "https://cdn.example.com/slide-2.jpg",
+            {"post_id": "p1", "id": "video1", "num": 2, "author": author},
+        ),
+    ]
+    monkeypatch.setattr(
+        GalleryDlProvider, "_prepare_extractor", lambda self, url: _FakeExtractor(items)
+    )
+    monkeypatch.setattr(gallery_module, "validate_url_security", lambda url: url)
+
+    posts = list(
+        GalleryDlProvider().iter_posts(
+            "https://fake.example/post/1",
+            ScanOptions(),
+            threading.Event(),
+        )
+    )
+
+    assert len(posts) == 1
+    assert len(posts[0].media_items) == 2
+    assert {item.provider_media_id for item in posts[0].media_items} == {
+        "video1:1",
+        "video1:2",
+    }
+    assert {item.author for item in posts[0].media_items} == {"hxung_d_xakuraii"}
+    assert posts[0].author == "hxung_d_xakuraii"
+
+
+def test_gallerydl_prefers_direct_dash_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ytdl: pseudo URL is replaced with gallery-dl's progressive fallback."""
+    items = [
+        (
+            Message.Url,
+            "ytdl:https://fake.example/post/1.mp4",
+            {
+                "post_id": "p1",
+                "id": "v1",
+                "extension": "mp4",
+                "_fallback": ("https://cdn.example.com/progressive.mp4",),
+            },
+        )
+    ]
+    monkeypatch.setattr(
+        GalleryDlProvider, "_prepare_extractor", lambda self, url: _FakeExtractor(items)
+    )
+    monkeypatch.setattr(gallery_module, "validate_url_security", lambda url: url)
+
+    posts = list(
+        GalleryDlProvider().iter_posts(
+            "https://fake.example/post/1",
+            ScanOptions(),
+            threading.Event(),
+        )
+    )
+
+    item = posts[0].media_items[0]
+    assert item.original_url == "https://cdn.example.com/progressive.mp4"
+    assert item.available_formats[0].url == "https://cdn.example.com/progressive.mp4"
+
+
+def test_x_profile_queue_uses_media_tab() -> None:
+    assert (
+        gallery_module._prefer_media_queue("https://x.com/elonmusk/tweets")
+        == "https://x.com/elonmusk/media"
+    )
+    assert (
+        gallery_module._prefer_media_queue("https://twitter.com/nasa/tweets/")
+        == "https://twitter.com/nasa/media"
+    )
+    assert (
+        gallery_module._prefer_media_queue("https://x.com/elonmusk/with_replies")
+        == "https://x.com/elonmusk/with_replies"
+    )
+
+
+def test_tiktok_audio_only_post_is_never_published_as_video(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A photo post without available slides must not surface its MP3 track."""
+    provider = YtDlpProvider()
+    monkeypatch.setattr(provider, "_tiktok_image_post", lambda *args, **kwargs: None)
+    info = {
+        "id": "123",
+        "webpage_url": "https://www.tiktok.com/@fake/video/123",
+        "formats": [
+            {
+                "format_id": "audio",
+                "ext": "mp3",
+                "vcodec": "none",
+                "acodec": "mp3",
+                "url": "https://cdn.example.com/slideshow.mp3",
+            }
+        ],
+    }
+
+    post = provider._post_from_info(
+        info, "https://www.tiktok.com/@fake/video/123"
+    )
+
+    assert post is None
+
+
+def test_gallerydl_auth_sites_use_chrome_user_agent_preset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auth-heavy extractors need gallery-dl's "+chrome" preset, not a literal UA."""
+    from xakumedia.db import default_repository
+
+    configured: list[tuple[tuple[str, ...], str, object]] = []
+    extractor = SimpleNamespace(
+        category="instagram",
+        subcategory="",
+        initialize=lambda: None,
+        log=SimpleNamespace(exception=lambda *args, **kwargs: None),
+    )
+    monkeypatch.setattr(gallery_module, "_find_extractor", lambda url: extractor)
+    monkeypatch.setattr(
+        default_repository, "get_cookie_profile_for_domain", lambda url: None
+    )
+    monkeypatch.setattr(
+        gallery_module.gdl_config,
+        "set",
+        lambda keys, key, value: configured.append((keys, key, value)),
+    )
+
+    GalleryDlProvider()._prepare_extractor("https://www.instagram.com/nasa/")
+
+    assert (("extractor", "instagram"), "user-agent", "+chrome") in configured
+    assert (("extractor", "instagram"), "videos", "merged") in configured
 
 
 def test_gallerydl_empty_auth_site_explains_cookies(
