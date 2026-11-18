@@ -94,6 +94,18 @@ MERGED_VIDEO_CATEGORIES = {"instagram"}
 MUXED_VIDEO_CATEGORIES = {"instagram", "twitter", "threads"}
 X_HOSTS = {"x.com", "www.x.com", "mobile.x.com", "twitter.com", "www.twitter.com"}
 _X_TWEETS_PATH = re.compile(r"^/([^/]+)/tweets/?$")
+# gallery-dl's Facebook profile extractor dispatches info/avatar/photos/albums
+# but never the profile's video tabs. These patterns read the server-rendered
+# video ids from those tabs so each reel can be handed to gallery-dl's own
+# video extractor (which already knows how to pair DASH video and audio).
+FACEBOOK_CATEGORY = "facebook"
+FACEBOOK_VIDEO_TABS = ("videos", "reels")
+FACEBOOK_VIDEO_ID_PATTERNS = (
+    re.compile(r'"__typename":"Video","id":"(\d+)"'),
+    re.compile(r'"video_id":"(\d+)"'),
+    re.compile(r'\\"__typename\\":\\"Video\\",\\"id\\":\\"(\d+)\\"'),
+    re.compile(r'\\"video_id\\":\\"(\d+)\\"'),
+)
 
 
 def _prefer_media_queue(url: str) -> str:
@@ -119,6 +131,39 @@ def _find_extractor(url: str):
         return gdl_extractor.find(url)
     except Exception:
         return None
+
+
+def _facebook_profile_base(url: str) -> str | None:
+    """Return the canonical profile URL for a Facebook user/page root.
+
+    Only profile roots are eligible: an explicit ``/photos`` or ``/reel`` URL
+    should keep its exact requested scope.
+    """
+    extractor = _find_extractor(url)
+    if extractor is None:
+        return None
+    if getattr(extractor, "category", None) != FACEBOOK_CATEGORY:
+        return None
+    if getattr(extractor, "subcategory", None) not in PROFILE_SUBCATEGORIES:
+        return None
+    groups = getattr(extractor, "groups", ()) or ()
+    name = groups[0] if groups else None
+    if not name:
+        return None
+    return f"https://www.facebook.com/{name}"
+
+
+def _facebook_video_ids(pages: list[str]) -> list[str]:
+    """Collect unique video ids from Facebook profile video/reel tab HTML."""
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for page in pages:
+        for pattern in FACEBOOK_VIDEO_ID_PATTERNS:
+            for video_id in pattern.findall(page):
+                if video_id not in seen:
+                    seen.add(video_id)
+                    ordered.append(video_id)
+    return ordered
 
 
 def _post_key(meta: dict[str, Any]) -> str | None:
@@ -389,15 +434,30 @@ class GalleryDlProvider(BaseProvider):
         safe_url = validate_url_security(url)
         warn = on_warning or (lambda _msg: None)
         state = _DiscoveryState(options=options)
+        facebook_profile = (
+            _facebook_profile_base(safe_url) if options.include_videos else None
+        )
         try:
-            yield from self._discover(
-                safe_url,
-                cancel_event,
-                warn,
-                on_page,
-                state,
-                depth=0,
-            )
+            # Facebook's profile extractor only lists photos/albums. Discover
+            # profile videos first so a media cap still leaves room for both
+            # kinds instead of letting a large photo set consume every slot.
+            if facebook_profile is not None and not cancel_event.is_set():
+                yield from self._facebook_profile_videos(
+                    facebook_profile,
+                    cancel_event,
+                    warn,
+                    on_page,
+                    state,
+                )
+            if not state.limit_reached():
+                yield from self._discover(
+                    safe_url,
+                    cancel_event,
+                    warn,
+                    on_page,
+                    state,
+                    depth=0,
+                )
         except (AuthenticationError, AuthorizationError) as exc:
             raise self._explain(parse_gallery_dl_error(exc, safe_url), safe_url) from exc
         except (NotFoundError, HttpError, NoExtractorError) as exc:
@@ -409,6 +469,73 @@ class GalleryDlProvider(BaseProvider):
 
         if state.posts_emitted == 0:
             raise self._no_media_error(safe_url)
+
+    def _facebook_video_pages(
+        self,
+        profile_url: str,
+        cancel_event: threading.Event,
+        warn: WarningCallback,
+    ) -> list[str]:
+        """Fetch a Facebook profile's server-rendered video and reel tabs.
+
+        The session has to be warmed on a normal page first; Facebook answers
+        cold requests with HTTP 400. gallery-dl's own extractor supplies the
+        browser headers, cookies, and rate-limit handling used here.
+        """
+        try:
+            extractor = self._prepare_extractor(f"{profile_url}/photos")
+            extractor.request(f"{profile_url}/photos_by", fatal=False)
+        except Exception as exc:
+            warn(f"Skipped Facebook video discovery (session unavailable): {exc}")
+            return []
+
+        pages: list[str] = []
+        for tab in FACEBOOK_VIDEO_TABS:
+            if cancel_event.is_set():
+                break
+            try:
+                response = extractor.request(f"{profile_url}/{tab}", fatal=False)
+            except Exception as exc:
+                warn(f"Could not list Facebook {tab}: {exc}")
+                continue
+            status = getattr(response, "status_code", 200)
+            if status >= 400:
+                warn(f"Facebook {tab} page returned HTTP {status}.")
+                continue
+            pages.append(getattr(response, "text", ""))
+        return pages
+
+    def _facebook_profile_videos(
+        self,
+        profile_url: str,
+        cancel_event: threading.Event,
+        warn: WarningCallback,
+        on_page: PageCallback | None,
+        state: _DiscoveryState,
+    ) -> Iterator[Post]:
+        """Discover each Facebook profile reel through gallery-dl's video extractor."""
+        pages = self._facebook_video_pages(profile_url, cancel_event, warn)
+        video_ids = _facebook_video_ids(pages)
+        if video_ids:
+            logger.info(
+                "Facebook profile %s listed %d video(s)", profile_url, len(video_ids)
+            )
+        for video_id in video_ids:
+            if cancel_event.is_set() or state.limit_reached():
+                return
+            reel_url = f"https://www.facebook.com/reel/{video_id}"
+            try:
+                yield from self._discover(
+                    reel_url,
+                    cancel_event,
+                    warn,
+                    on_page,
+                    state,
+                    depth=1,
+                )
+            except Exception as exc:
+                # One broken/deleted reel must not discard the rest of the scan.
+                warn(f"Skipped Facebook video {video_id}: {exc}")
 
     def _discover(
         self,
@@ -432,6 +559,11 @@ class GalleryDlProvider(BaseProvider):
         group_items: list = []
         group_ids: set[str] = set()
         pending_audio: list[tuple[str, dict[str, Any], str]] = []
+        # A media cap can land exactly on a video entry, with its companion
+        # audio entry still queued in gallery-dl's iterator. Let that one audio
+        # item attach before closing the post, or the result would be a silent
+        # video that the downloader refuses.
+        allow_audio_after_limit = False
 
         def attach_audio_track(
             item: MediaItem, audio_url: str, meta: dict[str, Any], ext: str
@@ -459,6 +591,22 @@ class GalleryDlProvider(BaseProvider):
             while pending_audio:
                 audio_url, meta, ext = pending_audio.pop(0)
                 attach_audio_track(item, audio_url, meta, ext)
+
+        def attach_audio_item(meta: dict[str, Any], media_url: str) -> None:
+            """Attach an audio entry to the current video, or queue it for one."""
+            ext = _extension(meta, media_url)
+            target = next(
+                (
+                    item
+                    for item in reversed(group_items)
+                    if item.media_type == MediaType.VIDEO
+                ),
+                None,
+            )
+            if target is None:
+                pending_audio.append((media_url, meta, ext))
+            else:
+                attach_audio_track(target, media_url, meta, ext)
 
         def flush() -> Post | None:
             nonlocal group_key, group_meta, group_items, group_ids
@@ -494,6 +642,16 @@ class GalleryDlProvider(BaseProvider):
             if cancel_event.is_set():
                 return
             if state.limit_reached():
+                if (
+                    allow_audio_after_limit
+                    and message == Message.Url
+                    and _extension(meta, str(data)) in AUDIO_EXTENSIONS
+                ):
+                    attach_audio_item(meta, str(data))
+                    continue
+                post = flush()
+                if post is not None:
+                    yield post
                 return
 
             if message == Message.Url:
@@ -521,18 +679,7 @@ class GalleryDlProvider(BaseProvider):
                     # separate items. Keep the audio as a format of the current
                     # video so the download manager can merge them instead of
                     # saving a silent video.
-                    target = next(
-                        (
-                            item
-                            for item in reversed(group_items)
-                            if item.media_type == MediaType.VIDEO
-                        ),
-                        None,
-                    )
-                    if target is None:
-                        pending_audio.append((media_url, meta, ext))
-                    else:
-                        attach_audio_track(target, media_url, meta, ext)
+                    attach_audio_item(meta, media_url)
                     continue
                 is_video = ext in VIDEO_EXTENSIONS
                 if is_video and not state.options.include_videos:
@@ -642,10 +789,7 @@ class GalleryDlProvider(BaseProvider):
                     state.page_reported = True
 
                 if state.media_limit_reached():
-                    post = flush()
-                    if post is not None:
-                        yield post
-                    return
+                    allow_audio_after_limit = is_video
 
             elif message == Message.Directory:
                 group_meta.update({k: v for k, v in meta.items() if v not in (None, "")})

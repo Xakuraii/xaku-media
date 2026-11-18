@@ -1,12 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, CheckSquare, Layers, X } from "lucide-react";
-import type { ScanOptionsPayload } from "../../../../desktop/shared/types";
+import type { DiscoveredMediaItem, ScanOptionsPayload } from "../../../../desktop/shared/types";
 import { JobStatusList } from "./JobStatusList";
 import { PostBrowser } from "./PostBrowser";
 import { ScanErrorPanel } from "./ScanErrorPanel";
 import { ScanSourceForm } from "./ScanSourceForm";
-import { explainDownloadFailure, explainStartFailure } from "./errors";
-import type { BulkScanViewProps, JobEntry, MediaFilter, ScanErrorInfo } from "./types";
+import { explainBookmarkFailure, explainDownloadFailure, explainStartFailure } from "./errors";
+import type {
+  BulkScanViewProps,
+  JobEntry,
+  MediaFilter,
+  PostWithScan,
+  ScanErrorInfo,
+} from "./types";
 import { useScanJobs } from "./useScanJobs";
 import { useScanSelection } from "./useScanSelection";
 import { chooseFormat, countPosts, filterPosts, hostOf, parseUrls } from "./utils";
@@ -48,6 +54,8 @@ export function BulkScanView({
   const [dragging, setDragging] = useState<boolean>(false);
   const [focusedJobId, setFocusedJobId] = useState<string | null>(null);
   const [downloaded, setDownloaded] = useState<Set<string>>(new Set());
+  const [bookmarked, setBookmarked] = useState<Set<string>>(new Set());
+  const [bookmarkBusy, setBookmarkBusy] = useState<Set<string>>(new Set());
   const [bookmarking, setBookmarking] = useState<boolean>(false);
   const [preferredResolution, setPreferredResolution] = useState<string>("best");
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -97,6 +105,19 @@ export function BulkScanView({
     return () => off?.();
   }, []);
 
+  const refreshBookmarks = useCallback(async () => {
+    try {
+      const result = await window.api?.querySavedMedia?.({ limit: 5000 });
+      if (result) setBookmarked(new Set((result.items || []).map((item) => item.id)));
+    } catch {
+      // Non-fatal; bookmark icons simply start unset.
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshBookmarks();
+  }, [refreshBookmarks]);
+
   const detectedUrls = useMemo(() => parseUrls(input), [input]);
   const filteredPosts = useMemo(
     () => filterPosts(allPosts, filter, search, focusedJobId),
@@ -113,12 +134,79 @@ export function BulkScanView({
     selected,
     selectedItems,
     toggleMedia,
+    togglePost,
     selectAllVisible,
     selectOnlyNew,
     clearSelection,
     selectByType,
     invertSelection,
   } = useScanSelection(allPosts, filteredPosts, filter, downloaded);
+
+  const clearBusy = (key: string) =>
+    setBookmarkBusy((prev) => {
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+
+  const toggleItemBookmark = async (item: DiscoveredMediaItem) => {
+    if (!window.api?.toggleSaveMedia) {
+      setError({
+        title: "Bookmark unavailable",
+        summary: "The desktop bridge is not available.",
+        steps: [],
+        actions: [],
+      });
+      return;
+    }
+    setBookmarkBusy((prev) => new Set(prev).add(item.id));
+    try {
+      const result = await window.api.toggleSaveMedia(item.id);
+      setBookmarked((prev) => {
+        const next = new Set(prev);
+        const keys = [item.id, result.id].filter(Boolean);
+        for (const key of keys) {
+          if (result.is_saved) next.add(key);
+          else next.delete(key);
+        }
+        return next;
+      });
+    } catch (err) {
+      setError(explainBookmarkFailure(err));
+    } finally {
+      clearBusy(item.id);
+    }
+  };
+
+  const togglePostBookmark = async (post: PostWithScan) => {
+    if (!window.api?.toggleSavePost) {
+      setError({
+        title: "Bookmark unavailable",
+        summary: "The desktop bridge is not available.",
+        steps: [],
+        actions: [],
+      });
+      return;
+    }
+    const ids = post.media_items.map((item) => item.id);
+    if (ids.length === 0) return;
+    setBookmarkBusy((prev) => new Set(prev).add(post.id));
+    try {
+      const result = await window.api.toggleSavePost(post.id);
+      setBookmarked((prev) => {
+        const next = new Set(prev);
+        for (const id of ids) {
+          if (result.is_saved) next.add(id);
+          else next.delete(id);
+        }
+        return next;
+      });
+    } catch (err) {
+      setError(explainBookmarkFailure(err));
+    } finally {
+      clearBusy(post.id);
+    }
+  };
 
   const bookmarkInput = async () => {
     const urls = parseUrls(input);
@@ -232,7 +320,7 @@ export function BulkScanView({
     }
   };
 
-  const downloadSelected = async () => {
+  const queueDownloadItems = async (items: DiscoveredMediaItem[]): Promise<boolean> => {
     if (!window.api?.startBatchDownload) {
       setError({
         title: "Downloader unavailable",
@@ -240,11 +328,11 @@ export function BulkScanView({
         steps: ["Run the desktop app instead of the browser preview."],
         actions: [],
       });
-      return;
+      return false;
     }
-    if (selectedItems.length === 0) return;
+    if (items.length === 0) return false;
 
-    const downloadable = selectedItems.filter(
+    const downloadable = items.filter(
       (item) => (item.available_formats?.length ?? 0) > 0 || Boolean(item.original_url)
     );
     if (downloadable.length === 0) {
@@ -254,7 +342,7 @@ export function BulkScanView({
         steps: ["Rescan the source to refresh media links."],
         actions: [],
       });
-      return;
+      return false;
     }
 
     setDownloading(true);
@@ -267,14 +355,21 @@ export function BulkScanView({
       }));
       const result = await window.api.startBatchDownload(payload);
       setNotice(`Queued ${result.tasks.length} download${result.tasks.length === 1 ? "" : "s"}.`);
-      clearSelection();
       onDownloadStarted?.();
       void refreshDownloaded();
+      return true;
     } catch (err) {
       setError(explainDownloadFailure(err));
+      return false;
     } finally {
       setDownloading(false);
     }
+  };
+
+  const downloadSelected = async () => {
+    if (selectedItems.length === 0) return;
+    const queued = await queueDownloadItems(selectedItems);
+    if (queued) clearSelection();
   };
 
   return (
@@ -361,6 +456,8 @@ export function BulkScanView({
           counts={counts}
           selected={selected}
           downloaded={downloaded}
+          bookmarked={bookmarked}
+          bookmarkBusy={bookmarkBusy}
           runningCount={runningJobs.length}
           totalProgress={totalProgress}
           filter={filter}
@@ -371,6 +468,10 @@ export function BulkScanView({
           onFilterChange={setFilter}
           onSearchChange={setSearch}
           onToggleMedia={toggleMedia}
+          onTogglePost={(post) => togglePost(post, filter)}
+          onToggleBookmark={(item) => void toggleItemBookmark(item)}
+          onTogglePostBookmark={(post) => void togglePostBookmark(post)}
+          onDownloadItems={(items) => void queueDownloadItems(items)}
           onSelectAllVisible={selectAllVisible}
           onSelectOnlyNew={selectOnlyNew}
           onSelectByType={selectByType}

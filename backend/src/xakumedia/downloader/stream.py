@@ -5,7 +5,7 @@ import shutil
 import threading
 import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 import httpx
@@ -33,15 +33,25 @@ logger = get_logger("downloader.stream")
 
 @contextmanager
 def _open_media_stream(
-    client: httpx.Client, url: str, headers: dict[str, str]
+    client: httpx.Client,
+    url: str,
+    headers: dict[str, str],
+    cookies: dict[str, str] | None = None,
+    timeout: httpx.Timeout | float | None = None,
 ) -> Iterator[httpx.Response]:
     """Open a GET stream, retrying once with an alternate UA when blocked (403).
 
     A number of hosts (e.g. Wikimedia's upload CDN) deny browser-spoofing UAs
     while accepting a descriptive one, so keep the request headers intact and
     only swap the User-Agent.
+
+    Request options are passed per request rather than on the client so one
+    pooled client can serve unrelated downloads without leaking headers or
+    cookies across hosts.
     """
-    with client.stream("GET", url) as response:
+    with client.stream(
+        "GET", url, headers=headers, cookies=cookies, timeout=timeout
+    ) as response:
         alternate = alternate_user_agent(headers.get("User-Agent"))
         if response.status_code != 403 or alternate is None:
             yield response
@@ -52,7 +62,9 @@ def _open_media_stream(
         )
         response.read()
         retry_headers = {**headers, "User-Agent": alternate}
-        with client.stream("GET", url, headers=retry_headers) as retry:
+        with client.stream(
+            "GET", url, headers=retry_headers, cookies=cookies, timeout=timeout
+        ) as retry:
             yield retry
 
 CHUNK_SIZE = 1024 * 1024  # 1 MB streaming buffer for better throughput
@@ -71,10 +83,13 @@ def download_stream(
     timeout_seconds: float | None = None,
     allowed_root: Path | None = None,
     throttler: BandwidthThrottler | None = None,
+    client: httpx.Client | None = None,
 ) -> Path:
     """Download a remote media stream to disk with .part staging, atomic rename, and telemetry.
 
     Supports chunked HTTP range resumption if an existing .part file is present.
+    Pass ``client`` to share one connection pool across files; headers, cookies,
+    and the timeout still come from this download and are sent per request.
     """
     # 1. Security validations
     validate_url_security(url)
@@ -142,13 +157,15 @@ def download_stream(
     timeout = httpx.Timeout(timeout_seconds or default_config.request_timeout_seconds)
 
     try:
-        with httpx.Client(
-            timeout=timeout,
-            follow_redirects=True,
-            headers=req_headers,
-            cookies=req_cookies,
-        ) as client:
-            with _open_media_stream(client, url, req_headers) as response:
+        client_context = (
+            nullcontext(client)
+            if client is not None
+            else httpx.Client(timeout=timeout, follow_redirects=True)
+        )
+        with client_context as http_client:
+            with _open_media_stream(
+                http_client, url, req_headers, req_cookies, timeout
+            ) as response:
                 if response.status_code in (401, 403):
                     raise PrivateMediaError(
                         f"Access denied ({response.status_code}): {response.reason_phrase}"

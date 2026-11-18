@@ -61,6 +61,31 @@ class DownloadManager:
         self._pause_events: dict[str, threading.Event] = {}
         self._active_tasks: dict[str, DownloadTask] = {}
         self._pending_queue: list[tuple[DownloadTask, str]] = []
+        self._stream_http_client: httpx.Client | None = None
+        self._stream_client_lock = threading.Lock()
+
+    def _stream_client(self) -> httpx.Client:
+        """Return the pooled HTTP client shared by every stream download.
+
+        Reusing one connection pool removes a TCP+TLS handshake per file, which
+        dominates bulk photo downloads. Headers and cookies stay per request.
+        """
+        client = self._stream_http_client
+        if client is None or client.is_closed:
+            with self._stream_client_lock:
+                client = self._stream_http_client
+                if client is None or client.is_closed:
+                    client = httpx.Client(
+                        follow_redirects=True,
+                        timeout=None,
+                        limits=httpx.Limits(
+                            max_connections=64,
+                            max_keepalive_connections=32,
+                            keepalive_expiry=10.0,
+                        ),
+                    )
+                    self._stream_http_client = client
+        return client
 
     def set_speed_limit(self, kbps: int) -> int:
         """Update maximum bandwidth limit in KB/s (0 = unlimited)."""
@@ -86,6 +111,9 @@ class DownloadManager:
 
     def _schedule_next(self) -> None:
         """Launch waiting tasks from the pending queue if worker capacity is available."""
+        # Build the shared client on the scheduling thread so the first worker
+        # does not stall on TLS setup, which would delay pause/cancel response.
+        self._stream_client()
         with self._lock:
             while len(self._active_tasks) < self.max_concurrent and self._pending_queue:
                 task, url = self._pending_queue.pop(0)
@@ -558,6 +586,22 @@ class DownloadManager:
                 )
                 return muxed, None, muxed.url
 
+            # Facebook reels sometimes have no audio stream at all (silent
+            # clips, or the page exposes only a video-only DASH rendition).
+            # gallery-dl reports that honestly; failing the download would leave
+            # the user with nothing to play. Other providers keep the strict
+            # check because a missing audio partner there usually means a bad
+            # extraction, not a silent source.
+            if (
+                (media_item.provider or "").lower() == "gallerydl"
+                and media_item.metadata_extra.get("extractor") == "facebook"
+            ):
+                logger.info(
+                    f"Facebook video {selected.format_id} has no audio track; "
+                    "downloading the silent stream."
+                )
+                return selected, None, selected.url or media_item.original_url
+
             raise DownloadError(
                 "The selected quality is a video-only stream, and this source "
                 "did not expose a matching audio track. XakuMedia will not save "
@@ -797,6 +841,7 @@ class DownloadManager:
                         pause_event=pause_event,
                         headers=selected.http_headers if selected else None,
                         throttler=self.throttler,
+                        client=self._stream_client(),
                     )
                     try:
                         video_bytes = video_part.stat().st_size
@@ -834,6 +879,7 @@ class DownloadManager:
                         pause_event=pause_event,
                         headers=audio_format.http_headers or None,
                         throttler=self.throttler,
+                        client=self._stream_client(),
                     )
 
                     # 3. Transition to MERGING state
@@ -890,6 +936,7 @@ class DownloadManager:
                     pause_event=pause_event,
                     headers=selected.http_headers if selected else None,
                     throttler=self.throttler,
+                    client=self._stream_client(),
                 )
 
             try:

@@ -124,7 +124,7 @@ def test_stream_with_throttler(tmp_path: Path, monkeypatch):
         def __init__(self, **kwargs):
             pass
 
-        def stream(self, method, url):
+        def stream(self, method, url, **kwargs):
             return MockStreamResponse()
 
         def __enter__(self):

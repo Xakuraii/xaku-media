@@ -10,6 +10,7 @@ from xakumedia.db.schema import get_current_version, init_schema
 from xakumedia.models.media import MediaFormatInfo, MediaItem, MediaType
 from xakumedia.models.queue import DownloadTask, TaskStatus
 from xakumedia.models.url import ClassifiedUrl, UrlCategory
+from xakumedia.providers.base import make_media_item, make_post
 from xakumedia.server.dispatcher import RpcDispatcher
 from xakumedia.server.protocol import JsonRpcRequest
 
@@ -280,3 +281,66 @@ def test_dispatcher_database_rpc(temp_db: Path) -> None:
         assert "items" in hist_res.result
     finally:
         db_mod.default_repository = original_repo
+
+
+def _make_post(post_key: str, provider_post_id: str, urls: list[str], media_id_prefix: str):
+    items = [
+        make_media_item(
+            provider="test",
+            source_url="https://example.com/post",
+            media_url=url,
+            media_type=MediaType.IMAGE,
+            post_id="",
+            provider_media_id=f"{media_id_prefix}:{index}",
+            attachment_index=index,
+        )
+        for index, url in enumerate(urls)
+    ]
+    return make_post(
+        provider="test",
+        source_url="https://example.com/post",
+        post_key=post_key,
+        provider_post_id=provider_post_id,
+        author="tester",
+        title="test post",
+        media_items=items,
+    )
+
+
+def test_toggle_save_post_updates_every_media_row(repo: MediaRepository) -> None:
+    post = _make_post(
+        "post",
+        "post-1",
+        ["https://cdn.example.com/a.jpg", "https://cdn.example.com/b.jpg"],
+        "a",
+    )
+    repo.save_media_items(post.media_items, is_saved=False)
+    assert len(repo.get_saved_media(limit=10)) == 0
+
+    assert repo.toggle_save_post(post.id) is True
+    assert len(repo.get_saved_media(limit=10)) == 2
+
+    assert repo.toggle_save_post(post.id) is False
+    assert len(repo.get_saved_media(limit=10)) == 0
+
+
+def test_save_scan_posts_reuses_existing_provider_identity(repo: MediaRepository) -> None:
+    """A changed post key must not abort the batch on the unique provider index."""
+    classified = ClassifiedUrl(
+        raw_url="https://example.com/post",
+        normalized_url="https://example.com/post",
+        category=UrlCategory.SOCIAL_POST,
+    )
+    scan_id = repo.create_scan(classified, provider="test")
+    first = _make_post("first-key", "same-provider-id", ["https://cdn.example.com/1.jpg"], "first")
+    repo.save_scan_posts(scan_id, [(first, 0)])
+
+    second = _make_post(
+        "second-key", "same-provider-id", ["https://cdn.example.com/2.jpg"], "second"
+    )
+    repo.save_scan_posts(scan_id, [(second, 1)])
+
+    posts = repo.get_scan_posts(scan_id)
+    assert len(posts) == 1
+    assert posts[0].id == first.id
+    assert len(posts[0].media_items) == 2

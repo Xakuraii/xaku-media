@@ -1,7 +1,45 @@
+import { useEffect, useState } from "react";
 import { AlertTriangle, Eye, Trash2, X } from "lucide-react";
 import { explainScanFailure } from "./errors";
 import type { JobEntry } from "./types";
 import { hostOf, statusTone } from "./utils";
+
+function formatElapsed(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "0s";
+  const total = Math.floor(seconds);
+  if (total < 60) return `${total}s`;
+  const minutes = Math.floor(total / 60);
+  const secs = total % 60;
+  if (minutes < 60) return `${minutes}m ${secs}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
+function progressFor(entry: JobEntry, now: number) {
+  const { snapshot } = entry;
+  const running = snapshot.status === "running" || snapshot.status === "queued";
+  const started = snapshot.started_at ? Date.parse(snapshot.started_at) : null;
+  const finished = snapshot.finished_at ? Date.parse(snapshot.finished_at) : null;
+  const elapsed = started ? Math.max(0, ((finished ?? now) - started) / 1000) : 0;
+  const maxMedia = snapshot.options?.max_media ?? null;
+  const maxPosts = snapshot.options?.max_posts ?? null;
+
+  let percent: number | null = null;
+  if (!running) percent = 100;
+  else if (maxMedia && maxMedia > 0) {
+    percent = Math.min(99, Math.round((snapshot.progress.media_discovered / maxMedia) * 100));
+  } else if (maxPosts && maxPosts > 0) {
+    percent = Math.min(99, Math.round((snapshot.progress.posts_discovered / maxPosts) * 100));
+  }
+
+  const target =
+    maxMedia && maxMedia > 0
+      ? `limit ${maxMedia} media`
+      : maxPosts && maxPosts > 0
+        ? `limit ${maxPosts} posts`
+        : null;
+  return { running, elapsed, percent, target };
+}
 
 interface JobStatusListProps {
   jobs: JobEntry[];
@@ -24,6 +62,17 @@ export function JobStatusList({
   onOpenSettings,
   onOpenExternal,
 }: JobStatusListProps) {
+  const anyRunning = jobs.some(
+    (entry) => entry.snapshot.status === "running" || entry.snapshot.status === "queued"
+  );
+  const [now, setNow] = useState<number>(() => Date.now());
+
+  useEffect(() => {
+    if (!anyRunning) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [anyRunning]);
+
   if (jobs.length === 0) return null;
 
   return (
@@ -49,6 +98,15 @@ export function JobStatusList({
           snapshot.status === "failed"
             ? explainScanFailure(snapshot.error_category, snapshot.error, snapshot.error_details)
             : null;
+        const progress = progressFor(entry, now);
+        const barTone =
+          snapshot.status === "completed"
+            ? "bg-emerald-500"
+            : snapshot.status === "failed"
+              ? "bg-red-500"
+              : snapshot.status === "cancelled"
+                ? "bg-amber-500"
+                : "bg-accent";
         return (
           <div
             key={snapshot.job_id}
@@ -113,6 +171,43 @@ export function JobStatusList({
                 <Trash2 className="h-3 w-3" />
                 Delete
               </button>
+            </div>
+
+            <div className="space-y-1">
+              <div
+                className="relative h-1.5 overflow-hidden rounded-full bg-raised"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={progress.percent ?? undefined}
+                aria-label={`Scan progress for ${hostOf(snapshot.url)}`}
+              >
+                {progress.percent === null ? (
+                  <div
+                    className={`absolute inset-y-0 left-0 w-1/3 animate-pulse rounded-full ${barTone}`}
+                  />
+                ) : (
+                  <div
+                    className={`h-full rounded-full transition-[width] duration-300 ${barTone}`}
+                    style={{ width: `${progress.percent}%` }}
+                  />
+                )}
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2 font-mono text-[10px] text-muted">
+                <span>
+                  {progress.running
+                    ? progress.percent === null
+                      ? "scanning…"
+                      : `${progress.percent}%${progress.target ? ` of ${progress.target}` : ""}`
+                    : `${snapshot.stop_reason || snapshot.status}${progress.target ? ` · ${progress.target}` : ""}`}
+                </span>
+                <span>
+                  {formatElapsed(progress.elapsed)} elapsed
+                  {progress.running && snapshot.progress.pages_fetched > 0
+                    ? ` · page ${snapshot.progress.pages_fetched}`
+                    : ""}
+                </span>
+              </div>
             </div>
 
             {failure && (

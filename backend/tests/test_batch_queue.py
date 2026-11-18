@@ -51,6 +51,22 @@ def create_dummy_item(item_id: str, author: str = "creator") -> MediaItem:
     )
 
 
+def _drain(manager: DownloadManager, timeout: float = 5.0) -> None:
+    """Wait for running and pending tasks, then stop the worker pool.
+
+    These tests replace ``download_stream`` with a stub, so a task that starts
+    after the patch exits would call the real network path and leak into the
+    next test's temporary directory.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        state = manager.get_queue_state()
+        if state["active_count"] == 0 and state["pending_count"] == 0:
+            break
+        time.sleep(0.02)
+    manager._executor.shutdown(wait=True)
+
+
 def test_batch_download_sequential_naming(
     temp_dest_dir: Path, temp_db: MediaRepository
 ) -> None:
@@ -64,16 +80,21 @@ def test_batch_download_sequential_naming(
         ]
         target_dir = temp_dest_dir / "images"
 
-        with patch("xakumedia.downloader.manager.download_stream"):
-            tasks = manager.start_batch_download(items=items, target_dir=target_dir)
+        def fake_stream(**kwargs) -> Path:
+            return kwargs["destination_path"]
 
-        assert len(tasks) == 3
-        destinations = [t.destination_path.name for t in tasks if t.destination_path]
-        assert destinations == [
-            "art_master_img_001.jpg",
-            "art_master_img_002.jpg",
-            "art_master_img_003.jpg",
-        ]
+        with patch(
+            "xakumedia.downloader.manager.download_stream", side_effect=fake_stream
+        ):
+            tasks = manager.start_batch_download(items=items, target_dir=target_dir)
+            assert len(tasks) == 3
+            destinations = [t.destination_path.name for t in tasks if t.destination_path]
+            assert destinations == [
+                "art_master_img_001.jpg",
+                "art_master_img_002.jpg",
+                "art_master_img_003.jpg",
+            ]
+            _drain(manager)
 
 
 def test_concurrency_throttling_and_scheduling(
@@ -109,6 +130,7 @@ def test_concurrency_throttling_and_scheduling(
 
             state_after = manager.get_queue_state()
             assert state_after["pending_count"] <= 1
+            _drain(manager)
 
 
 def test_pause_and_resume_download(temp_dest_dir: Path, temp_db: MediaRepository) -> None:
@@ -150,6 +172,7 @@ def test_pause_and_resume_download(temp_dest_dir: Path, temp_db: MediaRepository
 
             state = manager.get_queue_state()
             assert state["active_count"] >= 1 or state["pending_count"] >= 1
+            _drain(manager)
 
 
 def test_pause_all_and_resume_all(temp_dest_dir: Path, temp_db: MediaRepository) -> None:
@@ -181,6 +204,7 @@ def test_pause_all_and_resume_all(temp_dest_dir: Path, temp_db: MediaRepository)
             ):
                 resumed_count = manager.resume_all()
                 assert resumed_count >= 2
+                _drain(manager)
 
 
 def test_cancel_all(temp_dest_dir: Path, temp_db: MediaRepository) -> None:
@@ -205,6 +229,7 @@ def test_cancel_all(temp_dest_dir: Path, temp_db: MediaRepository) -> None:
 
             state = manager.get_queue_state()
             assert state["pending_count"] == 0
+            _drain(manager)
 
 
 def test_clear_completed(temp_dest_dir: Path, temp_db: MediaRepository) -> None:

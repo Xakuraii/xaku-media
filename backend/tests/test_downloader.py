@@ -1,6 +1,7 @@
 """Unit tests for chunked streaming downloader and download manager."""
 
 import threading
+import time
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
@@ -545,3 +546,127 @@ def test_download_manager_fails_clearly_when_only_video_exists(
     assert "silent video" in stored.error_message.lower()
     stream_mock.assert_not_called()
     merge_mock.assert_not_called()
+
+
+def test_download_manager_allows_silent_gallerydl_facebook_video(
+    temp_dest_dir: Path, tmp_path: Path
+) -> None:
+    """Facebook reels without an audio track download instead of failing."""
+    repo = MediaRepository(tmp_path / "facebook_silent.db")
+    manager = DownloadManager(max_concurrent=1, repository=repo)
+
+    video_only = MediaFormatInfo(
+        format_id="original",
+        container="mp4",
+        video_codec="h264",
+        url="https://cdn.example.com/facebook-silent.mp4",
+    )
+    item = _video_item_with([video_only])
+    item.provider = "gallerydl"
+    item.metadata_extra = {"extractor": "facebook"}
+
+    streamed: list[str] = []
+
+    import xakumedia.downloader.manager as dm_mod
+
+    def fake_stream(url: str, destination_path: Path, **kwargs: Any) -> Path:
+        streamed.append(url)
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        destination_path.write_bytes(b"silent")
+        return destination_path
+
+    with patch.object(dm_mod, "download_stream", side_effect=fake_stream):
+        manager.start_download(media_item=item, selected_format=video_only)
+        manager._executor.shutdown(wait=True)
+
+    stored = repo.get_download_tasks(limit=5)[0]
+    assert stored.status == TaskStatus.COMPLETED
+    assert streamed == ["https://cdn.example.com/facebook-silent.mp4"]
+
+
+def test_download_stream_uses_shared_client_without_closing_it(temp_dest_dir: Path) -> None:
+    """A supplied client is reused and request options stay per download."""
+    dest = temp_dest_dir / "images" / "pooled.jpg"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    payload = b"pooled-bytes"
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.is_error = False
+    mock_response.headers = {"content-length": str(len(payload))}
+    mock_response.iter_bytes.return_value = [payload]
+    mock_response.__enter__.return_value = mock_response
+    mock_response.__exit__.return_value = None
+
+    shared_client = MagicMock()
+    shared_client.is_closed = False
+    shared_client.stream.return_value = mock_response
+
+    download_stream(
+        url="https://cdn.example.com/pooled.jpg",
+        destination_path=dest,
+        task_id="task-pooled",
+        headers={"Referer": "https://example.com/post"},
+        client=shared_client,
+    )
+
+    assert dest.read_bytes() == payload
+    shared_client.close.assert_not_called()
+    request = shared_client.stream.call_args
+    assert request.args[:2] == ("GET", "https://cdn.example.com/pooled.jpg")
+    assert request.kwargs["headers"]["Referer"] == "https://example.com/post"
+    assert request.kwargs["timeout"] is not None
+
+
+def test_download_manager_shares_one_stream_client(
+    temp_dest_dir: Path, tmp_path: Path
+) -> None:
+    """Bulk downloads reuse one connection pool instead of one client per file."""
+    repo = MediaRepository(tmp_path / "pool.db")
+    manager = DownloadManager(max_concurrent=1, repository=repo)
+    clients: list[object] = []
+
+    import xakumedia.downloader.manager as dm_mod
+
+    def fake_stream(url: str, destination_path: Path, **kwargs: Any) -> Path:
+        clients.append(kwargs["client"])
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        destination_path.write_bytes(b"x")
+        return destination_path
+
+    item = MediaItem(
+        id="item-pool",
+        source_url="https://example.com/post",
+        original_url="https://cdn.example.com/pool.jpg",
+        media_type=MediaType.IMAGE,
+        title="Pool",
+        author="creator",
+        available_formats=[
+            MediaFormatInfo(
+                format_id="orig",
+                container="jpg",
+                url="https://cdn.example.com/pool.jpg",
+            )
+        ],
+    )
+
+    with patch.object(dm_mod, "download_stream", side_effect=fake_stream):
+        first = manager.start_download(media_item=item)
+        second = manager.start_download(media_item=item)
+
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            states = [repo.get_download_task(task.id).status for task in (first, second)]
+            if all(state in (TaskStatus.COMPLETED, TaskStatus.FAILED) for state in states):
+                break
+            time.sleep(0.02)
+
+    manager._executor.shutdown(wait=True)
+
+    try:
+        assert len(clients) == 2
+        assert clients[0] is clients[1]
+        assert repo.get_download_task(first.id).status == TaskStatus.COMPLETED
+        assert repo.get_download_task(second.id).status == TaskStatus.COMPLETED
+    finally:
+        manager._stream_client().close()

@@ -193,6 +193,10 @@ function registerIpcHandlers(): void {
     return pythonBridge.sendRequest("toggle_save_media", { media_id: mediaId });
   });
 
+  ipcMain.handle("python:toggleSavePost", async (_event, postId: string) => {
+    return pythonBridge.sendRequest("toggle_save_post", { post_id: postId });
+  });
+
   ipcMain.handle("python:deleteMediaItem", async (_event, mediaId: string) => {
     return pythonBridge.sendRequest("delete_media_item", { media_id: mediaId });
   });

@@ -160,6 +160,19 @@ export function explainStartFailure(error: unknown): ScanErrorInfo {
   return explainScanFailure(null, message);
 }
 
+export function explainBookmarkFailure(error: unknown): ScanErrorInfo {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    title: "Bookmark failed",
+    summary: message,
+    steps: [
+      "Wait a moment and try again; freshly discovered posts may still be saving.",
+      "Open the Library tab to confirm whether the bookmark was stored.",
+    ],
+    actions: [],
+  };
+}
+
 export function explainDownloadFailure(error: unknown): ScanErrorInfo {
   const message = error instanceof Error ? error.message : String(error);
   const text = message.toLowerCase();

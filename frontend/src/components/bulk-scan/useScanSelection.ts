@@ -33,18 +33,21 @@ export function useScanSelection(
     });
   }, []);
 
-  const togglePost = useCallback((post: PostWithScan) => {
-    const ids = post.media_items.map((item) => item.id);
-    setSelected((prev) => {
-      const allSelected = ids.length > 0 && ids.every((id) => prev.has(id));
-      const next = new Set(prev);
-      for (const id of ids) {
-        if (allSelected) next.delete(id);
-        else next.add(id);
-      }
-      return next;
-    });
-  }, []);
+  const togglePost = useCallback(
+    (post: PostWithScan, mediaFilter: "all" | "image" | "video" | "album" = "all") => {
+      const ids = visibleMedia(post, mediaFilter).map((item) => item.id);
+      setSelected((prev) => {
+        const allSelected = ids.length > 0 && ids.every((id) => prev.has(id));
+        const next = new Set(prev);
+        for (const id of ids) {
+          if (allSelected) next.delete(id);
+          else next.add(id);
+        }
+        return next;
+      });
+    },
+    []
+  );
 
   const selectAllVisible = useCallback(
     () => setSelected(new Set(visibleItems.map((item) => item.id))),

@@ -14,7 +14,7 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 import yt_dlp
 from yt_dlp.utils import DownloadError, ExtractorError
@@ -25,7 +25,7 @@ from ..exceptions.base import (
     MediaUnavailableError,
 )
 from ..extractors.video import normalize_formats, parse_yt_dlp_error
-from ..models.media import MediaType
+from ..models.media import MediaFormatInfo, MediaType
 from ..models.post import Post, ProviderCapabilities, ScanOptions
 from ..models.url import ClassifiedUrl, UrlCategory
 from ..utils.security import validate_url_security
@@ -53,6 +53,23 @@ HYDRATE_WORKERS = 6
 _CHANNEL_PATH = re.compile(r"^/(@[^/]+|channel/[^/]+|c/[^/]+|user/[^/]+)/?$")
 _CHANNEL_TABS = ("videos", "shorts", "streams")
 _TIKTOK_PROFILE_PATH = re.compile(r"^/@[^/]+/?$")
+_TIKTOK_PHOTO_PATH = re.compile(r"^/(@[^/]+)/photo/(\d+)")
+
+
+def normalize_tiktok_photo_url(url: str) -> str:
+    """Rewrite TikTok ``/photo/<id>`` links to the ``/video/<id>`` form.
+
+    TikTok serves both forms for slideshows, but yt-dlp's TikTok extractor only
+    matches ``/video/``. Users paste whichever form TikTok's share button gave
+    them, so normalize before extraction instead of rejecting the link.
+    """
+    parts = urlsplit(url)
+    if (parts.hostname or "").lower() not in TIKTOK_HOSTS:
+        return url
+    path = _TIKTOK_PHOTO_PATH.sub(r"/\1/video/\2", parts.path, count=1)
+    if path == parts.path:
+        return url
+    return urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
 
 _IMPERSONATION_TARGET: Any | None = None
 _IMPERSONATION_READY = False
@@ -256,16 +273,17 @@ class YtDlpProvider(BaseProvider):
 
     def classify(self, url: str) -> ClassifiedUrl:
         parts = urlsplit(url)
-        collection = is_collection_url(url)
-        handle = author_hint(url)
+        normalized = normalize_tiktok_photo_url(url)
+        collection = is_collection_url(normalized)
+        handle = author_hint(normalized)
         return ClassifiedUrl(
             raw_url=url,
-            normalized_url=url,
+            normalized_url=normalized,
             category=UrlCategory.CHANNEL if collection else UrlCategory.SOCIAL_POST,
-            platform=platform_label(url),
+            platform=platform_label(normalized),
             domain=parts.netloc,
             author_hint=handle,
-            title_hint=handle or platform_label(url),
+            title_hint=handle or platform_label(normalized),
             is_supported=True,
             requires_auth=False,
             metadata_extra={"provider": self.name},
@@ -398,20 +416,110 @@ class YtDlpProvider(BaseProvider):
             if not pending:
                 hydrator.close()
 
-    def _tiktok_image_post(
+    @staticmethod
+    def _tiktok_video_id(page_url: str, info: dict[str, Any]) -> str:
+        """Return the numeric TikTok post id from metadata or its page URL."""
+        value = info.get("id") or info.get("display_id")
+        if value:
+            return str(value)
+        match = re.search(r"/(?:video|photo)/(\d+)", page_url)
+        if match:
+            return match.group(1)
+        return page_url.rstrip("/").rsplit("/", 1)[-1]
+
+    def _tiktok_web_data(self, page_url: str, video_id: str) -> dict[str, Any]:
+        """Return TikTok's embedded post data using yt-dlp's browser session.
+
+        TikTok denies gallery-dl's plain requests with HTTP 403, while yt-dlp
+        succeeds because it sends Chrome's TLS fingerprint and solves the JS
+        challenge. Reusing that extractor is the difference between a photo
+        post returning all slides and disappearing from the scan.
+        """
+        opts = self._base_opts() | {"noplaylist": True, "extract_flat": False}
+        self._apply_auth(page_url, opts)
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            extractor = ydl.get_info_extractor("TikTok")
+            fetch = getattr(extractor, "_extract_web_data_and_status", None)
+            if not callable(fetch):
+                return {}
+            data, _status = fetch(page_url, video_id, fatal=False)
+        return data if isinstance(data, dict) else {}
+
+    @staticmethod
+    def _tiktok_slideshow_items(
+        data: dict[str, Any],
+        author: str,
+        title: str | None,
+        video_id: str,
+        page_url: str,
+    ) -> list[Any]:
+        """Build image items from TikTok's ``imagePost`` payload."""
+        images = ((data.get("imagePost") or {}).get("images") or [])
+        items: list[Any] = []
+        seen: set[str] = set()
+        for index, image in enumerate(images):
+            if not isinstance(image, dict):
+                continue
+            image_url = image.get("imageURL") or {}
+            urls = image_url.get("urlList") or []
+            if not urls:
+                urls = (image.get("displayImage") or {}).get("urlList") or []
+            media_url = next(
+                (str(url) for url in urls if isinstance(url, str) and url),
+                "",
+            )
+            if not media_url or media_url in seen:
+                continue
+            seen.add(media_url)
+            path = media_url.split("?", 1)[0]
+            extension = path.rsplit(".", 1)[-1].lower() if "." in path else "jpeg"
+            if extension == "jpg":
+                extension = "jpeg"
+            width = image.get("imageWidth") or image_url.get("width")
+            height = image.get("imageHeight") or image_url.get("height")
+            format_info = MediaFormatInfo(
+                format_id=f"image-{index}",
+                container=extension,
+                resolution=f"{width}x{height}" if width and height else None,
+                width=width,
+                height=height,
+                is_direct_stream=True,
+                url=media_url,
+                requires_merge=False,
+                format_note="original",
+                http_headers={"Referer": "https://www.tiktok.com/"},
+            )
+            items.append(
+                make_media_item(
+                    provider=YtDlpProvider.name,
+                    source_url=page_url,
+                    media_url=media_url,
+                    media_type=MediaType.IMAGE,
+                    post_id="",
+                    title=title,
+                    author=author,
+                    thumbnail_url=media_url,
+                    width=width,
+                    height=height,
+                    extension=extension,
+                    mime_type=f"image/{extension}",
+                    format_info=format_info,
+                    provider_media_id=f"{video_id}:{index}",
+                    attachment_index=index,
+                    metadata_extra={"post_id": video_id, "slideshow": True},
+                )
+            )
+        return items
+
+    def _tiktok_gallery_image_post(
         self,
         page_url: str,
         source_url: str,
         info: dict[str, Any],
-        warn: Callable[[str], None] | None = None,
+        video_id: str,
+        warn: Callable[[str], None] | None,
     ) -> Post | None:
-        """Build a TikTok slideshow post from gallery-dl image entries.
-
-        yt-dlp only exposes the background audio track for photo-mode posts, so
-        a normal video item would download as an MP3. gallery-dl's TikTok
-        extractor returns one image URL per slide; use it instead and never
-        surface the audio as a video.
-        """
+        """Legacy slideshow fallback through gallery-dl (may be rate limited)."""
         from .gallerydl import GalleryDlProvider
 
         try:
@@ -440,22 +548,16 @@ class YtDlpProvider(BaseProvider):
                 warn("A TikTok photo post did not return any slide images.")
             return None
 
-        video_id = str(
-            info.get("id")
-            or info.get("display_id")
-            or page_url.rstrip("/").rsplit("/", 1)[-1]
-        )
         author = str(
             info.get("uploader")
             or info.get("channel")
             or info.get("creator")
             or next((post.author for post in posts if post.author), "media")
         )
-        post_key = f"tiktok:{video_id}"
-        post = make_post(
+        return make_post(
             provider=self.name,
             source_url=source_url,
-            post_key=post_key,
+            post_key=f"tiktok:{video_id}",
             provider_post_id=video_id,
             author=author,
             title=info.get("title") or next((post.title for post in posts if post.title), None),
@@ -467,7 +569,59 @@ class YtDlpProvider(BaseProvider):
                 "media_provider": GalleryDlProvider.name,
             },
         )
-        return post
+
+    def _tiktok_image_post(
+        self,
+        page_url: str,
+        source_url: str,
+        info: dict[str, Any],
+        warn: Callable[[str], None] | None = None,
+    ) -> Post | None:
+        """Build a TikTok slideshow post from the post's own slide images.
+
+        yt-dlp only exposes the background audio track for photo-mode posts, so
+        a normal video item would download as an MP3. yt-dlp's embedded post
+        data (``imagePost.images``) contains the real slides and is fetched with
+        the same impersonated session that enumerated the post. gallery-dl is
+        kept as a fallback for unusual posts, but is unreliable here because
+        TikTok blocks its plain HTTP client.
+        """
+        video_id = self._tiktok_video_id(page_url, info)
+        data: dict[str, Any] = {}
+        try:
+            data = self._tiktok_web_data(page_url, video_id)
+        except Exception as exc:  # fall back to gallery-dl below
+            logger.debug(f"TikTok slide data unavailable for {page_url}: {exc}")
+
+        author = str(
+            (data.get("author") or {}).get("uniqueId")
+            or info.get("uploader")
+            or info.get("channel")
+            or info.get("creator")
+            or "media"
+        )
+        title = data.get("desc") or info.get("title")
+        items = self._tiktok_slideshow_items(data, author, title, video_id, page_url)
+        if items:
+            return make_post(
+                provider=self.name,
+                source_url=source_url,
+                post_key=f"tiktok:{video_id}",
+                provider_post_id=video_id,
+                author=author,
+                title=title,
+                media_items=items,
+                post_url=page_url,
+                metadata_extra={
+                    "extractor": "TikTok",
+                    "slideshow": True,
+                    "media_provider": self.name,
+                },
+            )
+
+        return self._tiktok_gallery_image_post(
+            page_url, source_url, info, video_id, warn
+        )
 
     def _post_from_info(
         self,
@@ -552,7 +706,7 @@ class YtDlpProvider(BaseProvider):
         on_page: PageCallback | None = None,
         on_warning: Callable[[str], None] | None = None,
     ) -> Iterator[Post]:
-        safe_url = validate_url_security(url)
+        safe_url = normalize_tiktok_photo_url(validate_url_security(url))
         collection = is_collection_url(safe_url)
         warn = on_warning or (lambda _msg: None)
 

@@ -24,7 +24,11 @@ from xakumedia.providers.base import media_identity
 from xakumedia.providers.direct import DirectProvider
 from xakumedia.providers.gallerydl import GalleryDlProvider
 from xakumedia.providers.registry import provider_capabilities, resolve_provider
-from xakumedia.providers.ytdlp import YtDlpProvider, collection_urls
+from xakumedia.providers.ytdlp import (
+    YtDlpProvider,
+    collection_urls,
+    normalize_tiktok_photo_url,
+)
 from xakumedia.utils.stable_ids import canonical_media_url, stable_id
 
 
@@ -309,6 +313,181 @@ def test_gallerydl_pairs_separate_audio_with_video(
     assert formats["audio"].video_codec is None
 
 
+def test_facebook_video_ids_dedupe_across_tabs() -> None:
+    videos = '"__typename":"Video","id":"111"'
+    reels = '"video_id":"222"'
+    escaped = '\\"__typename\\":\\"Video\\",\\"id\\":\\"333\\"'
+
+    assert gallery_module._facebook_video_ids(
+        [videos + reels, reels + escaped, videos]
+    ) == ["111", "222", "333"]
+
+
+def test_facebook_profile_base_only_targets_profile_roots() -> None:
+    assert (
+        gallery_module._facebook_profile_base("https://www.facebook.com/zerm.mer")
+        == "https://www.facebook.com/zerm.mer"
+    )
+    assert (
+        gallery_module._facebook_profile_base(
+            "https://www.facebook.com/profile.php?id=100035424692970"
+        )
+        == "https://www.facebook.com/100035424692970"
+    )
+    assert (
+        gallery_module._facebook_profile_base("https://www.facebook.com/zerm.mer/photos")
+        is None
+    )
+    assert (
+        gallery_module._facebook_profile_base("https://www.facebook.com/reel/123")
+        is None
+    )
+    assert (
+        gallery_module._facebook_profile_base("https://www.instagram.com/nasa/")
+        is None
+    )
+
+
+def test_facebook_video_pages_warms_session_and_reads_tabs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested: list[str] = []
+    pages = {
+        "https://www.facebook.com/alice/videos": '"__typename":"Video","id":"111"',
+        "https://www.facebook.com/alice/reels": '"video_id":"222"',
+    }
+
+    class _SessionExtractor:
+        def request(self, url: str, fatal: bool = True):
+            requested.append(f"{url}|{fatal}")
+            return SimpleNamespace(status_code=200, text=pages.get(url, ""))
+
+    monkeypatch.setattr(
+        GalleryDlProvider, "_prepare_extractor", lambda self, url: _SessionExtractor()
+    )
+
+    found = GalleryDlProvider()._facebook_video_pages(
+        "https://www.facebook.com/alice", threading.Event(), lambda _message: None
+    )
+
+    assert requested == [
+        "https://www.facebook.com/alice/photos_by|False",
+        "https://www.facebook.com/alice/videos|False",
+        "https://www.facebook.com/alice/reels|False",
+    ]
+    assert found == [
+        pages["https://www.facebook.com/alice/videos"],
+        pages["https://www.facebook.com/alice/reels"],
+    ]
+
+
+def test_gallerydl_facebook_profile_scans_videos_before_photos(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A profile root must include reels even though gallery-dl lists photos only."""
+    profile_url = "https://www.facebook.com/alice"
+
+    class _PhotoUser:
+        category = "facebook"
+        subcategory = "user"
+
+        def items(self):
+            yield Message.Directory, "", {"post_id": "photo1", "username": "alice"}
+            yield Message.Url, "https://cdn.example.com/photo1.jpg", {
+                "post_id": "photo1",
+                "id": "photo1",
+                "extension": "jpg",
+            }
+
+    class _ReelVideo:
+        category = "facebook"
+        subcategory = "video"
+
+        def items(self):
+            yield Message.Directory, "", {"post_id": "video1", "username": "alice"}
+            yield Message.Url, "https://cdn.example.com/video1.mp4", {
+                "post_id": "video1",
+                "id": "video1",
+                "type": "video",
+                "extension": "mp4",
+            }
+            yield Message.Url, "https://cdn.example.com/video1.m4a", {
+                "post_id": "video1",
+                "id": "video1",
+                "type": "audio",
+                "extension": "m4a",
+            }
+
+    monkeypatch.setattr(
+        GalleryDlProvider,
+        "_prepare_extractor",
+        lambda self, url: _ReelVideo() if "/reel/" in url else _PhotoUser(),
+    )
+    monkeypatch.setattr(
+        GalleryDlProvider,
+        "_facebook_video_pages",
+        lambda self, profile, cancel, warn: ['{"__typename":"Video","id":"123"}'],
+    )
+    monkeypatch.setattr(gallery_module, "validate_url_security", lambda url: url)
+
+    posts = list(
+        GalleryDlProvider().iter_posts(
+            profile_url,
+            ScanOptions(include_images=True, include_videos=True),
+            threading.Event(),
+        )
+    )
+
+    assert [post.media_items[0].media_type for post in posts] == [
+        MediaType.VIDEO,
+        MediaType.IMAGE,
+    ]
+    video = posts[0].media_items[0]
+    assert {fmt.format_id for fmt in video.available_formats} == {"original", "audio"}
+    assert video.metadata_extra["extractor"] == "facebook"
+
+
+def test_gallerydl_media_cap_keeps_video_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cap that lands on a video must still attach its following audio entry."""
+    items = [
+        (Message.Directory, "", {"post_id": "p1", "username": "alice"}),
+        (
+            Message.Url,
+            "https://cdn.example.com/reel.mp4",
+            {"post_id": "p1", "id": "v1", "type": "video", "extension": "mp4"},
+        ),
+        (
+            Message.Url,
+            "https://cdn.example.com/reel.m4a",
+            {"post_id": "p1", "id": "v1", "type": "audio", "extension": "m4a"},
+        ),
+        (
+            Message.Url,
+            "https://cdn.example.com/ignored.jpg",
+            {"post_id": "p1", "id": "ignored", "extension": "jpg"},
+        ),
+    ]
+    monkeypatch.setattr(
+        GalleryDlProvider, "_prepare_extractor", lambda self, url: _FakeExtractor(items)
+    )
+    monkeypatch.setattr(gallery_module, "validate_url_security", lambda url: url)
+
+    posts = list(
+        GalleryDlProvider().iter_posts(
+            "https://fake.example/post/1",
+            ScanOptions(max_media=1),
+            threading.Event(),
+        )
+    )
+
+    assert len(posts) == 1
+    assert len(posts[0].media_items) == 1
+    formats = {fmt.format_id: fmt for fmt in posts[0].media_items[0].available_formats}
+    assert formats["audio"].url == "https://cdn.example.com/reel.m4a"
+
+
 def test_gallerydl_keeps_every_file_with_repeated_post_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -423,6 +602,103 @@ def test_tiktok_audio_only_post_is_never_published_as_video(
     assert post is None
 
 
+def test_tiktok_photo_url_is_rewritten_to_video_path() -> None:
+    """TikTok's own extractor only matches /video/, but share sheets emit /photo/."""
+    assert (
+        normalize_tiktok_photo_url(
+            "https://www.tiktok.com/@user/photo/7634207163103071508?is_from_webapp=1"
+        )
+        == "https://www.tiktok.com/@user/video/7634207163103071508?is_from_webapp=1"
+    )
+    assert (
+        normalize_tiktok_photo_url("https://www.tiktok.com/@user/video/123")
+        == "https://www.tiktok.com/@user/video/123"
+    )
+    assert (
+        normalize_tiktok_photo_url("https://www.tiktok.com/@user")
+        == "https://www.tiktok.com/@user"
+    )
+    assert (
+        normalize_tiktok_photo_url("https://example.com/@user/photo/123")
+        == "https://example.com/@user/photo/123"
+    )
+
+
+def test_tiktok_slideshow_items_build_one_image_per_slide() -> None:
+    data = {
+        "imagePost": {
+            "images": [
+                {
+                    "imageURL": {"urlList": ["https://cdn.example.com/a.jpeg?x=1"]},
+                    "imageWidth": 1080,
+                    "imageHeight": 1920,
+                },
+                {
+                    "imageURL": {"urlList": ["https://cdn.example.com/b.jpeg"]},
+                    "imageWidth": 1440,
+                    "imageHeight": 1920,
+                },
+                {
+                    "imageURL": {"urlList": []},
+                    "displayImage": {"urlList": ["https://cdn.example.com/c.jpeg"]},
+                },
+            ]
+        }
+    }
+
+    items = YtDlpProvider._tiktok_slideshow_items(
+        data,
+        author="creator",
+        title="slides",
+        video_id="123",
+        page_url="https://www.tiktok.com/@creator/video/123",
+    )
+
+    assert len(items) == 3
+    assert [item.provider_media_id for item in items] == ["123:0", "123:1", "123:2"]
+    assert all(item.media_type == MediaType.IMAGE for item in items)
+    assert items[0].width == 1080 and items[0].height == 1920
+    assert items[0].metadata_extra["slideshow"] is True
+    assert items[2].original_url == "https://cdn.example.com/c.jpeg"
+
+
+def test_tiktok_image_post_uses_embedded_slide_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The impersonated yt-dlp session replaces the 403-prone gallery-dl path."""
+    provider = YtDlpProvider()
+    monkeypatch.setattr(
+        provider,
+        "_tiktok_web_data",
+        lambda *args, **kwargs: {
+            "desc": "caption",
+            "author": {"uniqueId": "creator"},
+            "imagePost": {
+                "images": [
+                    {"imageURL": {"urlList": ["https://cdn.example.com/a.jpeg"]}},
+                    {"imageURL": {"urlList": ["https://cdn.example.com/b.jpeg"]}},
+                ]
+            },
+        },
+    )
+    monkeypatch.setattr(
+        provider,
+        "_tiktok_gallery_image_post",
+        lambda *args, **kwargs: pytest.fail("gallery-dl fallback should not run"),
+    )
+    url = "https://www.tiktok.com/@creator/video/123"
+
+    post = provider._tiktok_image_post(url, url, {}, None)
+
+    assert post is not None
+    assert post.provider_post_id == "123"
+    assert post.author == "creator"
+    assert post.title == "caption"
+    assert len(post.media_items) == 2
+    assert post.metadata_extra["media_provider"] == "ytdlp"
+    assert all(item.post_id == post.id for item in post.media_items)
+
+
 def test_gallerydl_auth_sites_use_chrome_user_agent_preset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -455,10 +731,13 @@ def test_gallerydl_auth_sites_use_chrome_user_agent_preset(
 def test_gallerydl_empty_auth_site_explains_cookies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from xakumedia.db import default_repository
+
     monkeypatch.setattr(
         GalleryDlProvider, "_prepare_extractor", lambda self, url: _EmptyExtractor()
     )
     monkeypatch.setattr(gallery_module, "validate_url_security", lambda url: url)
+    monkeypatch.setattr(default_repository, "get_cookie_profile_for_domain", lambda url: None)
 
     with pytest.raises(PrivateMediaError) as exc_info:
         list(
@@ -488,6 +767,8 @@ def test_gallerydl_auth_site_failure_explains_cookies(
 ) -> None:
     from gallery_dl.exception import NotFoundError as GalleryNotFoundError
 
+    from xakumedia.db import default_repository
+
     def boom(self):
         raise GalleryNotFoundError("user")
 
@@ -496,6 +777,7 @@ def test_gallerydl_auth_site_failure_explains_cookies(
         GalleryDlProvider, "_prepare_extractor", lambda self, url: _NotFoundExtractor()
     )
     monkeypatch.setattr(gallery_module, "validate_url_security", lambda url: url)
+    monkeypatch.setattr(default_repository, "get_cookie_profile_for_domain", lambda url: None)
 
     with pytest.raises(MediaUnavailableError) as exc_info:
         list(

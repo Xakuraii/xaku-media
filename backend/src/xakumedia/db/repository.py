@@ -212,6 +212,21 @@ class MediaRepository:
         """
         return self.save_scan_posts(scan_id, [(post, order)])
 
+    def _canonical_post_id(self, conn: sqlite3.Connection, post: Post) -> str:
+        """Reuse the stored row id when this provider post identity already exists.
+
+        ``posts`` has a partial unique index on ``(provider, provider_post_id)``
+        that is stricter than the primary key, so identity-aware lookup keeps a
+        changed post key from aborting the whole batch transaction.
+        """
+        if not post.provider_post_id:
+            return post.id
+        row = conn.execute(
+            "SELECT id FROM posts WHERE provider = ? AND provider_post_id = ?",
+            (post.provider, post.provider_post_id),
+        ).fetchone()
+        return str(row["id"]) if row else post.id
+
     def save_scan_posts(self, scan_id: str, posts: list[tuple[Post, int]]) -> int:
         """Persist many posts in a single transaction.
 
@@ -224,6 +239,7 @@ class MediaRepository:
         was_new = 0
         with get_db_session(self.db_path) as conn:
             for post, order in posts:
+                post_id = self._canonical_post_id(conn, post)
                 conn.execute(
                     """
                     INSERT INTO posts (
@@ -231,6 +247,8 @@ class MediaRepository:
                         author, title, post_type, created_at, metadata_extra_json, updated_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
+                        provider = excluded.provider,
+                        provider_post_id = excluded.provider_post_id,
                         author = excluded.author,
                         title = excluded.title,
                         post_type = excluded.post_type,
@@ -238,7 +256,7 @@ class MediaRepository:
                         updated_at = excluded.updated_at
                     """,
                     (
-                        post.id,
+                        post_id,
                         post.provider,
                         post.provider_post_id,
                         post.source_url,
@@ -257,10 +275,12 @@ class MediaRepository:
                     VALUES (?, ?, ?)
                     ON CONFLICT(scan_id, post_id) DO UPDATE SET item_order = excluded.item_order
                     """,
-                    (scan_id, post.id, order),
+                    (scan_id, post_id, order),
                 )
 
                 for item in post.media_items:
+                    if item.post_id != post_id:
+                        item = item.model_copy(update={"post_id": post_id})
                     if self._upsert_media(conn, item, now):
                         was_new += 1
                     conn.execute(
@@ -700,6 +720,26 @@ class MediaRepository:
             conn.execute(
                 "UPDATE media_items SET is_saved = ? WHERE id = ?",
                 (new_state, media_id),
+            )
+            return bool(new_state)
+
+    def toggle_save_post(self, post_id: str) -> bool:
+        """Bookmark or un-bookmark every media item that belongs to a post.
+
+        A post is considered saved only when all of its media rows are saved, so
+        a mixed state resolves by saving the rest rather than clearing them.
+        """
+        with get_db_session(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT is_saved FROM media_items WHERE post_id = ?",
+                (post_id,),
+            ).fetchall()
+            if not rows:
+                raise DatabaseError(f"Post with ID '{post_id}' has no media items.")
+            new_state = 0 if all(row["is_saved"] == 1 for row in rows) else 1
+            conn.execute(
+                "UPDATE media_items SET is_saved = ? WHERE post_id = ?",
+                (new_state, post_id),
             )
             return bool(new_state)
 

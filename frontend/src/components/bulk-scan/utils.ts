@@ -48,10 +48,22 @@ export function dedupePosts<T extends { id: string }>(posts: T[]): T[] {
 }
 
 export function parseUrls(text: string): string[] {
-  const found = text
-    .split(/[\s,]+/)
-    .map((value) => value.trim())
-    .filter((value) => /^https?:\/\//i.test(value));
+  const found: string[] = [];
+  for (const token of text.split(/[\s,]+/)) {
+    const cleaned = token.trim().replace(/^[("'<[]+/, "").replace(/[)"'>\],.;]+$/, "");
+    if (!cleaned) continue;
+    if (/^https?:\/\//i.test(cleaned)) {
+      found.push(cleaned);
+      continue;
+    }
+    // Accept scheme-less links such as "tiktok.com/@user" or "vm.tiktok.com/…".
+    if (
+      /^[a-z0-9-]+(\.[a-z0-9-]+)+(\/|\?|#|$)/i.test(cleaned) &&
+      !/^[^/\s]+@[^/\s]+$/.test(cleaned)
+    ) {
+      found.push(`https://${cleaned}`);
+    }
+  }
   return Array.from(new Set(found));
 }
 

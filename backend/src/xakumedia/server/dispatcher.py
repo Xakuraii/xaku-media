@@ -333,6 +333,15 @@ class RpcDispatcher:
             new_state = default_repository.toggle_save_media(media_id)
             return {"id": media_id, "is_saved": new_state}
 
+        def toggle_save_post_handler(params: dict[str, Any]) -> dict[str, Any]:
+            post_id = params.get("post_id")
+            if not post_id or not isinstance(post_id, str):
+                raise TypeError("Parameter 'post_id' is required and must be a string.")
+            from ..db import default_repository
+
+            new_state = default_repository.toggle_save_post(post_id)
+            return {"id": post_id, "is_saved": new_state}
+
         def delete_media_item_handler(params: dict[str, Any]) -> dict[str, Any]:
             media_id = params.get("media_id")
             if not media_id or not isinstance(media_id, str):
@@ -836,6 +845,7 @@ class RpcDispatcher:
         self.register("get_saved_media", get_saved_media_handler)
         self.register("query_saved_media", query_saved_media_handler)
         self.register("toggle_save_media", toggle_save_media_handler)
+        self.register("toggle_save_post", toggle_save_post_handler)
         self.register("delete_media_item", delete_media_item_handler)
         self.register("export_media_metadata", export_media_metadata_handler)
         self.register("delete_downloaded_media", delete_downloaded_media_handler)

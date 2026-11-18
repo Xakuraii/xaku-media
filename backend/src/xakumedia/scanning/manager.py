@@ -31,6 +31,7 @@ from ..providers.base import host_of
 from ..providers.registry import provider_capabilities, resolve_provider
 from ..server.loop import send_notification
 from ..server.protocol import JsonRpcNotification
+from ..utils.links import ensure_scheme, resolve_source_url
 from ..utils.security import validate_url_security
 
 logger = get_logger("scanning.manager")
@@ -59,6 +60,7 @@ class ScanJob:
     status: ScanStatus = ScanStatus.QUEUED
     capabilities: ProviderCapabilities | None = None
     classified: dict[str, Any] | None = None
+    options: ScanOptions | None = None
     progress: ScanProgress = field(default_factory=ScanProgress)
     posts: list[Post] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -79,6 +81,7 @@ class ScanJob:
             "status": str(self.status),
             "capabilities": self.capabilities.model_dump() if self.capabilities else None,
             "classified_url": self.classified,
+            "options": self.options.model_dump() if self.options else None,
             "progress": self.progress.model_dump(),
             "posts": [post.model_dump(mode="json") for post in self.posts],
             "warnings": list(self.warnings),
@@ -108,7 +111,8 @@ class ScanManager:
         """Validate a source, create a scan row, and start discovery in the background."""
         if not url or not isinstance(url, str):
             raise ValueError("A source URL is required.")
-        safe_url = validate_url_security(url.strip())
+        safe_url = validate_url_security(ensure_scheme(url))
+        safe_url = resolve_source_url(safe_url)
         scan_options = options or ScanOptions()
 
         provider = resolve_provider(safe_url)
@@ -130,6 +134,7 @@ class ScanManager:
             provider=provider.name,
             capabilities=capabilities,
             classified=classified.model_dump(mode="json"),
+            options=scan_options,
             status=ScanStatus.FAILED if classify_error else ScanStatus.QUEUED,
             error=classify_error.message if classify_error else None,
             error_category=classify_error.code if classify_error else None,
@@ -237,8 +242,27 @@ class ScanManager:
             pending_persist.clear()
             try:
                 self.repository.save_scan_posts(job.scan_id, batch)
-            except Exception as exc:  # persistence must not abort discovery
-                logger.warning(f"Could not persist scan batch for {job.scan_id}: {exc}")
+            except Exception as exc:
+                # One bad row must not discard every post in the batch: retry
+                # each post alone so the healthy majority still persists.
+                logger.warning(
+                    f"Scan batch failed for {job.scan_id} ({len(batch)} posts): "
+                    f"{exc}; retrying individually"
+                )
+                failed = 0
+                for entry in batch:
+                    try:
+                        self.repository.save_scan_posts(job.scan_id, [entry])
+                    except Exception as inner:
+                        failed += 1
+                        if failed <= 3:
+                            logger.warning(
+                                f"Could not persist post {entry[0].id} for {job.scan_id}: {inner}"
+                            )
+                if failed:
+                    logger.warning(
+                        f"Scan {job.scan_id}: dropped {failed}/{len(batch)} posts after retry"
+                    )
             last_persist = now
 
         def emit_progress(force: bool = False) -> None:

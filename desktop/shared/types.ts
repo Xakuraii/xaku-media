@@ -98,6 +98,7 @@ export interface MediaFormatInfoPayload {
   url?: string | null;
   requires_merge?: boolean;
   format_note?: string | null;
+  http_headers?: Record<string, string>;
 }
 
 export interface DiscoveredMediaItem {
@@ -202,6 +203,7 @@ export interface ScanJobSnapshot {
   status: ScanJobStatus;
   capabilities?: ProviderCapabilities | null;
   classified_url?: ClassifiedUrlInfo | null;
+  options?: ScanOptionsPayload | null;
   progress: ScanProgressPayload;
   posts: ScanPost[];
   warnings: string[];
@@ -605,6 +607,11 @@ export interface DesktopApi {
    * Bookmark or un-bookmark a media item.
    */
   toggleSaveMedia: (mediaId: string) => Promise<ToggleSaveResult>;
+
+  /**
+   * Bookmark or un-bookmark every media item in a post/album.
+   */
+  toggleSavePost: (postId: string) => Promise<ToggleSaveResult>;
 
   /**
    * Remove a media item from the database.

@@ -180,6 +180,9 @@ const api: DesktopApi = {
   toggleSaveMedia: async (mediaId: string): Promise<ToggleSaveResult> => {
     return ipcRenderer.invoke("python:toggleSaveMedia", mediaId);
   },
+  toggleSavePost: async (postId: string): Promise<ToggleSaveResult> => {
+    return ipcRenderer.invoke("python:toggleSavePost", postId);
+  },
   deleteMediaItem: async (mediaId: string): Promise<{ id: string; deleted: boolean }> => {
     return ipcRenderer.invoke("python:deleteMediaItem", mediaId);
   },

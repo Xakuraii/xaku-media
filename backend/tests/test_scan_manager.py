@@ -253,3 +253,39 @@ def test_download_task_uses_canonical_media_id(tmp_path: Path) -> None:
     stored = repo.get_download_tasks(limit=5)
     assert len(stored) == 1
     assert stored[0].media_item.id == item.id
+
+
+def test_snapshot_includes_scan_options(fake_manager) -> None:
+    """The UI computes determinate progress from the job's limit snapshot."""
+    manager, _ = fake_manager
+    job = manager.start(
+        "https://example.com/profile",
+        ScanOptions(max_posts=2, max_media=4),
+    )
+
+    snapshot = manager.get(job["job_id"])
+    assert snapshot["options"]["max_posts"] == 2
+    assert snapshot["options"]["max_media"] == 4
+
+    _wait_for(manager, job["job_id"], lambda data: data["status"] == "completed")
+
+
+def test_failed_scan_batch_is_retried_per_post(fake_manager, monkeypatch) -> None:
+    """A rejected batch must not discard every post it contained."""
+    manager, repo = fake_manager
+    original = repo.save_scan_posts
+    batch_sizes: list[int] = []
+
+    def flaky(scan_id: str, posts: list) -> int:
+        batch_sizes.append(len(posts))
+        if len(posts) > 1:
+            raise RuntimeError("simulated batch failure")
+        return original(scan_id, posts)
+
+    monkeypatch.setattr(repo, "save_scan_posts", flaky)
+
+    job = manager.start("https://example.com/profile")
+    _wait_for(manager, job["job_id"], lambda data: data["status"] == "completed")
+
+    assert len(repo.get_scan_posts(job["scan_id"])) == 5
+    assert any(size == 1 for size in batch_sizes)

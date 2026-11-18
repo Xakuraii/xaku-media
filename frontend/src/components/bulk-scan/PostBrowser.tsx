@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  Bookmark,
   CheckSquare,
   Download,
   Film,
@@ -15,13 +16,16 @@ import { isItemDownloaded, type MediaFilter, type PostWithScan } from "./types";
 import { chooseFormat, formatBytes, visibleMedia } from "./utils";
 
 /** Keep the DOM small while a large scan is still streaming in. */
-const RENDER_PAGE_SIZE = 120;
+const POST_PAGE_SIZE = 24;
+const GROUP_MEDIA_PAGE_SIZE = 12;
 
 interface PostBrowserProps {
   filteredPosts: PostWithScan[];
   counts: { posts: number; media: number; images: number; videos: number; albums: number };
   selected: Set<string>;
   downloaded: Set<string>;
+  bookmarked: Set<string>;
+  bookmarkBusy: Set<string>;
   runningCount: number;
   totalProgress: { posts: number; media: number };
   filter: MediaFilter;
@@ -32,6 +36,10 @@ interface PostBrowserProps {
   onFilterChange: (filter: MediaFilter) => void;
   onSearchChange: (value: string) => void;
   onToggleMedia: (itemId: string) => void;
+  onTogglePost: (post: PostWithScan) => void;
+  onToggleBookmark: (item: DiscoveredMediaItem) => void;
+  onTogglePostBookmark: (post: PostWithScan) => void;
+  onDownloadItems: (items: DiscoveredMediaItem[]) => void;
   onSelectAllVisible: () => void;
   onSelectOnlyNew: () => void;
   onSelectByType: (type: "image" | "video") => void;
@@ -45,6 +53,8 @@ export function PostBrowser({
   counts,
   selected,
   downloaded,
+  bookmarked,
+  bookmarkBusy,
   runningCount,
   totalProgress,
   filter,
@@ -55,6 +65,10 @@ export function PostBrowser({
   onFilterChange,
   onSearchChange,
   onToggleMedia,
+  onTogglePost,
+  onToggleBookmark,
+  onTogglePostBookmark,
+  onDownloadItems,
   onSelectAllVisible,
   onSelectOnlyNew,
   onSelectByType,
@@ -68,16 +82,16 @@ export function PostBrowser({
   );
   const newCount = visibleItems.filter((item) => !isItemDownloaded(item, downloaded)).length;
 
-  const [renderLimit, setRenderLimit] = useState(RENDER_PAGE_SIZE);
+  const [renderLimit, setRenderLimit] = useState(POST_PAGE_SIZE);
   useEffect(() => {
-    setRenderLimit(RENDER_PAGE_SIZE);
+    setRenderLimit(POST_PAGE_SIZE);
   }, [filter, search, focusedScanLabel]);
 
-  const displayedItems = useMemo(
-    () => visibleItems.slice(0, renderLimit),
-    [visibleItems, renderLimit]
+  const displayedPosts = useMemo(
+    () => filteredPosts.slice(0, renderLimit),
+    [filteredPosts, renderLimit]
   );
-  const remainingCount = Math.max(0, visibleItems.length - displayedItems.length);
+  const remainingCount = Math.max(0, filteredPosts.length - displayedPosts.length);
 
   return (
     <div className="space-y-4">
@@ -171,29 +185,31 @@ export function PostBrowser({
         </button>
       </div>
 
-      {visibleItems.length === 0 && runningCount === 0 ? (
+      {filteredPosts.length === 0 && runningCount === 0 ? (
         <div className="rounded-xl border border-hairline bg-surface py-16 text-center">
           <Layers className="mx-auto h-8 w-8 stroke-1 text-muted" />
           <p className="mt-2 text-xs text-muted">No media match this view yet.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-          {displayedItems.map((item, index) => {
-            const isSelected = selected.has(item.id);
-            const wasDownloaded = isItemDownloaded(item, downloaded);
-            const chosen = chooseFormat(item, preferredResolution);
-            return (
-              <MediaCard
-                key={item.id}
-                item={item}
-                index={index}
-                isSelected={isSelected}
-                wasDownloaded={wasDownloaded}
-                chosenFormat={chosen}
-                onToggle={() => onToggleMedia(item.id)}
-              />
-            );
-          })}
+        <div className="space-y-3">
+          {displayedPosts.map((post) => (
+            <PostGroup
+              key={post.id}
+              post={post}
+              filter={filter}
+              selected={selected}
+              downloaded={downloaded}
+              bookmarked={bookmarked}
+              bookmarkBusy={bookmarkBusy}
+              preferredResolution={preferredResolution}
+              downloading={downloading}
+              onToggleMedia={onToggleMedia}
+              onTogglePost={onTogglePost}
+              onToggleBookmark={onToggleBookmark}
+              onTogglePostBookmark={onTogglePostBookmark}
+              onDownloadItems={onDownloadItems}
+            />
+          ))}
         </div>
       )}
 
@@ -201,10 +217,10 @@ export function PostBrowser({
         <div className="flex justify-center pt-2">
           <button
             type="button"
-            onClick={() => setRenderLimit((limit) => limit + RENDER_PAGE_SIZE)}
+            onClick={() => setRenderLimit((limit) => limit + POST_PAGE_SIZE)}
             className="rounded-lg border border-hairline bg-surface px-4 py-2 text-xs font-medium text-muted transition-colors hover:border-accent/40 hover:text-ink"
           >
-            Show {Math.min(RENDER_PAGE_SIZE, remainingCount)} more
+            Show {Math.min(POST_PAGE_SIZE, remainingCount)} more posts
             <span className="ml-1 text-faint">({remainingCount} remaining)</span>
           </button>
         </div>
@@ -213,20 +229,170 @@ export function PostBrowser({
   );
 }
 
+function PostGroup({
+  post,
+  filter,
+  selected,
+  downloaded,
+  bookmarked,
+  bookmarkBusy,
+  preferredResolution,
+  downloading,
+  onToggleMedia,
+  onTogglePost,
+  onToggleBookmark,
+  onTogglePostBookmark,
+  onDownloadItems,
+}: {
+  post: PostWithScan;
+  filter: MediaFilter;
+  selected: Set<string>;
+  downloaded: Set<string>;
+  bookmarked: Set<string>;
+  bookmarkBusy: Set<string>;
+  preferredResolution?: string;
+  downloading: boolean;
+  onToggleMedia: (itemId: string) => void;
+  onTogglePost: (post: PostWithScan) => void;
+  onToggleBookmark: (item: DiscoveredMediaItem) => void;
+  onTogglePostBookmark: (post: PostWithScan) => void;
+  onDownloadItems: (items: DiscoveredMediaItem[]) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const items = useMemo(() => visibleMedia(post, filter), [post, filter]);
+  if (items.length === 0) return null;
+
+  const shownItems = expanded ? items : items.slice(0, GROUP_MEDIA_PAGE_SIZE);
+  const hiddenCount = Math.max(0, items.length - shownItems.length);
+  const allSelected = items.every((item) => selected.has(item.id));
+  const savedCount = items.filter((item) => bookmarked.has(item.id)).length;
+  const allSaved = savedCount === items.length;
+  const postBusy = bookmarkBusy.has(post.id);
+  const images = items.filter((item) => item.media_type === "image").length;
+  const videos = items.filter((item) => item.media_type === "video").length;
+  const label = items.length > 1 ? "album" : "post";
+  const heading = post.title || post.provider_post_id || `Untitled ${label}`;
+
+  return (
+    <section className="overflow-hidden rounded-xl border border-hairline bg-surface">
+      <header className="flex flex-wrap items-center gap-2 border-b border-hairline px-3 py-2">
+        <button
+          type="button"
+          onClick={() => onTogglePost(post)}
+          aria-pressed={allSelected}
+          aria-label={allSelected ? `Deselect this ${label}` : `Select this ${label}`}
+          className={`rounded p-1 transition-colors ${
+            allSelected ? "text-accent" : "text-muted hover:text-ink"
+          }`}
+        >
+          {allSelected ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4" />}
+        </button>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-xs font-medium text-ink" title={heading}>
+            {heading}
+          </p>
+          <p className="truncate font-mono text-[10px] text-muted">
+            {post.author || "unknown"}
+            {post.post_url ? ` · ${post.post_url}` : ""}
+          </p>
+        </div>
+        <span className="rounded-full border border-hairline px-2 py-0.5 font-mono text-[10px] text-muted">
+          {label} · {items.length}
+          {images > 0 ? ` · ${images} img` : ""}
+          {videos > 0 ? ` · ${videos} vid` : ""}
+        </span>
+        <button
+          type="button"
+          onClick={() => onTogglePostBookmark(post)}
+          disabled={postBusy}
+          title={allSaved ? "Remove this post from favorites" : "Save this post to favorites"}
+          aria-pressed={allSaved}
+          className={`inline-flex items-center gap-1 rounded border px-2 py-1 font-mono text-[10px] transition-colors ${
+            allSaved
+              ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+              : "border-hairline text-muted hover:bg-raised hover:text-ink"
+          } ${postBusy ? "opacity-60" : ""}`}
+        >
+          <Bookmark className={`h-3 w-3 ${allSaved ? "fill-current" : ""}`} />
+          {allSaved ? `Saved ${savedCount}/${items.length}` : "Save post"}
+        </button>
+        <button
+          type="button"
+          onClick={() => onDownloadItems(items)}
+          disabled={downloading || items.length === 0}
+          className="inline-flex items-center gap-1 rounded border border-accent/30 bg-accent/10 px-2 py-1 font-mono text-[10px] text-accent transition-colors hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <Download className="h-3 w-3" />
+          {items.length > 1 ? `Download ${label} (${items.length})` : "Download"}
+        </button>
+      </header>
+
+      <div className="grid grid-cols-2 gap-3 p-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+        {shownItems.map((item, index) => {
+          const chosen = chooseFormat(item, preferredResolution);
+          return (
+            <MediaCard
+              key={item.id}
+              item={item}
+              index={index}
+              isSelected={selected.has(item.id)}
+              isBookmarked={bookmarked.has(item.id)}
+              bookmarkBusy={postBusy || bookmarkBusy.has(item.id)}
+              wasDownloaded={isItemDownloaded(item, downloaded)}
+              chosenFormat={chosen}
+              onToggle={() => onToggleMedia(item.id)}
+              onToggleBookmark={() => onToggleBookmark(item)}
+            />
+          );
+        })}
+      </div>
+
+      {hiddenCount > 0 && (
+        <div className="border-t border-hairline px-3 py-2 text-center">
+          <button
+            type="button"
+            onClick={() => setExpanded(true)}
+            className="font-mono text-[10px] text-muted hover:text-accent"
+          >
+            Show {hiddenCount} more in this {label}
+          </button>
+        </div>
+      )}
+      {expanded && items.length > GROUP_MEDIA_PAGE_SIZE && (
+        <div className="border-t border-hairline px-3 py-2 text-center">
+          <button
+            type="button"
+            onClick={() => setExpanded(false)}
+            className="font-mono text-[10px] text-muted hover:text-accent"
+          >
+            Collapse to {GROUP_MEDIA_PAGE_SIZE}
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function MediaCard({
   item,
   index,
   isSelected,
+  isBookmarked,
+  bookmarkBusy,
   wasDownloaded,
   chosenFormat,
   onToggle,
+  onToggleBookmark,
 }: {
   item: DiscoveredMediaItem;
   index: number;
   isSelected: boolean;
+  isBookmarked: boolean;
+  bookmarkBusy: boolean;
   wasDownloaded: boolean;
   chosenFormat: ReturnType<typeof chooseFormat>;
   onToggle: () => void;
+  onToggleBookmark: () => void;
 }) {
   const displaySize = chosenFormat?.filesize_bytes ?? item.filesize_bytes;
   const displayRes = chosenFormat?.resolution || null;
@@ -261,14 +427,27 @@ function MediaCard({
           onClick={onToggle}
           className="absolute left-1.5 top-1.5 rounded bg-black/65 p-1 text-white/90 backdrop-blur transition-colors hover:bg-accent hover:text-on-accent"
           aria-label={isSelected ? "Deselect item" : "Select item"}
+          aria-pressed={isSelected}
         >
           {isSelected ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
         </button>
+        <button
+          type="button"
+          onClick={onToggleBookmark}
+          disabled={bookmarkBusy}
+          className={`absolute right-1.5 top-1.5 rounded p-1 backdrop-blur transition-colors ${
+            isBookmarked
+              ? "bg-amber-500/90 text-white"
+              : "bg-black/60 text-white/75 hover:bg-amber-500/80 hover:text-white"
+          } ${bookmarkBusy ? "opacity-60" : ""}`}
+          aria-label={isBookmarked ? "Remove from favorites" : "Save to favorites"}
+          aria-pressed={isBookmarked}
+        >
+          <Bookmark className={`h-3.5 w-3.5 ${isBookmarked ? "fill-current" : ""}`} />
+        </button>
         <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 font-mono text-[9px] uppercase text-white/85">
-          {item.media_type}{displayRes ? ` · ${displayRes}` : ""}
-        </span>
-        <span className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 font-mono text-[9px] text-white/70">
-          #{index + 1}
+          {item.media_type}
+          {displayRes ? ` · ${displayRes}` : ""}
         </span>
         {wasDownloaded && (
           <span className="absolute bottom-1.5 left-1.5 rounded bg-emerald-600/90 px-1.5 py-0.5 font-mono text-[9px] text-white">
@@ -278,7 +457,7 @@ function MediaCard({
       </div>
       <div className="space-y-1 px-2 py-1.5">
         <p className="truncate font-mono text-[10px] text-ink" title={item.title || item.original_url}>
-          {item.title || item.extension?.toUpperCase() || `Item ${index + 1}`}
+          #{index + 1} {item.title || item.extension?.toUpperCase() || `Item ${index + 1}`}
         </p>
         <div className="flex items-center justify-between font-mono text-[10px] text-muted">
           <span title={chosenFormat ? "Size for selected quality setting" : undefined}>
