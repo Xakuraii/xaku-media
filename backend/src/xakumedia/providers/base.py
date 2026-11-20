@@ -12,8 +12,9 @@ from ..models.post import Post, ProviderCapabilities, ScanOptions
 from ..models.url import ClassifiedUrl
 from ..utils.stable_ids import stable_id, url_fingerprint
 
-PageCallback = Callable[[int], None]
+PageCallback = Callable[..., None]
 WarningCallback = Callable[[str], None]
+TotalCallback = Callable[..., None]
 
 
 def host_of(url: str) -> str:
@@ -132,5 +133,6 @@ class BaseProvider(ABC):
         cancel_event: threading.Event,
         on_page: PageCallback | None = None,
         on_warning: WarningCallback | None = None,
+        on_total: TotalCallback | None = None,
     ) -> Iterator[Post]:
         """Yield posts progressively until exhaustion, a limit, or cancellation."""

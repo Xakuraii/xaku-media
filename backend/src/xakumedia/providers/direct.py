@@ -13,6 +13,7 @@ from ..scanners.direct import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, classify_direc
 from .base import (
     BaseProvider,
     PageCallback,
+    TotalCallback,
     WarningCallback,
     make_post,
     media_identity,
@@ -59,6 +60,7 @@ class DirectProvider(BaseProvider):
         cancel_event: threading.Event,
         on_page: PageCallback | None = None,
         on_warning: WarningCallback | None = None,
+        on_total: TotalCallback | None = None,
     ) -> Iterator[Post]:
         classified, item = classify_direct_url(url)
         if item is None or not classified.is_supported:
@@ -67,8 +69,10 @@ class DirectProvider(BaseProvider):
                 details={"url": url},
             )
 
+        if on_total is not None:
+            on_total(1, 1)
         if on_page is not None:
-            on_page(1)
+            on_page(1, 1)
 
         item.provider = self.name
         item.provider_media_id = item.original_url

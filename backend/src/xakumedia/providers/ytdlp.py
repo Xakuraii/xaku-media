@@ -29,7 +29,7 @@ from ..models.media import MediaFormatInfo, MediaType
 from ..models.post import Post, ProviderCapabilities, ScanOptions
 from ..models.url import ClassifiedUrl, UrlCategory
 from ..utils.security import validate_url_security
-from .base import BaseProvider, PageCallback, host_of, make_media_item, make_post
+from .base import BaseProvider, PageCallback, TotalCallback, host_of, make_media_item, make_post
 
 logger = get_logger("providers.ytdlp")
 
@@ -623,6 +623,26 @@ class YtDlpProvider(BaseProvider):
             page_url, source_url, info, video_id, warn
         )
 
+    def fetch_thumbnail(self, url: str) -> str | None:
+        """Return the page's primary thumbnail URL, or None when unavailable."""
+        opts = self._base_opts() | {"noplaylist": True, "extract_flat": False}
+        self._apply_auth(url, opts)
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception as exc:
+            logger.debug(f"Thumbnail lookup failed for {url}: {exc}")
+            return None
+        if not isinstance(info, dict):
+            return None
+        thumbnail = info.get("thumbnail")
+        if thumbnail:
+            return str(thumbnail)
+        for candidate in info.get("thumbnails") or []:
+            if isinstance(candidate, dict) and candidate.get("url"):
+                return str(candidate["url"])
+        return None
+
     def _post_from_info(
         self,
         info: dict[str, Any],
@@ -705,6 +725,7 @@ class YtDlpProvider(BaseProvider):
         cancel_event: threading.Event,
         on_page: PageCallback | None = None,
         on_warning: Callable[[str], None] | None = None,
+        on_total: TotalCallback | None = None,
     ) -> Iterator[Post]:
         safe_url = normalize_tiktok_photo_url(validate_url_security(url))
         collection = is_collection_url(safe_url)
@@ -716,6 +737,8 @@ class YtDlpProvider(BaseProvider):
             return
 
         if not collection:
+            if on_total:
+                on_total(1, None)
             opts = self._base_opts() | {"noplaylist": True, "extract_flat": False}
             self._apply_auth(safe_url, opts)
             try:
@@ -757,9 +780,10 @@ class YtDlpProvider(BaseProvider):
         seen_entries: set[str] = set()
         failed_tabs: list[str] = []
         first_error: Exception | None = None
+        tab_urls = collection_urls(safe_url)
 
         try:
-            for tab_index, enum_url in enumerate(collection_urls(safe_url)):
+            for tab_index, enum_url in enumerate(tab_urls):
                 if cancel_event.is_set():
                     return
                 try:
@@ -774,7 +798,7 @@ class YtDlpProvider(BaseProvider):
                     failed_tabs.append(f"No metadata returned for {enum_url}")
                     continue
                 if on_page:
-                    on_page(tab_index + 1)
+                    on_page(tab_index + 1, len(tab_urls))
                 for entry in info.get("entries") or []:
                     if not entry:
                         continue
@@ -798,6 +822,9 @@ class YtDlpProvider(BaseProvider):
                 if first_error is not None:
                     raise parse_yt_dlp_error(str(first_error), safe_url) from first_error
                 raise MediaUnavailableError(f"No posts found in collection: {url}")
+
+            if on_total:
+                on_total(min(limit, len(entries)), None)
 
             if failed_tabs:
                 warn(

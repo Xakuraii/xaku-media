@@ -103,6 +103,13 @@ class ScanProgress(BaseModel):
     duplicates_skipped: int = 0
     current_page: int | None = None
     limit_applied: bool = False
+    # Providers that can enumerate a collection before hydrating it report a
+    # real target here. The UI uses it for a determinate progress bar; unknown
+    # totals stay honest instead of guessing from a media cap.
+    total_posts: int | None = None
+    total_media: int | None = None
+    total_pages: int | None = None
+    phase: str = "discovering"
 
 
 class ScanJobSnapshot(BaseModel):

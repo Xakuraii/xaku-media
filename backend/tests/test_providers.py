@@ -138,6 +138,119 @@ def test_gallerydl_groups_attachments_into_posts(monkeypatch: pytest.MonkeyPatch
     assert posts[1].media_items[0].media_type == MediaType.VIDEO
 
 
+def test_gallerydl_uses_display_url_for_video_thumbnails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    items = [
+        (Message.Directory, "", {"post_id": "p1", "username": "alice"}),
+        (
+            Message.Url,
+            "https://cdn.example.com/reel.mp4",
+            {
+                "post_id": "p1",
+                "id": "v1",
+                "type": "post",
+                "extension": "mp4",
+                "display_url": "https://cdn.example.com/reel-poster.jpg",
+            },
+        ),
+    ]
+    monkeypatch.setattr(
+        GalleryDlProvider, "_prepare_extractor", lambda self, url: _FakeExtractor(items)
+    )
+    monkeypatch.setattr(gallery_module, "validate_url_security", lambda url: url)
+
+    posts = list(
+        GalleryDlProvider().iter_posts(
+            "https://fake.example/alice",
+            ScanOptions(),
+            threading.Event(),
+        )
+    )
+    assert posts[0].media_items[0].thumbnail_url == (
+        "https://cdn.example.com/reel-poster.jpg"
+    )
+
+
+class _TwitterPreviewExtractor:
+    category = "twitter"
+    subcategory = "user"
+
+    def items(self):
+        yield Message.Directory, "", {"post_id": "p1", "username": "alice"}
+        yield (
+            Message.Url,
+            "https://cdn.example.com/clip.mp4",
+            {"post_id": "p1", "id": "v1", "type": "video", "extension": "mp4"},
+        )
+        yield (
+            Message.Url,
+            "https://cdn.example.com/clip-poster.jpg",
+            {"post_id": "p1", "id": "v1", "type": "preview", "extension": "jpg"},
+        )
+
+
+def test_gallerydl_twitter_preview_becomes_video_thumbnail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        GalleryDlProvider, "_prepare_extractor", lambda self, url: _TwitterPreviewExtractor()
+    )
+    monkeypatch.setattr(gallery_module, "validate_url_security", lambda url: url)
+
+    posts = list(
+        GalleryDlProvider().iter_posts(
+            "https://fake.example/alice",
+            ScanOptions(),
+            threading.Event(),
+        )
+    )
+    assert len(posts) == 1
+    assert len(posts[0].media_items) == 1
+    assert posts[0].media_items[0].thumbnail_url == (
+        "https://cdn.example.com/clip-poster.jpg"
+    )
+
+
+class _FacebookExtractor:
+    category = "facebook"
+    subcategory = "reel"
+
+    def items(self):
+        yield Message.Directory, "", {"post_id": "r1", "author": "alice"}
+        yield (
+            Message.Url,
+            "https://cdn.example.com/reel.mp4",
+            {"post_id": "r1", "id": "r1", "extension": "mp4"},
+        )
+
+
+def test_gallerydl_enriches_facebook_video_thumbnail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        GalleryDlProvider, "_prepare_extractor", lambda self, url: _FacebookExtractor()
+    )
+    monkeypatch.setattr(gallery_module, "validate_url_security", lambda url: url)
+    monkeypatch.setattr(
+        ytdlp_module.YtDlpProvider,
+        "fetch_thumbnail",
+        lambda self, url: "https://cdn.example.com/reel-poster.jpg",
+    )
+
+    posts = list(
+        GalleryDlProvider().iter_posts(
+            "https://www.facebook.com/reel/123",
+            ScanOptions(),
+            threading.Event(),
+        )
+    )
+    assert len(posts) == 1
+    assert posts[0].media_items[0].thumbnail_url == (
+        "https://cdn.example.com/reel-poster.jpg"
+    )
+
+
 def test_gallerydl_respects_media_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     items = [
         (

@@ -229,6 +229,7 @@ class ScanManager:
         max_media = options.max_media
         pending_persist: list[tuple[Post, int]] = []
         last_persist = time.monotonic()
+        final_status = ScanStatus.FAILED
 
         def flush_persist(force: bool = False) -> None:
             """Write queued posts in batches instead of one transaction each."""
@@ -281,8 +282,25 @@ class ScanManager:
                 },
             )
 
-        def on_page(page: int) -> None:
+        def on_page(page: int, total_pages: int | None = None) -> None:
             job.progress.pages_fetched = max(job.progress.pages_fetched, page)
+            if total_pages is not None and total_pages > 0:
+                job.progress.total_pages = total_pages
+            emit_progress()
+
+        def on_total(
+            total_posts: int | None = None,
+            total_media: int | None = None,
+        ) -> None:
+            if total_posts is not None and total_posts > 0:
+                job.progress.total_posts = max(
+                    job.progress.total_posts or 0, total_posts
+                )
+            if total_media is not None and total_media > 0:
+                job.progress.total_media = max(
+                    job.progress.total_media or 0, total_media
+                )
+            job.progress.phase = "hydrating" if job.progress.total_posts else "discovering"
             emit_progress()
 
         def on_warning(message: str) -> None:
@@ -301,6 +319,7 @@ class ScanManager:
                 job.cancel_event,
                 on_page=on_page,
                 on_warning=on_warning,
+                on_total=on_total,
             ):
                 if job.cancel_event.is_set():
                     job.stop_reason = "cancelled"
@@ -369,7 +388,7 @@ class ScanManager:
             flush_persist(force=True)
         except Exception as exc:
             logger.warning(f"Scan job {job.job_id} failed: {exc}")
-            job.status = ScanStatus.FAILED
+            final_status = ScanStatus.FAILED
             job.error = getattr(exc, "message", str(exc))
             job.error_category = (
                 exc.code if isinstance(exc, XakuMediaError) else type(exc).__name__
@@ -377,11 +396,12 @@ class ScanManager:
             job.error_details = dict(exc.details) if isinstance(exc, XakuMediaError) else {}
             job.stop_reason = "error"
         else:
+            final_status = (
+                ScanStatus.CANCELLED if job.cancel_event.is_set() else ScanStatus.COMPLETED
+            )
             if job.cancel_event.is_set():
-                job.status = ScanStatus.CANCELLED
                 job.stop_reason = job.stop_reason or "cancelled"
             else:
-                job.status = ScanStatus.COMPLETED
                 job.stop_reason = job.stop_reason or "completed"
         finally:
             flush_persist(force=True)
@@ -389,7 +409,7 @@ class ScanManager:
             try:
                 self.repository.finalize_scan(
                     job.scan_id,
-                    str(job.status),
+                    str(final_status),
                     posts_count=job.progress.posts_discovered,
                     images_count=job.progress.images_discovered,
                     videos_count=job.progress.videos_discovered,
@@ -400,6 +420,9 @@ class ScanManager:
             except Exception as exc:
                 logger.warning(f"Could not finalize scan {job.scan_id}: {exc}")
 
+            # Publish the terminal status only after the database row is
+            # finalized, so a reader that sees "completed" can load every post.
+            job.status = final_status
             self._broadcast_job_finished(job)
 
     def _broadcast_job_finished(self, job: ScanJob) -> None:

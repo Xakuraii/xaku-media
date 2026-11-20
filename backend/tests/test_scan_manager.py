@@ -32,7 +32,9 @@ class FakeProvider:
             is_supported=True,
         )
 
-    def iter_posts(self, url, options, cancel_event, on_page=None, on_warning=None):
+    def iter_posts(self, url, options, cancel_event, on_page=None, on_warning=None, on_total=None):
+        if on_total:
+            on_total(5, None)
         if on_page:
             on_page(1)
         for index in range(5):
@@ -65,7 +67,7 @@ class FakeProvider:
 class BlockingProvider(FakeProvider):
     """Yields one post, then waits for cancellation."""
 
-    def iter_posts(self, url, options, cancel_event, on_page=None, on_warning=None):
+    def iter_posts(self, url, options, cancel_event, on_page=None, on_warning=None, on_total=None):
         if on_page:
             on_page(1)
         item = make_media_item(
@@ -127,6 +129,7 @@ def test_scan_completes_and_persists_posts(fake_manager) -> None:
     assert snapshot["progress"]["posts_discovered"] == 3
     assert snapshot["progress"]["media_discovered"] == 3
     assert snapshot["progress"]["images_discovered"] == 3
+    assert snapshot["progress"]["total_posts"] == 5
     assert len(snapshot["posts"]) == 3
 
     posts = repo.get_scan_posts(job["scan_id"])

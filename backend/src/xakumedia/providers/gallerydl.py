@@ -48,6 +48,7 @@ from ..utils.stable_ids import url_fingerprint
 from .base import (
     BaseProvider,
     PageCallback,
+    TotalCallback,
     WarningCallback,
     host_of,
     make_media_item,
@@ -350,6 +351,11 @@ class GalleryDlProvider(BaseProvider):
                     gdl_config.set(("extractor", category), "cookies", str(cookie_path))
             if category in MERGED_VIDEO_CATEGORIES:
                 gdl_config.set(("extractor", category), "videos", "merged")
+            if category == "twitter":
+                # Twitter/X media metadata contains a poster image for videos.
+                # Request it as a preview entry so the scan can attach it to the
+                # video without an extra network request.
+                gdl_config.set(("extractor", category), "previews", True)
             if category in AUTH_HEAVY_CATEGORIES:
                 # These sites reject gallery-dl's default non-browser UA on the
                 # media endpoints even with valid cookies. The ``+`` prefix asks
@@ -430,10 +436,14 @@ class GalleryDlProvider(BaseProvider):
         cancel_event: threading.Event,
         on_page: PageCallback | None = None,
         on_warning: WarningCallback | None = None,
+        on_total: TotalCallback | None = None,
     ) -> Iterator[Post]:
         safe_url = validate_url_security(url)
         warn = on_warning or (lambda _msg: None)
         state = _DiscoveryState(options=options)
+        _, subcategory = self._extractor_info(safe_url)
+        if on_total is not None and subcategory not in PROFILE_SUBCATEGORIES:
+            on_total(1, None)
         facebook_profile = (
             _facebook_profile_base(safe_url) if options.include_videos else None
         )
@@ -504,6 +514,37 @@ class GalleryDlProvider(BaseProvider):
                 continue
             pages.append(getattr(response, "text", ""))
         return pages
+
+    @staticmethod
+    def _attach_facebook_thumbnails(post: Post) -> None:
+        """Best-effort poster image for Facebook videos via yt-dlp metadata.
+
+        gallery-dl's Facebook video extractor returns only the MP4/DASH streams,
+        so a profile video would otherwise render as an anonymous film icon.
+        yt-dlp exposes the page's thumbnail; one extra request per video is
+        acceptable for the small reel sets Facebook profiles expose.
+        """
+        videos = [
+            item
+            for item in post.media_items
+            if item.media_type == MediaType.VIDEO and not item.thumbnail_url
+        ]
+        if not videos:
+            return
+        page_url = post.post_url or post.source_url
+        if not page_url:
+            return
+        try:
+            from .ytdlp import YtDlpProvider
+
+            thumbnail = YtDlpProvider().fetch_thumbnail(page_url)
+        except Exception as exc:
+            logger.debug(f"Facebook thumbnail lookup failed for {page_url}: {exc}")
+            return
+        if not thumbnail:
+            return
+        for item in videos:
+            item.thumbnail_url = thumbnail
 
     def _facebook_profile_videos(
         self,
@@ -631,6 +672,8 @@ class GalleryDlProvider(BaseProvider):
                     "group_key": group_key or safe_url,
                 },
             )
+            if category == FACEBOOK_CATEGORY:
+                self._attach_facebook_thumbnails(post)
             state.posts_emitted += 1
             group_items = []
             group_ids = set()
@@ -674,6 +717,21 @@ class GalleryDlProvider(BaseProvider):
                     media_url = fallback_url
 
                 ext = _extension(meta, media_url)
+                if meta.get("type") == "preview":
+                    # Twitter/X emits the video's poster image right after the
+                    # video file when ``previews`` is enabled. Attach it to the
+                    # preceding video instead of creating a separate image post.
+                    target = next(
+                        (
+                            item
+                            for item in reversed(group_items)
+                            if item.media_type == MediaType.VIDEO
+                        ),
+                        None,
+                    )
+                    if target is not None and not target.thumbnail_url:
+                        target.thumbnail_url = media_url
+                    continue
                 if ext in AUDIO_EXTENSIONS:
                     # Facebook (and other DASH sources) emit video and audio as
                     # separate items. Keep the audio as a format of the current
@@ -763,6 +821,7 @@ class GalleryDlProvider(BaseProvider):
                         else _author_label(group_meta)
                     ),
                     thumbnail_url=meta.get("thumbnail")
+                    or meta.get("display_url")
                     or (media_url if media_type == MediaType.IMAGE else None),
                     duration_seconds=float(meta["duration"])
                     if meta.get("duration")
