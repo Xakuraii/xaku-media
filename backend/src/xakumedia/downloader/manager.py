@@ -25,6 +25,7 @@ from ..models.queue import DownloadTask, ProgressUpdate, TaskStatus
 from ..server.loop import send_notification
 from ..server.protocol import JsonRpcNotification
 from ..utils.naming import format_sequential_filename, get_next_sequence_number, sanitize_username
+from .layout import destination_directory
 from .stream import download_stream
 
 logger = get_logger("downloader.manager")
@@ -157,11 +158,7 @@ class DownloadManager:
                 if parsed_ext and len(parsed_ext) <= 5:
                     ext = parsed_ext
 
-            target_dir = (
-                default_config.image_download_dir
-                if is_image
-                else default_config.video_download_dir
-            )
+            target_dir = destination_directory(media_item)
             target_dir.mkdir(parents=True, exist_ok=True)
             seq = get_next_sequence_number(target_dir, username, media_item.media_type)
             filename = format_sequential_filename(username, media_item.media_type, seq, ext)
@@ -196,6 +193,7 @@ class DownloadManager:
         created_tasks: list[DownloadTask] = []
         seq_tracker: dict[tuple[Path, str, MediaType], int] = {}
         pending_items: list[tuple[DownloadTask, str]] = []
+        created_dirs: set[Path] = set()
 
         for entry in items:
             media_item: MediaItem
@@ -255,16 +253,12 @@ class DownloadManager:
                     if parsed_ext and len(parsed_ext) <= 5:
                         ext = parsed_ext
 
-                item_dir = (
-                    Path(target_dir)
-                    if target_dir
-                    else (
-                        default_config.image_download_dir
-                        if is_image
-                        else default_config.video_download_dir
-                    )
+                item_dir = destination_directory(
+                    media_item, Path(target_dir) if target_dir else None
                 )
-                item_dir.mkdir(parents=True, exist_ok=True)
+                if item_dir not in created_dirs:
+                    item_dir.mkdir(parents=True, exist_ok=True)
+                    created_dirs.add(item_dir)
 
                 key = (item_dir, username, media_item.media_type)
                 if key not in seq_tracker:
@@ -277,7 +271,9 @@ class DownloadManager:
                 filename = format_sequential_filename(username, media_item.media_type, seq, ext)
                 dest = item_dir / filename
 
-            dest.parent.mkdir(parents=True, exist_ok=True)
+            if dest.parent not in created_dirs:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                created_dirs.add(dest.parent)
             temp_path = dest.with_suffix(dest.suffix + ".part")
 
             task = DownloadTask(
