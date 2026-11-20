@@ -57,6 +57,7 @@ export function BulkScanView({
   const [bookmarked, setBookmarked] = useState<Set<string>>(new Set());
   const [bookmarkBusy, setBookmarkBusy] = useState<Set<string>>(new Set());
   const [bookmarking, setBookmarking] = useState<boolean>(false);
+  const [savedLinks, setSavedLinks] = useState<Set<string>>(new Set());
   const [preferredResolution, setPreferredResolution] = useState<string>("best");
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -117,6 +118,39 @@ export function BulkScanView({
   useEffect(() => {
     void refreshBookmarks();
   }, [refreshBookmarks]);
+
+  const refreshSavedLinks = useCallback(async () => {
+    try {
+      const result = await window.api?.getSavedSources?.();
+      if (result) setSavedLinks(new Set((result.sources || []).map((source) => source.url)));
+    } catch {
+      // Non-fatal; Save buttons simply start unset.
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshSavedLinks();
+  }, [refreshSavedLinks]);
+
+  const saveScanLink = async (url: string, title: string) => {
+    if (!window.api?.saveSource) {
+      setError({
+        title: "Save link unavailable",
+        summary: "The desktop bridge is not available.",
+        steps: ["Run the desktop app instead of the browser preview."],
+        actions: [],
+      });
+      return;
+    }
+    setError(null);
+    try {
+      await window.api.saveSource({ url, title: title || url });
+      setSavedLinks((prev) => new Set(prev).add(url));
+      setNotice(`Saved link: ${url}`);
+    } catch (err) {
+      setError(explainStartFailure(err));
+    }
+  };
 
   const detectedUrls = useMemo(() => parseUrls(input), [input]);
   const filteredPosts = useMemo(
@@ -458,6 +492,7 @@ export function BulkScanView({
           downloaded={downloaded}
           bookmarked={bookmarked}
           bookmarkBusy={bookmarkBusy}
+          savedLinks={savedLinks}
           runningCount={runningJobs.length}
           totalProgress={totalProgress}
           filter={filter}
@@ -471,6 +506,7 @@ export function BulkScanView({
           onTogglePost={(post) => togglePost(post, filter)}
           onToggleBookmark={(item) => void toggleItemBookmark(item)}
           onTogglePostBookmark={(post) => void togglePostBookmark(post)}
+          onSaveLink={(url, title) => void saveScanLink(url, title)}
           onDownloadItems={(items) => void queueDownloadItems(items)}
           onSelectAllVisible={selectAllVisible}
           onSelectOnlyNew={selectOnlyNew}

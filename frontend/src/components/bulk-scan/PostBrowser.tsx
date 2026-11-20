@@ -6,6 +6,7 @@ import {
   Film,
   Image as ImageIcon,
   Layers,
+  Link2,
   Loader2,
   Search,
   Square,
@@ -18,6 +19,7 @@ import { chooseFormat, formatBytes, visibleMedia } from "./utils";
 /** Keep the DOM small while a large scan is still streaming in. */
 const POST_PAGE_SIZE = 24;
 const GROUP_MEDIA_PAGE_SIZE = 12;
+const VIDEO_PAGE_SIZE = 120;
 
 interface PostBrowserProps {
   filteredPosts: PostWithScan[];
@@ -26,6 +28,7 @@ interface PostBrowserProps {
   downloaded: Set<string>;
   bookmarked: Set<string>;
   bookmarkBusy: Set<string>;
+  savedLinks: Set<string>;
   runningCount: number;
   totalProgress: { posts: number; media: number };
   filter: MediaFilter;
@@ -39,6 +42,7 @@ interface PostBrowserProps {
   onTogglePost: (post: PostWithScan) => void;
   onToggleBookmark: (item: DiscoveredMediaItem) => void;
   onTogglePostBookmark: (post: PostWithScan) => void;
+  onSaveLink: (url: string, title: string) => void;
   onDownloadItems: (items: DiscoveredMediaItem[]) => void;
   onSelectAllVisible: () => void;
   onSelectOnlyNew: () => void;
@@ -48,6 +52,11 @@ interface PostBrowserProps {
   onDownload: () => void;
 }
 
+interface VideoEntry {
+  item: DiscoveredMediaItem;
+  post: PostWithScan;
+}
+
 export function PostBrowser({
   filteredPosts,
   counts,
@@ -55,6 +64,7 @@ export function PostBrowser({
   downloaded,
   bookmarked,
   bookmarkBusy,
+  savedLinks,
   runningCount,
   totalProgress,
   filter,
@@ -68,6 +78,7 @@ export function PostBrowser({
   onTogglePost,
   onToggleBookmark,
   onTogglePostBookmark,
+  onSaveLink,
   onDownloadItems,
   onSelectAllVisible,
   onSelectOnlyNew,
@@ -83,8 +94,10 @@ export function PostBrowser({
   const newCount = visibleItems.filter((item) => !isItemDownloaded(item, downloaded)).length;
 
   const [renderLimit, setRenderLimit] = useState(POST_PAGE_SIZE);
+  const [videoLimit, setVideoLimit] = useState(VIDEO_PAGE_SIZE);
   useEffect(() => {
     setRenderLimit(POST_PAGE_SIZE);
+    setVideoLimit(VIDEO_PAGE_SIZE);
   }, [filter, search, focusedScanLabel]);
 
   const displayedPosts = useMemo(
@@ -92,6 +105,36 @@ export function PostBrowser({
     [filteredPosts, renderLimit]
   );
   const remainingCount = Math.max(0, filteredPosts.length - displayedPosts.length);
+
+  // Every video in the current result set lives in one shared shelf. A profile
+  // with 50 video posts should read as a video grid, not 50 separate one-card
+  // rows, and a run of image posts must not hide the videos behind page two.
+  const allVideoEntries = useMemo<VideoEntry[]>(() => {
+    if (filter === "image") return [];
+    return filteredPosts.flatMap((post) =>
+      post.media_items
+        .filter((item) => item.media_type === "video")
+        .map((item) => ({ item, post }))
+    );
+  }, [filteredPosts, filter]);
+  const videoEntries = useMemo(
+    () => allVideoEntries.slice(0, videoLimit),
+    [allVideoEntries, videoLimit]
+  );
+  const remainingVideos = Math.max(0, allVideoEntries.length - videoEntries.length);
+
+  // Image posts keep their own album grouping so a carousel stays together.
+  const imageGroups = useMemo(() => {
+    if (filter === "video") return [];
+    return displayedPosts
+      .map((post) => ({
+        post,
+        items: post.media_items.filter((item) => item.media_type === "image"),
+      }))
+      .filter((group) => group.items.length > 0);
+  }, [displayedPosts, filter]);
+
+  const hasResults = allVideoEntries.length > 0 || imageGroups.length > 0;
 
   return (
     <div className="space-y-4">
@@ -185,28 +228,50 @@ export function PostBrowser({
         </button>
       </div>
 
-      {filteredPosts.length === 0 && runningCount === 0 ? (
+      {!hasResults && runningCount === 0 ? (
         <div className="rounded-xl border border-hairline bg-surface py-16 text-center">
           <Layers className="mx-auto h-8 w-8 stroke-1 text-muted" />
           <p className="mt-2 text-xs text-muted">No media match this view yet.</p>
         </div>
       ) : (
         <div className="space-y-3">
-          {displayedPosts.map((post) => (
-            <PostGroup
-              key={post.id}
-              post={post}
-              filter={filter}
+          {videoEntries.length > 0 && (
+            <VideoShelf
+              entries={videoEntries}
+              totalCount={allVideoEntries.length}
+              remainingCount={remainingVideos}
+              onShowMore={() => setVideoLimit((limit) => limit + VIDEO_PAGE_SIZE)}
               selected={selected}
               downloaded={downloaded}
               bookmarked={bookmarked}
               bookmarkBusy={bookmarkBusy}
+              savedLinks={savedLinks}
+              preferredResolution={preferredResolution}
+              downloading={downloading}
+              onToggleMedia={onToggleMedia}
+              onToggleBookmark={onToggleBookmark}
+              onSaveLink={onSaveLink}
+              onSelectVideos={() => onSelectByType("video")}
+            />
+          )}
+
+          {imageGroups.map(({ post }) => (
+            <PostGroup
+              key={post.id}
+              post={post}
+              filter="image"
+              selected={selected}
+              downloaded={downloaded}
+              bookmarked={bookmarked}
+              bookmarkBusy={bookmarkBusy}
+              savedLinks={savedLinks}
               preferredResolution={preferredResolution}
               downloading={downloading}
               onToggleMedia={onToggleMedia}
               onTogglePost={onTogglePost}
               onToggleBookmark={onToggleBookmark}
               onTogglePostBookmark={onTogglePostBookmark}
+              onSaveLink={onSaveLink}
               onDownloadItems={onDownloadItems}
             />
           ))}
@@ -229,6 +294,105 @@ export function PostBrowser({
   );
 }
 
+function VideoShelf({
+  entries,
+  totalCount,
+  remainingCount,
+  onShowMore,
+  selected,
+  downloaded,
+  bookmarked,
+  bookmarkBusy,
+  savedLinks,
+  preferredResolution,
+  downloading,
+  onToggleMedia,
+  onToggleBookmark,
+  onSaveLink,
+  onSelectVideos,
+}: {
+  entries: VideoEntry[];
+  totalCount: number;
+  remainingCount: number;
+  onShowMore: () => void;
+  selected: Set<string>;
+  downloaded: Set<string>;
+  bookmarked: Set<string>;
+  bookmarkBusy: Set<string>;
+  savedLinks: Set<string>;
+  preferredResolution?: string;
+  downloading: boolean;
+  onToggleMedia: (itemId: string) => void;
+  onToggleBookmark: (item: DiscoveredMediaItem) => void;
+  onSaveLink: (url: string, title: string) => void;
+  onSelectVideos: () => void;
+}) {
+  return (
+    <section className="overflow-hidden rounded-xl border border-hairline bg-surface">
+      <header className="flex flex-wrap items-center gap-2 border-b border-hairline px-3 py-2">
+        <Film className="h-4 w-4 text-accent" />
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-semibold text-ink">Videos</p>
+          <p className="font-mono text-[10px] text-muted">
+            {totalCount} video{totalCount === 1 ? "" : "s"} in one grid
+            {remainingCount > 0 ? ` · showing ${entries.length}` : ""}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onSelectVideos}
+          className="rounded border border-hairline px-2 py-1 font-mono text-[10px] text-muted transition-colors hover:bg-raised hover:text-ink"
+        >
+          Select all videos
+        </button>
+      </header>
+      <div className="grid grid-cols-1 gap-3 p-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        {entries.map(({ item, post }) => {
+          const chosen = chooseFormat(item, preferredResolution);
+          const linkUrl = item.post_url || item.original_url;
+          return (
+            <MediaCard
+              key={item.id}
+              item={item}
+              index={0}
+              variant="video"
+              caption={post.author || post.title}
+              isSelected={selected.has(item.id)}
+              isBookmarked={bookmarked.has(item.id)}
+              bookmarkBusy={bookmarkBusy.has(post.id) || bookmarkBusy.has(item.id)}
+              wasDownloaded={isItemDownloaded(item, downloaded)}
+              chosenFormat={chosen}
+              isLinkSaved={Boolean(linkUrl && savedLinks.has(linkUrl))}
+              onToggle={() => onToggleMedia(item.id)}
+              onToggleBookmark={() => onToggleBookmark(item)}
+              onSaveLink={() =>
+                linkUrl && onSaveLink(linkUrl, item.title || `${post.author} video`)
+              }
+            />
+          );
+        })}
+      </div>
+      {remainingCount > 0 && (
+        <div className="border-t border-hairline px-3 py-2 text-center">
+          <button
+            type="button"
+            onClick={onShowMore}
+            className="font-mono text-[10px] text-muted transition-colors hover:text-accent"
+          >
+            Show {Math.min(VIDEO_PAGE_SIZE, remainingCount)} more videos
+            <span className="ml-1 text-faint">({remainingCount} remaining)</span>
+          </button>
+        </div>
+      )}
+      {downloading && (
+        <div className="border-t border-hairline px-3 py-1.5 text-center font-mono text-[10px] text-muted">
+          Queueing downloads…
+        </div>
+      )}
+    </section>
+  );
+}
+
 function PostGroup({
   post,
   filter,
@@ -236,12 +400,14 @@ function PostGroup({
   downloaded,
   bookmarked,
   bookmarkBusy,
+  savedLinks,
   preferredResolution,
   downloading,
   onToggleMedia,
   onTogglePost,
   onToggleBookmark,
   onTogglePostBookmark,
+  onSaveLink,
   onDownloadItems,
 }: {
   post: PostWithScan;
@@ -250,12 +416,14 @@ function PostGroup({
   downloaded: Set<string>;
   bookmarked: Set<string>;
   bookmarkBusy: Set<string>;
+  savedLinks: Set<string>;
   preferredResolution?: string;
   downloading: boolean;
   onToggleMedia: (itemId: string) => void;
   onTogglePost: (post: PostWithScan) => void;
   onToggleBookmark: (item: DiscoveredMediaItem) => void;
   onTogglePostBookmark: (post: PostWithScan) => void;
+  onSaveLink: (url: string, title: string) => void;
   onDownloadItems: (items: DiscoveredMediaItem[]) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -272,6 +440,8 @@ function PostGroup({
   const videos = items.filter((item) => item.media_type === "video").length;
   const label = items.length > 1 ? "album" : "post";
   const heading = post.title || post.provider_post_id || `Untitled ${label}`;
+  const linkUrl = post.post_url || post.source_url;
+  const linkSaved = Boolean(linkUrl && savedLinks.has(linkUrl));
 
   return (
     <section className="overflow-hidden rounded-xl border border-hairline bg-surface">
@@ -301,6 +471,21 @@ function PostGroup({
           {images > 0 ? ` · ${images} img` : ""}
           {videos > 0 ? ` · ${videos} vid` : ""}
         </span>
+        {linkUrl && (
+          <button
+            type="button"
+            onClick={() => onSaveLink(linkUrl, heading)}
+            title={linkSaved ? "This source link is already saved" : "Save this source link"}
+            className={`inline-flex items-center gap-1 rounded border px-2 py-1 font-mono text-[10px] transition-colors ${
+              linkSaved
+                ? "border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300"
+                : "border-hairline text-muted hover:bg-raised hover:text-ink"
+            }`}
+          >
+            <Link2 className="h-3 w-3" />
+            {linkSaved ? "Link saved" : "Save link"}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => onTogglePostBookmark(post)}
@@ -373,36 +558,55 @@ function PostGroup({
   );
 }
 
+function formatDuration(seconds?: number | null): string | null {
+  if (!seconds || seconds <= 0) return null;
+  const total = Math.round(seconds);
+  const minutes = Math.floor(total / 60);
+  const rest = total % 60;
+  return minutes > 0 ? `${minutes}:${String(rest).padStart(2, "0")}` : `0:${String(rest).padStart(2, "0")}`;
+}
+
 function MediaCard({
   item,
   index,
+  variant = "image",
+  caption,
   isSelected,
   isBookmarked,
   bookmarkBusy,
   wasDownloaded,
   chosenFormat,
+  isLinkSaved = false,
   onToggle,
   onToggleBookmark,
+  onSaveLink,
 }: {
   item: DiscoveredMediaItem;
   index: number;
+  variant?: "video" | "image";
+  caption?: string | null;
   isSelected: boolean;
   isBookmarked: boolean;
   bookmarkBusy: boolean;
   wasDownloaded: boolean;
   chosenFormat: ReturnType<typeof chooseFormat>;
+  isLinkSaved?: boolean;
   onToggle: () => void;
   onToggleBookmark: () => void;
+  onSaveLink?: () => void;
 }) {
   const displaySize = chosenFormat?.filesize_bytes ?? item.filesize_bytes;
   const displayRes = chosenFormat?.resolution || null;
+  const duration = formatDuration(item.duration_seconds);
   return (
     <div
       className={`group overflow-hidden rounded-lg border bg-surface transition-colors ${
         isSelected ? "border-accent ring-1 ring-accent/40" : "border-hairline"
       }`}
     >
-      <div className="relative aspect-square bg-raised">
+      <div
+        className={`relative bg-raised ${variant === "video" ? "aspect-video" : "aspect-square"}`}
+      >
         {item.thumbnail_url ? (
           <img
             src={item.thumbnail_url}
@@ -445,9 +649,25 @@ function MediaCard({
         >
           <Bookmark className={`h-3.5 w-3.5 ${isBookmarked ? "fill-current" : ""}`} />
         </button>
+        {onSaveLink && (
+          <button
+            type="button"
+            onClick={onSaveLink}
+            className={`absolute right-1.5 top-9 rounded p-1 backdrop-blur transition-colors ${
+              isLinkSaved
+                ? "bg-sky-600/90 text-white"
+                : "bg-black/60 text-white/75 hover:bg-sky-600/85 hover:text-white"
+            }`}
+            aria-label={isLinkSaved ? "Source link saved" : "Save source link"}
+            title={isLinkSaved ? "Source link saved" : "Save source link"}
+          >
+            <Link2 className="h-3.5 w-3.5" />
+          </button>
+        )}
         <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 font-mono text-[9px] uppercase text-white/85">
           {item.media_type}
           {displayRes ? ` · ${displayRes}` : ""}
+          {duration ? ` · ${duration}` : ""}
         </span>
         {wasDownloaded && (
           <span className="absolute bottom-1.5 left-1.5 rounded bg-emerald-600/90 px-1.5 py-0.5 font-mono text-[9px] text-white">
@@ -457,14 +677,13 @@ function MediaCard({
       </div>
       <div className="space-y-1 px-2 py-1.5">
         <p className="truncate font-mono text-[10px] text-ink" title={item.title || item.original_url}>
-          #{index + 1} {item.title || item.extension?.toUpperCase() || `Item ${index + 1}`}
+          {variant === "video" ? "" : `#${index + 1} `}
+          {item.title || item.extension?.toUpperCase() || `Item ${index + 1}`}
         </p>
         <div className="flex items-center justify-between font-mono text-[10px] text-muted">
-          <span title={chosenFormat ? "Size for selected quality setting" : undefined}>
+          <span className="truncate pr-1">{caption || ""}</span>
+          <span className="shrink-0" title={chosenFormat ? "Size for selected quality setting" : undefined}>
             {formatBytes(displaySize)}
-          </span>
-          <span className="truncate pl-1">
-            {chosenFormat?.container || item.extension || item.mime_type?.split("/")[1] || ""}
           </span>
         </div>
       </div>

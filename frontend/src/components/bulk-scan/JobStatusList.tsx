@@ -23,22 +23,32 @@ function progressFor(entry: JobEntry, now: number) {
   const elapsed = started ? Math.max(0, ((finished ?? now) - started) / 1000) : 0;
   const maxMedia = snapshot.options?.max_media ?? null;
   const maxPosts = snapshot.options?.max_posts ?? null;
+  const totalMedia = snapshot.progress.total_media ?? null;
+  const totalPosts = snapshot.progress.total_posts ?? null;
+  const totalPages = snapshot.progress.total_pages ?? null;
 
+  // Only a provider-reported collection size is a real denominator. A scan
+  // limit is a stopping rule, not a target, so using it would show a bar stuck
+  // at the cap percentage until the scan ends.
   let percent: number | null = null;
   if (!running) percent = 100;
-  else if (maxMedia && maxMedia > 0) {
-    percent = Math.min(99, Math.round((snapshot.progress.media_discovered / maxMedia) * 100));
-  } else if (maxPosts && maxPosts > 0) {
-    percent = Math.min(99, Math.round((snapshot.progress.posts_discovered / maxPosts) * 100));
+  else if (totalMedia && totalMedia > 0) {
+    percent = Math.min(99, Math.round((snapshot.progress.media_discovered / totalMedia) * 100));
+  } else if (totalPosts && totalPosts > 0) {
+    percent = Math.min(99, Math.round((snapshot.progress.posts_discovered / totalPosts) * 100));
   }
 
   const target =
-    maxMedia && maxMedia > 0
-      ? `limit ${maxMedia} media`
-      : maxPosts && maxPosts > 0
-        ? `limit ${maxPosts} posts`
-        : null;
-  return { running, elapsed, percent, target };
+    totalMedia && totalMedia > 0
+      ? `${totalMedia} media`
+      : totalPosts && totalPosts > 0
+        ? `${totalPosts} posts`
+        : maxMedia && maxMedia > 0
+          ? `limit ${maxMedia} media`
+          : maxPosts && maxPosts > 0
+            ? `limit ${maxPosts} posts`
+            : null;
+  return { running, elapsed, percent, target, totalPages };
 }
 
 interface JobStatusListProps {
@@ -183,9 +193,7 @@ export function JobStatusList({
                 aria-label={`Scan progress for ${hostOf(snapshot.url)}`}
               >
                 {progress.percent === null ? (
-                  <div
-                    className={`absolute inset-y-0 left-0 w-1/3 animate-pulse rounded-full ${barTone}`}
-                  />
+                  <div className={`absolute inset-y-0 w-1/3 animate-scan-slide rounded-full ${barTone}`} />
                 ) : (
                   <div
                     className={`h-full rounded-full transition-[width] duration-300 ${barTone}`}
@@ -197,14 +205,16 @@ export function JobStatusList({
                 <span>
                   {progress.running
                     ? progress.percent === null
-                      ? "scanning…"
+                      ? `${snapshot.progress.phase === "hydrating" ? "hydrating" : "discovering"}…`
                       : `${progress.percent}%${progress.target ? ` of ${progress.target}` : ""}`
                     : `${snapshot.stop_reason || snapshot.status}${progress.target ? ` · ${progress.target}` : ""}`}
                 </span>
                 <span>
                   {formatElapsed(progress.elapsed)} elapsed
                   {progress.running && snapshot.progress.pages_fetched > 0
-                    ? ` · page ${snapshot.progress.pages_fetched}`
+                    ? progress.totalPages && progress.totalPages > 1
+                      ? ` · page ${snapshot.progress.pages_fetched}/${progress.totalPages}`
+                      : ` · page ${snapshot.progress.pages_fetched}`
                     : ""}
                 </span>
               </div>

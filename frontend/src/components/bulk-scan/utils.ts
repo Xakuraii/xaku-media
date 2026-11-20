@@ -14,6 +14,10 @@ export const EMPTY_PROGRESS: ScanProgressPayload = {
   duplicates_skipped: 0,
   current_page: null,
   limit_applied: false,
+  total_posts: null,
+  total_media: null,
+  total_pages: null,
+  phase: "discovering",
 };
 
 export function hostOf(url: string): string {

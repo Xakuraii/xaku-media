@@ -110,6 +110,7 @@ export interface DiscoveredMediaItem {
   author: string;
   thumbnail_url?: string | null;
   filesize_bytes?: number | null;
+  duration_seconds?: number | null;
   available_formats: MediaFormatInfoPayload[];
   created_at: string;
   provider?: string | null;
@@ -191,6 +192,10 @@ export interface ScanProgressPayload {
   duplicates_skipped: number;
   current_page?: number | null;
   limit_applied: boolean;
+  total_posts?: number | null;
+  total_media?: number | null;
+  total_pages?: number | null;
+  phase?: string | null;
 }
 
 export type ScanJobStatus = "queued" | "running" | "completed" | "cancelled" | "failed";

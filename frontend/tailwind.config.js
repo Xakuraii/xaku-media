@@ -41,6 +41,15 @@ export default {
         card: "0 1px 2px rgb(var(--ink) / 0.04), 0 8px 24px rgb(var(--ink) / 0.05)",
         pop: "0 16px 48px rgb(var(--ink) / 0.12)",
       },
+      keyframes: {
+        "scan-slide": {
+          "0%": { left: "-35%" },
+          "100%": { left: "100%" },
+        },
+      },
+      animation: {
+        "scan-slide": "scan-slide 1.15s ease-in-out infinite",
+      },
     },
   },
   plugins: [],
