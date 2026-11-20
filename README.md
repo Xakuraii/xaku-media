@@ -31,7 +31,7 @@ Collecting media from web sources or social platforms often involves tedious man
 ### 📥 High-Performance Download Manager & Resumption
 - **Worker Slot Scheduling:** Strict concurrency bounds (configurable 1–10 simultaneous downloads, default 4). Remaining tasks queue safely without OS socket exhaustion.
 - **HTTP Range Resumption:** Seamlessly resumes partially downloaded `.part` files via `Range: bytes={offset}-` headers.
-- **Non-Destructive Sequential Naming:** Automatically divides downloads into `videos/` and `images/` folders with sequential indices (`{username}_vdo_001.mp4`, `{username}_img_001.jpg`). Never overwrites user files on disk.
+- **Non-Destructive Sequential Naming:** Groups downloads by platform and media kind (`tiktok/videos/<post_id>/`, `instagram/reels/`, `youtube/shorts/`, `x/images/`, and so on) with sequential indices (`{username}_vdo_001.mp4`, `{username}_img_001.jpg`). Never overwrites user files on disk.
 - **Token-Bucket Bandwidth Throttling:** Dynamic download speed limits (e.g., 500 KB/s, 2 MB/s, 10 MB/s, Unlimited) shared across all concurrent worker threads with micro-slice sleep scheduling.
 
 ### 🎞️ Stream Merging & Technical Media Inspection

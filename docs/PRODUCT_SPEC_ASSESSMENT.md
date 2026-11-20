@@ -100,7 +100,7 @@ Legend: **Implemented** = works as specified and is wired end to end · **Partia
 | Image format/compression/resize | **Missing** | No Pillow conversion path; only thumbnail generation (`processor/thumbnail.py`). |
 | Extension preservation | **Partial** | Container/first-format/URL suffix is used, but falls back to `jpg`/`mp4` when unknown (`manager.py:113,211`). |
 | Safe naming, collision avoidance, DB reservation | **Partial** | Sequential naming and disk scan exist; no DB-level reservation or unique constraint, so concurrent restarts can race. |
-| `ChosenFolder/{videos,images}` structure | **Implemented** | `AppConfig.video_download_dir` / `image_download_dir`. |
+| `ChosenFolder/<platform>/{videos,images,...}` structure | **Implemented** | `downloader/layout.py::destination_directory`; TikTok also adds a per-post folder. |
 
 ### 3.6 Library, saved sources, history, recovery
 
