@@ -584,6 +584,20 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleDeleteDownloadTask = async (taskId: string) => {
+    if (!window.api?.deleteDownloadedMedia) return;
+    try {
+      // Remove the queue row without touching the file: cancelled/failed
+      // tasks usually have no completed file, and completed tasks already
+      // have a separate delete-file action.
+      await window.api.deleteDownloadedMedia(taskId, false);
+      setDownloadTasks((prev) => prev.filter((task) => task.id !== taskId));
+      fetchQueueState();
+    } catch (err) {
+      console.error("Failed to delete download task:", err);
+    }
+  };
+
   const fetchQueueState = async () => {
     if (!window.api?.getDownloadQueueState) return;
     try {
@@ -2896,19 +2910,29 @@ export const App: React.FC = () => {
                                 </div>
                               )}
                               {(isFailed || isCancelled) && (
-                                <button
-                                  onClick={() =>
-                                    handleStartDownload(
-                                      task.media_item,
-                                      task.selected_format
-                                    )
-                                  }
-                                  className="px-2.5 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline rounded-md text-xs font-mono text-ink flex items-center space-x-1.5 transition-colors"
-                                  title="Retry download"
-                                >
-                                  <RotateCcw className="h-3.5 w-3.5" />
-                                  <span>Retry</span>
-                                </button>
+                                <>
+                                  <button
+                                    onClick={() =>
+                                      handleStartDownload(
+                                        task.media_item,
+                                        task.selected_format
+                                      )
+                                    }
+                                    className="px-2.5 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline rounded-md text-xs font-mono text-ink flex items-center space-x-1.5 transition-colors"
+                                    title="Retry download"
+                                  >
+                                    <RotateCcw className="h-3.5 w-3.5" />
+                                    <span>Retry</span>
+                                  </button>
+                                  <button
+                                    onClick={() => void handleDeleteDownloadTask(task.id)}
+                                    className="px-2.5 py-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded-md text-xs font-mono text-red-700 dark:text-red-300 flex items-center space-x-1.5 transition-colors"
+                                    title="Remove this task from the download list"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                    <span>Delete</span>
+                                  </button>
+                                </>
                               )}
                             </div>
                           </div>
