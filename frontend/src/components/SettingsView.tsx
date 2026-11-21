@@ -532,18 +532,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <div className="bg-raised border border-hairline rounded-xl p-3 flex items-center justify-between text-xs font-mono">
               <div className="flex items-center space-x-2 text-muted">
                 <Film className="h-4 w-4 text-purple-600 dark:text-purple-400" />
-                <span>Video Subdirectory:</span>
+                <span>Video Path:</span>
               </div>
-              <span className="text-ink/90 font-bold">\videos</span>
+              <span className="text-ink/90 font-bold">&lt;Platform&gt;\&lt;User&gt;\Videos</span>
             </div>
             <div className="bg-raised border border-hairline rounded-xl p-3 flex items-center justify-between text-xs font-mono">
               <div className="flex items-center space-x-2 text-muted">
                 <ImageIcon className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                <span>Image Subdirectory:</span>
+                <span>Image Path:</span>
               </div>
-              <span className="text-ink/90 font-bold">\images</span>
+              <span className="text-ink/90 font-bold">&lt;Platform&gt;\&lt;User&gt;\Images</span>
             </div>
           </div>
+          <p className="text-[11px] text-muted leading-relaxed font-mono">
+            Each platform (Youtube, Facebook, Instagram, Tiktok, X) keeps its own
+            folder, then a folder per creator, so libraries never mix.
+          </p>
         </div>
       </section>
 
@@ -1223,6 +1227,30 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
             <div className="text-[11px] text-faint">Persistent SQLite Database</div>
           </div>
+        </div>
+
+        {/* Engine Log Level */}
+        <div className="flex flex-col gap-2 border-t border-hairline pt-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-0.5">
+            <div className="flex items-center space-x-2">
+              <FileText className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
+              <span className="text-xs font-semibold text-ink/90">Engine Log Level</span>
+            </div>
+            <p className="text-[11px] text-muted font-mono">
+              Verbosity of the Python engine log written to the console and log file.
+            </p>
+          </div>
+          <select
+            value={draft.log_level}
+            onChange={(e) => handleDraftChange({ log_level: e.target.value })}
+            className="w-full sm:w-48 bg-page border border-hairline rounded-xl px-3 py-2 text-xs font-mono text-ink/90 focus:outline-none focus:border-cyan-500"
+          >
+            <option value="DEBUG">DEBUG (Most detail)</option>
+            <option value="INFO">INFO (Recommended)</option>
+            <option value="WARNING">WARNING</option>
+            <option value="ERROR">ERROR (Quietest)</option>
+            <option value="CRITICAL">CRITICAL</option>
+          </select>
         </div>
       </section>
 

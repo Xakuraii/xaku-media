@@ -1520,7 +1520,7 @@ export const App: React.FC = () => {
                                     className={`absolute top-1 left-1 p-1 rounded-md transition-all ${
                                       isSelected
                                         ? "bg-accent text-on-accent"
-                                        : "bg-black/60 text-muted hover:text-ink"
+                                        : "bg-black/60 text-white/70 hover:text-white"
                                     }`}
                                     title={isSelected ? "Deselect item" : "Select item"}
                                   >
@@ -1539,7 +1539,7 @@ export const App: React.FC = () => {
                                     className={`absolute top-1 right-8 p-1 rounded-md transition-all ${
                                       bookmarkedIds.has(item.id)
                                         ? "bg-accent text-on-accent shadow-sm shadow-accent/40"
-                                        : "bg-black/60 text-ink/80 hover:text-ink"
+                                        : "bg-black/60 text-white/80 hover:text-white"
                                     }`}
                                     title={
                                       bookmarkedIds.has(item.id)
@@ -1559,7 +1559,7 @@ export const App: React.FC = () => {
                                       e.stopPropagation();
                                       handleOpenPreview(item);
                                     }}
-                                    className="absolute top-1 right-1 p-1 rounded-md bg-black/60 hover:bg-black/90 text-ink/80 hover:text-ink transition-all shadow-sm"
+                                    className="absolute top-1 right-1 p-1 rounded-md bg-black/60 hover:bg-black/90 text-white/80 hover:text-white transition-all shadow-sm"
                                     title="Preview item"
                                   >
                                     <Eye className="h-3 w-3" />
@@ -1571,16 +1571,16 @@ export const App: React.FC = () => {
                                       handleStartDownload(item);
                                     }}
                                     disabled={downloadingIds.has(item.id)}
-                                    className="absolute bottom-1 left-1 p-1 rounded-md bg-black/70 hover:bg-accent-vivid text-ink/80 hover:text-ink transition-all shadow-sm"
+                                    className="absolute bottom-1 left-1 p-1 rounded-md bg-black/70 hover:bg-accent-vivid text-white/80 hover:text-white transition-all shadow-sm"
                                     title="Download single item"
                                   >
                                     {downloadingIds.has(item.id) ? (
-                                      <Loader2 className="h-3 w-3 animate-spin text-ink" />
+                                      <Loader2 className="h-3 w-3 animate-spin text-white" />
                                     ) : (
                                       <Download className="h-3 w-3" />
                                     )}
                                   </button>
-                                  <span className="absolute bottom-1 right-1 px-1.5 py-0.5 bg-black/80 rounded text-[9px] font-mono text-ink/80">
+                                  <span className="absolute bottom-1 right-1 px-1.5 py-0.5 bg-black/80 rounded text-[9px] font-mono text-white/80">
                                     #{globalIdx + 1}
                                   </span>
                                 </div>
@@ -2106,7 +2106,7 @@ export const App: React.FC = () => {
                                       className={`absolute top-1 right-1 p-1 rounded transition-all ${
                                         bookmarkedIds.has(it.id)
                                           ? "bg-accent text-on-accent shadow-sm shadow-accent/40"
-                                          : "bg-black/60 text-ink/80 hover:text-ink"
+                                          : "bg-black/60 text-white/80 hover:text-white"
                                       }`}
                                     >
                                       <Bookmark className={`h-3 w-3 ${bookmarkedIds.has(it.id) ? "fill-current" : ""}`} />
@@ -2346,14 +2346,14 @@ export const App: React.FC = () => {
                                   <Play className="h-4 w-4 fill-current ml-0.5" />
                                 )}
                               </span>
-                              <span className="text-[11px] font-mono text-ink font-semibold">
+                              <span className="text-[11px] font-mono text-white font-semibold">
                                 Preview
                               </span>
                             </div>
 
                             {/* Tags */}
                             <div className="absolute top-2 left-2 flex items-center space-x-1.5">
-                              <span className="px-2 py-0.5 bg-black/80 rounded text-[11px] font-mono uppercase text-ink/90">
+                              <span className="px-2 py-0.5 bg-black/80 rounded text-[11px] font-mono uppercase text-white/90">
                                 {item.media_type}
                               </span>
                               {isDownloaded && (

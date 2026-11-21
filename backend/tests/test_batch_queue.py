@@ -90,9 +90,9 @@ def test_batch_download_sequential_naming(
             assert len(tasks) == 3
             destinations = [t.destination_path.name for t in tasks if t.destination_path]
             assert destinations == [
-                "art_master_img_001.jpg",
-                "art_master_img_002.jpg",
-                "art_master_img_003.jpg",
+                "art_master-img-1.jpg",
+                "art_master-img-2.jpg",
+                "art_master-img-3.jpg",
             ]
             _drain(manager)
 

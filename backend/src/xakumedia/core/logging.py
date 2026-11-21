@@ -45,3 +45,12 @@ def setup_logging(
 def get_logger(name: str) -> logging.Logger:
     """Obtain a logger instance for a given module name."""
     return logging.getLogger(name)
+
+
+def set_log_level(log_level: str) -> None:
+    """Change the root log level at runtime (used by the Settings screen)."""
+    level = getattr(logging, log_level.upper(), logging.INFO)
+    root = logging.getLogger()
+    root.setLevel(level)
+    for handler in root.handlers:
+        handler.setLevel(level)

@@ -820,6 +820,34 @@ class MediaRepository:
         """Persist or update a single task record in the download queue table."""
         self.save_download_tasks([task])
 
+    def remap_download_paths(self, mapping: dict[str, str]) -> int:
+        """Point download tasks at renamed files after a sequence compaction.
+
+        ``mapping`` maps old absolute paths to new absolute paths. Both the
+        destination and the ``.part`` temp path are updated so an interrupted
+        resume still targets the same file.
+        """
+        if not mapping:
+            return 0
+
+        updated = 0
+        with get_db_session(self.db_path) as conn:
+            for old_path, new_path in mapping.items():
+                cursor = conn.execute(
+                    """
+                    UPDATE download_tasks
+                    SET destination_path = ?,
+                        temp_path = CASE
+                            WHEN temp_path = ? THEN ?
+                            ELSE temp_path
+                        END
+                    WHERE destination_path = ?
+                    """,
+                    (new_path, f"{old_path}.part", f"{new_path}.part", old_path),
+                )
+                updated += max(cursor.rowcount, 0)
+        return updated
+
     def _row_to_download_task(self, row: Any) -> DownloadTask:
         """Helper to deserialize a sqlite3.Row into a typed DownloadTask model."""
         media_item = self._row_to_media_item(row, id_key="m_id", created_key="m_created_at")
@@ -1173,6 +1201,12 @@ class MediaRepository:
             default_config.theme = str(preferences["theme"])
         if "log_level" in preferences:
             default_config.log_level = str(preferences["log_level"])
+            try:
+                from ..core.logging import set_log_level
+
+                set_log_level(default_config.log_level)
+            except Exception:
+                pass
 
     # =========================================================================
     # Cookie Profiles & Authentication

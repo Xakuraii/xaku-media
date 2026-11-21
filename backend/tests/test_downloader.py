@@ -184,7 +184,7 @@ def test_download_manager_start_and_complete(
             task = manager.start_download(media_item=test_media_item)
             assert task is not None
             assert task.status in (TaskStatus.QUEUED, TaskStatus.DOWNLOADING, TaskStatus.COMPLETED)
-            assert "artist_neo_img_" in task.destination_path.name
+            assert "artist_neo-img-" in task.destination_path.name
 
             # Wait briefly for worker thread to finish
             manager._executor.shutdown(wait=True)

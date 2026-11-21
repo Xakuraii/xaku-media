@@ -1,8 +1,8 @@
-"""Download folder layout tests for platform/media-type separation."""
+"""Download folder layout tests for platform/user/media-type separation."""
 
 from pathlib import Path
 
-from xakumedia.downloader.layout import destination_directory
+from xakumedia.downloader.layout import destination_directory, platform_folder
 from xakumedia.models.media import MediaItem, MediaType
 
 
@@ -12,6 +12,7 @@ def _item(
     media_type: MediaType,
     extractor: str,
     source_url: str,
+    author: str = "xakuraii",
     post_url: str | None = None,
     provider_media_id: str | None = None,
     metadata_extra: dict | None = None,
@@ -23,6 +24,7 @@ def _item(
         id=f"{provider}-{extractor}-{media_type}",
         source_url=source_url,
         media_type=media_type,
+        author=author,
         original_url="https://cdn.example.com/file.bin",
         provider=provider,
         provider_media_id=provider_media_id,
@@ -32,7 +34,7 @@ def _item(
     )
 
 
-def test_tiktok_video_and_slideshow_images_use_post_folders(tmp_path: Path) -> None:
+def test_tiktok_videos_and_slides_share_the_user_library(tmp_path: Path) -> None:
     video = _item(
         provider="ytdlp",
         media_type=MediaType.VIDEO,
@@ -52,14 +54,14 @@ def test_tiktok_video_and_slideshow_images_use_post_folders(tmp_path: Path) -> N
     )
 
     assert destination_directory(video, tmp_path) == (
-        tmp_path / "tiktok" / "videos" / "7634207163103071508"
+        tmp_path / "Tiktok" / "xakuraii" / "Videos"
     )
     assert destination_directory(slide, tmp_path) == (
-        tmp_path / "tiktok" / "images" / "7634207163103071508"
+        tmp_path / "Tiktok" / "xakuraii" / "Images"
     )
 
 
-def test_instagram_reels_and_pictures_are_separate(tmp_path: Path) -> None:
+def test_instagram_videos_and_pictures_are_separate(tmp_path: Path) -> None:
     reel = _item(
         provider="gallerydl",
         media_type=MediaType.VIDEO,
@@ -75,11 +77,15 @@ def test_instagram_reels_and_pictures_are_separate(tmp_path: Path) -> None:
         post_url="https://www.instagram.com/p/ABC/",
     )
 
-    assert destination_directory(reel, tmp_path) == tmp_path / "instagram" / "reels"
-    assert destination_directory(picture, tmp_path) == tmp_path / "instagram" / "images"
+    assert destination_directory(reel, tmp_path) == (
+        tmp_path / "Instagram" / "xakuraii" / "Videos"
+    )
+    assert destination_directory(picture, tmp_path) == (
+        tmp_path / "Instagram" / "xakuraii" / "Images"
+    )
 
 
-def test_youtube_shorts_and_videos_are_separate(tmp_path: Path) -> None:
+def test_youtube_videos_all_land_in_one_user_folder(tmp_path: Path) -> None:
     short = _item(
         provider="ytdlp",
         media_type=MediaType.VIDEO,
@@ -95,8 +101,12 @@ def test_youtube_shorts_and_videos_are_separate(tmp_path: Path) -> None:
         post_url="https://www.youtube.com/watch?v=abc123",
     )
 
-    assert destination_directory(short, tmp_path) == tmp_path / "youtube" / "shorts"
-    assert destination_directory(video, tmp_path) == tmp_path / "youtube" / "videos"
+    assert destination_directory(short, tmp_path) == (
+        tmp_path / "Youtube" / "xakuraii" / "Videos"
+    )
+    assert destination_directory(video, tmp_path) == (
+        tmp_path / "Youtube" / "xakuraii" / "Videos"
+    )
 
 
 def test_facebook_and_x_split_videos_from_pictures(tmp_path: Path) -> None:
@@ -125,7 +135,46 @@ def test_facebook_and_x_split_videos_from_pictures(tmp_path: Path) -> None:
         source_url="https://x.com/alice/status/123",
     )
 
-    assert destination_directory(facebook_video, tmp_path) == tmp_path / "facebook" / "videos"
-    assert destination_directory(facebook_photo, tmp_path) == tmp_path / "facebook" / "images"
-    assert destination_directory(x_video, tmp_path) == tmp_path / "x" / "videos"
-    assert destination_directory(x_photo, tmp_path) == tmp_path / "x" / "images"
+    assert destination_directory(facebook_video, tmp_path) == (
+        tmp_path / "Facebook" / "xakuraii" / "Videos"
+    )
+    assert destination_directory(facebook_photo, tmp_path) == (
+        tmp_path / "Facebook" / "xakuraii" / "Images"
+    )
+    assert destination_directory(x_video, tmp_path) == (
+        tmp_path / "X" / "xakuraii" / "Videos"
+    )
+    assert destination_directory(x_photo, tmp_path) == (
+        tmp_path / "X" / "xakuraii" / "Images"
+    )
+
+
+def test_user_folder_is_sanitized_and_unknown_platforms_get_a_shelf(
+    tmp_path: Path,
+) -> None:
+    reddit = _item(
+        provider="gallerydl",
+        media_type=MediaType.IMAGE,
+        extractor="reddit",
+        source_url="https://www.reddit.com/r/pics/",
+        author="bad:user/name",
+    )
+
+    assert platform_folder(reddit) == "Reddit"
+    assert destination_directory(reddit, tmp_path) == (
+        tmp_path / "Reddit" / "bad_user_name" / "Images"
+    )
+
+
+def test_missing_author_falls_back_to_media_folder(tmp_path: Path) -> None:
+    item = _item(
+        provider="direct",
+        media_type=MediaType.VIDEO,
+        extractor="",
+        source_url="https://example.com/clip.mp4",
+        author="",
+    )
+
+    assert destination_directory(item, tmp_path) == (
+        tmp_path / "Example" / "media" / "Videos"
+    )
