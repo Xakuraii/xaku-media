@@ -626,7 +626,7 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
                 <button
                   type="button"
                   onClick={() => handleDownloadAllNew(rescanResult.new_items)}
-                  className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-black font-bold rounded-lg text-xs font-mono transition-colors flex items-center space-x-1.5 shadow-md shadow-emerald-900/40"
+                  className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-xs font-mono transition-colors flex items-center space-x-1.5 shadow-sm"
                 >
                   <Download className="h-3.5 w-3.5" />
                   <span>Download {rescanResult.new_item_count} New</span>
@@ -680,7 +680,7 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
                           <div className="flex-1 min-w-0 space-y-1">
                             <div className="flex items-center space-x-1.5">
                               {isNew ? (
-                                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-950 border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 uppercase">
+                                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-500/15 border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 uppercase">
                                   NEW
                                 </span>
                               ) : (

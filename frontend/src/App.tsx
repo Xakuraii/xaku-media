@@ -1049,19 +1049,19 @@ export const App: React.FC = () => {
       <aside className="d-sidebar flex w-60 shrink-0 flex-col justify-between p-3">
         <div>
           {/* Brand */}
-          <div className="-mx-1 mb-5 overflow-hidden rounded-2xl border border-accent/25 bg-gradient-to-br from-accent/15 via-accent/5 to-transparent px-3 py-3.5">
+          <div className="-mx-1 mb-5 overflow-hidden rounded-2xl border border-hairline bg-surface/80 px-3 py-3.5 shadow-sm">
             <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent shadow-lg shadow-accent/30 ring-1 ring-white/15">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-hairline bg-brand-white shadow-sm">
                 <img
                   src="./XakuMedia.svg"
                   alt="XakuMedia logo"
-                  className="h-8 w-8 rounded-md"
+                  className="h-7 w-7"
                   draggable={false}
                 />
               </div>
               <div className="min-w-0">
-                <span className="block truncate text-[15px] font-bold tracking-tight text-accent">
-                  XakuMedia
+                <span className="block truncate text-[15px] font-bold tracking-tight text-ink">
+                  Xaku<span className="text-accent">Media</span>
                 </span>
                 <span className="block truncate font-mono text-[10px] uppercase tracking-[0.16em] text-faint">
                   Local media toolkit
@@ -2578,7 +2578,7 @@ export const App: React.FC = () => {
                     {recoveryBanner.paused_count > 0 && (
                       <button
                         onClick={handleResumeAll}
-                        className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-black rounded-lg text-xs font-semibold shadow-md transition"
+                        className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-semibold shadow-md transition"
                       >
                         Resume All ({recoveryBanner.paused_count})
                       </button>
@@ -2913,7 +2913,7 @@ export const App: React.FC = () => {
                                     : isFailed
                                     ? "bg-red-500"
                                     : isCancelled
-                                    ? "bg-neutral-600"
+                                    ? "bg-faint"
                                     : "bg-gradient-to-r from-accent via-purple-600 to-indigo-500"
                                 }`}
                                 style={{
@@ -3047,8 +3047,7 @@ export const App: React.FC = () => {
           {activeTab === "saved" && (
             <SavedSourcesView
               onScanUrl={(url) => {
-                setUrlInput(url);
-                setActiveTab("scan");
+                handleReScan(url);
               }}
               onBatchDownload={(items) => {
                 handleStartBatchDownload(items);
@@ -3069,6 +3068,11 @@ export const App: React.FC = () => {
               onThemeChange={(theme, origin) =>
                 setThemePreference(theme, { persist: false, origin })
               }
+              onPreferencesUpdated={(updated) => {
+                if (typeof updated.default_video_resolution === "string") {
+                  setPreferredResolution(updated.default_video_resolution);
+                }
+              }}
               theme={themePreference}
             />
           )}
@@ -3120,11 +3124,11 @@ export const App: React.FC = () => {
                   <div className="flex items-center space-x-2 text-xs font-mono text-white/70">
                     <span>Author: {previewModal.mediaItem.author || "Unknown"}</span>
                     <span>·</span>
-                    <span className="uppercase text-emerald-600 dark:text-emerald-400">
+                    <span className="uppercase text-emerald-400">
                       {previewModal.mediaItem.available_formats[0]?.container || "IMAGE"}
                     </span>
                     {previewModal.localPath && (
-                      <span className="px-1.5 py-0.5 bg-emerald-500/10 border border-emerald-500/30 rounded text-[11px] text-emerald-700 dark:text-emerald-300">
+                      <span className="px-1.5 py-0.5 bg-emerald-500/20 border border-emerald-500/40 rounded text-[11px] text-emerald-300">
                         Local File
                       </span>
                     )}

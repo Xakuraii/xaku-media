@@ -44,6 +44,7 @@ interface SettingsViewProps {
   onConcurrencyChange?: (val: number) => void;
   onSpeedLimitChange?: (val: number) => void;
   onThemeChange?: (theme: "dark" | "light" | "system", origin?: HTMLElement | null) => void;
+  onPreferencesUpdated?: (prefs: AppPreferences) => void;
   theme?: "dark" | "light" | "system";
 }
 
@@ -84,6 +85,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onConcurrencyChange,
   onSpeedLimitChange,
   onThemeChange,
+  onPreferencesUpdated,
   theme: activeTheme,
 }) => {
   const [prefs, setPrefs] = useState<AppPreferences>(DEFAULT_PREFERENCES);
@@ -361,6 +363,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       if (onThemeChange && updated.theme) {
         onThemeChange(updated.theme);
       }
+      onPreferencesUpdated?.(updated);
       showSaveNotice("Settings saved to local database");
     } catch (err) {
       console.error("Failed to persist preferences:", err);
@@ -408,6 +411,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       if (onThemeChange && defaults.theme) {
         onThemeChange(defaults.theme);
       }
+      onPreferencesUpdated?.(defaults);
       showSaveNotice("Preferences reset to factory defaults");
     } catch (err) {
       console.error("Failed to reset preferences:", err);
@@ -753,7 +757,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 onClick={() => handleDraftChange({ default_video_resolution: res.id })}
                 className={`p-2.5 rounded-xl border text-left flex flex-col transition-all ${
                   draft.default_video_resolution === res.id
-                    ? "bg-purple-500/10 border-purple-500/40 text-ink shadow-sm shadow-purple-900/50"
+                    ? "bg-purple-500/10 border-purple-500/40 text-ink shadow-sm"
                     : "bg-raised border-hairline text-muted hover:text-ink hover:border-hairline-strong"
                 }`}
               >
@@ -780,7 +784,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 onClick={() => handleDraftChange({ default_video_container: fmt.id })}
                 className={`p-2.5 rounded-xl border text-left flex flex-col transition-all ${
                   draft.default_video_container === fmt.id
-                    ? "bg-purple-500/10 border-purple-500/40 text-ink shadow-sm shadow-purple-900/50"
+                    ? "bg-purple-500/10 border-purple-500/40 text-ink shadow-sm"
                     : "bg-raised border-hairline text-muted hover:text-ink hover:border-hairline-strong"
                 }`}
               >
@@ -831,7 +835,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               onClick={() => handleDraftChange({ default_image_format: fmt.id })}
               className={`p-2.5 rounded-xl border text-left flex flex-col transition-all ${
                 draft.default_image_format === fmt.id
-                  ? "bg-emerald-500/10 border-emerald-500/40 text-ink shadow-sm shadow-emerald-900/50"
+                  ? "bg-emerald-500/10 border-emerald-500/40 text-ink shadow-sm"
                   : "bg-raised border-hairline text-muted hover:text-ink hover:border-hairline-strong"
               }`}
             >
@@ -966,7 +970,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     type="button"
                     onClick={handleBrowserImport}
                     disabled={importingBrowser}
-                    className="px-3 py-1.5 bg-cyan-500/15 hover:bg-cyan-800/80 border border-cyan-500/30 text-cyan-700 dark:text-cyan-300 rounded-lg text-xs font-mono transition-colors flex items-center space-x-1.5 shrink-0"
+                    className="px-3 py-1.5 bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-cyan-700 dark:text-cyan-300 rounded-lg text-xs font-mono transition-colors flex items-center space-x-1.5 shrink-0"
                   >
                     {importingBrowser ? (
                       <RefreshCw className="h-3.5 w-3.5 animate-spin" />
@@ -1363,7 +1367,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <button
                 type="button"
                 onClick={handleSavePasteCookies}
-                className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-black font-bold rounded-xl text-xs transition-colors flex items-center space-x-1.5"
+                className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-xl text-xs transition-colors flex items-center space-x-1.5"
               >
                 <Check className="h-3.5 w-3.5" />
                 <span>Save Cookies</span>
@@ -1443,12 +1447,47 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <button
                 type="button"
                 onClick={handleSaveDomainHeaders}
-                className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-black font-bold rounded-xl text-xs transition-colors flex items-center space-x-1.5"
+                className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-xl text-xs transition-colors flex items-center space-x-1.5"
               >
                 <Check className="h-3.5 w-3.5" />
                 <span>Save Headers</span>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+      {/* Sticky Unsaved Changes Bar */}
+      {hasUnsavedChanges && (
+        <div className="sticky bottom-4 z-30 flex items-center justify-between gap-4 rounded-2xl border border-accent/40 bg-surface/95 px-5 py-3 shadow-pop backdrop-blur">
+          <span className="font-mono text-xs text-ink">
+            You have unsaved setting changes.
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setDraft(prefs);
+                onConcurrencyChange?.(prefs.max_concurrent_downloads);
+                window.api?.setDownloadConcurrency?.(prefs.max_concurrent_downloads).catch(() => undefined);
+                onSpeedLimitChange?.(prefs.max_download_speed_kbps ?? 0);
+                window.api?.setSpeedLimit?.(prefs.max_download_speed_kbps ?? 0).catch(() => undefined);
+                if (prefs.theme && onThemeChange) {
+                  onThemeChange(prefs.theme);
+                }
+              }}
+              className="px-3 py-1.5 rounded-lg border border-hairline bg-raised hover:bg-hairline/70 text-xs font-mono text-muted hover:text-ink transition-colors"
+            >
+              Discard
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleSave()}
+              disabled={saving}
+              className="flex items-center space-x-1.5 px-4 py-1.5 rounded-lg bg-accent hover:bg-accent-vivid text-on-accent text-xs font-semibold transition-colors shadow-sm"
+            >
+              {saving ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+              <span>Save changes</span>
+            </button>
           </div>
         </div>
       )}
