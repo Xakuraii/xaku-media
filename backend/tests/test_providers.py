@@ -905,3 +905,119 @@ def test_gallerydl_auth_site_failure_explains_cookies(
     assert error.details.get("requires_cookies") is True
     assert error.details.get("remediation") == "add_cookies"
     assert "cookie" in str(error).lower()
+
+
+def test_strip_stale_waf_cookies_removes_ephemeral_waf_tokens() -> None:
+    import http.cookiejar
+
+    from xakumedia.extractors.video import strip_stale_waf_cookies
+
+    jar = http.cookiejar.CookieJar()
+    for name, domain in [
+        ("_waftokenid", "www.tiktok.com"),
+        ("sessionid", ".tiktok.com"),
+        ("ttwid", ".tiktok.com"),
+    ]:
+        jar.set_cookie(
+            http.cookiejar.Cookie(
+                version=0,
+                name=name,
+                value="val",
+                port=None,
+                port_specified=False,
+                domain=domain,
+                domain_specified=True,
+                domain_initial_dot=domain.startswith("."),
+                path="/",
+                path_specified=True,
+                secure=True,
+                expires=None,
+                discard=True,
+                comment=None,
+                comment_url=None,
+                rest={},
+            )
+        )
+
+    class _FakeYdl:
+        cookiejar = jar
+
+    strip_stale_waf_cookies(_FakeYdl(), "https://www.tiktok.com/@user")
+    remaining = {c.name for c in jar}
+    assert remaining == {"sessionid", "ttwid"}
+
+
+def test_ytdlp_tiktok_waf_fallback_extracts_secuid_and_flags_private() -> None:
+    import http.cookiejar
+
+    class _FakeTikTokUserIE:
+        def __init__(self, payload_sequence: list[dict | None]) -> None:
+            self._calls = 0
+            self._payloads = payload_sequence
+            self.cookiejar = http.cookiejar.CookieJar()
+            self.solved = False
+
+        def _generate_blockbuster_headers(self) -> dict[str, str]:
+            return {"User-Agent": "Mozilla/5.0"}
+
+        def _download_webpage(self, url: str, user_id: str, **kwargs: object) -> str:
+            idx = min(self._calls, len(self._payloads) - 1)
+            self._calls += 1
+            return f"page-{idx}"
+
+        def _get_universal_data(self, webpage: str, user_id: str) -> dict | None:
+            idx = int(webpage.split("-")[-1])
+            return self._payloads[idx]
+
+        def _solve_challenge_and_set_cookies(self, webpage: str) -> tuple[str, ...]:
+            self.solved = True
+            return ("_wafchallengeid",)
+
+    class _FakeYdl:
+        def __init__(self, ie: _FakeTikTokUserIE) -> None:
+            self._ie = ie
+            self.extracted: list[str] = []
+
+        def get_info_extractor(self, name: str) -> _FakeTikTokUserIE:
+            return self._ie
+
+        def extract_info(self, target: str, download: bool = False) -> dict[str, object]:
+            self.extracted.append(target)
+            return {"entries": [{"id": "7708817426581818630"}]}
+
+    ie = _FakeTikTokUserIE(
+        [
+            None,
+            {
+                "webapp.user-detail": {
+                    "userInfo": {
+                        "user": {"secUid": "MS4wLjABAAAA_TEST", "privateAccount": False},
+                        "stats": {"videoCount": 5},
+                    }
+                }
+            },
+        ]
+    )
+    ydl = _FakeYdl(ie)
+    result = YtDlpProvider()._resolve_tiktok_profile_via_waf(
+        ydl,  # type: ignore[arg-type]
+        "https://www.tiktok.com/@dorybbi",
+    )
+    assert ie.solved is True
+    assert ydl.extracted == ["tiktokuser:MS4wLjABAAAA_TEST"]
+    assert result == {"entries": [{"id": "7708817426581818630"}]}
+
+    private_ie = _FakeTikTokUserIE(
+        [
+            {
+                "webapp.user-detail": {
+                    "userInfo": {"user": {"privateAccount": True}, "stats": {"videoCount": 1}}
+                }
+            }
+        ]
+    )
+    with pytest.raises(PrivateMediaError):
+        YtDlpProvider()._resolve_tiktok_profile_via_waf(
+            _FakeYdl(private_ie),  # type: ignore[arg-type]
+            "https://www.tiktok.com/@privateuser",
+        )

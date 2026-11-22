@@ -58,6 +58,39 @@ def parse_yt_dlp_error(error_message: str, url: str) -> ExtractionError:
     return ExtractionError(f"Extraction failed: {error_message}", details={"url": url})
 
 
+def strip_stale_waf_cookies(ydl: Any, target_url: str | None = None) -> None:
+    """Drop short-lived browser WAF tokens from the in-memory jar before requests.
+
+    Browser cookie exports include ephemeral tokens like ``_waftokenid`` that
+    bind to the exporting browser state; sending stale ones causes HTTP 403
+    rejections from TikTok instead of letting yt-dlp solve a fresh challenge.
+    """
+    cookiejar = getattr(ydl, "cookiejar", None)
+    if cookiejar is None:
+        return
+    if target_url:
+        host = (urlsplit(target_url).hostname or "").lower()
+        if host and "tiktok.com" not in host:
+            return
+    try:
+        stale = [
+            (c.domain, c.path, c.name)
+            for c in list(cookiejar)
+            if c.name
+            and (
+                c.name in {"_waftokenid", "_wafchallengeid", "waforiginalreid"}
+                or ("tiktok.com" in (c.domain or "").lower() and "waf" in c.name.lower())
+            )
+        ]
+        for domain, path, name in stale:
+            try:
+                cookiejar.clear(domain=domain, path=path, name=name)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def normalize_formats(
     raw_formats: list[dict[str, Any]],
     default_headers: dict[str, str] | None = None,
@@ -195,6 +228,7 @@ def extract_video_info(
 
     try:
         with yt_dlp.YoutubeDL(base_opts) as ydl:
+            strip_stale_waf_cookies(ydl, safe_url)
             info = ydl.extract_info(safe_url, download=False)
     except (DownloadError, ExtractorError) as exc:
         raise parse_yt_dlp_error(str(exc), safe_url) from exc

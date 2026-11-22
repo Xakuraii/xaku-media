@@ -2868,7 +2868,7 @@ export const App: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setPreviewModal((prev) => ({ ...prev, isOpen: false }))}
-                    className="p-1.5 text-white/70 hover:text-red-400 rounded hover:bg-white/10 transition-colors"
+                    className="p-1.5 text-ink/80 hover:text-red-500 rounded hover:bg-raised transition-colors"
                     title="Close (Escape)"
                   >
                     <X className="h-4 w-4" />
