@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import type { DiscoveredMediaItem } from "../../../../desktop/shared/types";
-import { isItemDownloaded, type PostWithScan } from "./types";
+import { isItemHandled, type PostWithScan } from "./types";
 import { visibleMedia } from "./utils";
 
 /** Selection is independent from filtering. */
@@ -8,7 +8,8 @@ export function useScanSelection(
   posts: PostWithScan[],
   visiblePosts: PostWithScan[],
   filter: "all" | "image" | "video" | "album",
-  downloaded: Set<string>
+  downloaded: Set<string>,
+  skipped: Set<string> = new Set()
 ) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
@@ -57,9 +58,13 @@ export function useScanSelection(
   const selectOnlyNew = useCallback(
     () =>
       setSelected(
-        new Set(visibleItems.filter((item) => !isItemDownloaded(item, downloaded)).map((item) => item.id))
+        new Set(
+          visibleItems
+            .filter((item) => !isItemHandled(item, downloaded, skipped))
+            .map((item) => item.id)
+        )
       ),
-    [visibleItems, downloaded]
+    [visibleItems, downloaded, skipped]
   );
 
   const clearSelection = useCallback(() => setSelected(new Set()), []);

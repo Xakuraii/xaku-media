@@ -121,6 +121,8 @@ export interface DiscoveredMediaItem {
   mime_type?: string | null;
   extension?: string | null;
   is_thumbnail?: boolean;
+  /** Folder-manifest status when the item was downloaded or explicitly skipped. */
+  library_status?: "downloaded" | "skipped" | null;
 }
 
 export interface ScanHistoryRecord {
@@ -315,6 +317,12 @@ export interface DeleteDownloadedMediaResult {
 export interface ToggleSaveResult {
   id: string;
   is_saved: boolean;
+}
+
+export interface SkipMediaItemsResult {
+  count: number;
+  identities: string[];
+  status: "skipped";
 }
 
 export interface ClearScanHistoryResult {
@@ -622,6 +630,12 @@ export interface DesktopApi {
    * Remove a media item from the database.
    */
   deleteMediaItem: (mediaId: string) => Promise<{ id: string; deleted: boolean }>;
+
+  /**
+   * Mark media items as skipped in their folder library manifest so a rescan
+   * does not present them as new again.
+   */
+  skipMediaItems?: (items: DiscoveredMediaItem[]) => Promise<SkipMediaItemsResult>;
 
   /**
    * Enqueue and begin streaming download for a media item.

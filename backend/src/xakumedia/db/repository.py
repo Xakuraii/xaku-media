@@ -693,6 +693,9 @@ class MediaRepository:
                                 p.unlink(missing_ok=True)
                                 file_deleted = True
                                 logger.info(f"Deleted local file from disk: {p}")
+                                from ..downloader.library import remove_file
+
+                                remove_file(p)
                             except Exception as err:
                                 logger.warning(f"Failed to delete file {p}: {err}")
 

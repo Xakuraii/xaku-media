@@ -3,6 +3,7 @@ import {
   Bookmark,
   CheckSquare,
   Download,
+  EyeOff,
   Film,
   Image as ImageIcon,
   Layers,
@@ -13,7 +14,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import type { DiscoveredMediaItem } from "../../../../desktop/shared/types";
-import { isItemDownloaded, type MediaFilter, type PostWithScan } from "./types";
+import { isItemDownloaded, isItemSkipped, type MediaFilter, type PostWithScan } from "./types";
 import { chooseFormat, formatBytes, visibleMedia } from "./utils";
 
 /** Keep the DOM small while a large scan is still streaming in. */
@@ -26,6 +27,7 @@ interface PostBrowserProps {
   counts: { posts: number; media: number; images: number; videos: number; albums: number };
   selected: Set<string>;
   downloaded: Set<string>;
+  skipped: Set<string>;
   bookmarked: Set<string>;
   bookmarkBusy: Set<string>;
   savedLinks: Set<string>;
@@ -50,6 +52,8 @@ interface PostBrowserProps {
   onInvertSelection: () => void;
   onClearSelection: () => void;
   onDownload: () => void;
+  onSkip: () => void;
+  skipping: boolean;
 }
 
 interface VideoEntry {
@@ -62,6 +66,7 @@ export function PostBrowser({
   counts,
   selected,
   downloaded,
+  skipped,
   bookmarked,
   bookmarkBusy,
   savedLinks,
@@ -86,12 +91,16 @@ export function PostBrowser({
   onInvertSelection,
   onClearSelection,
   onDownload,
+  onSkip,
+  skipping,
 }: PostBrowserProps) {
   const visibleItems = useMemo(
     () => filteredPosts.flatMap((post) => visibleMedia(post, filter)),
     [filteredPosts, filter]
   );
-  const newCount = visibleItems.filter((item) => !isItemDownloaded(item, downloaded)).length;
+  const newCount = visibleItems.filter(
+    (item) => !isItemDownloaded(item, downloaded) && !isItemSkipped(item, skipped)
+  ).length;
 
   const [renderLimit, setRenderLimit] = useState(POST_PAGE_SIZE);
   const [videoLimit, setVideoLimit] = useState(VIDEO_PAGE_SIZE);
@@ -213,19 +222,39 @@ export function PostBrowser({
             </span>
           )}
         </div>
-        <button
-          type="button"
-          onClick={onDownload}
-          disabled={selected.size === 0 || downloading}
-          className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all ${
-            selected.size > 0 && !downloading
-              ? "cursor-pointer bg-accent text-on-accent shadow-md shadow-accent/25 hover:bg-accent-vivid"
-              : "cursor-not-allowed border border-hairline bg-raised text-faint"
-          }`}
-        >
-          {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-          <span>{downloading ? "Queueing…" : `Download selected (${selected.size})`}</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={onSkip}
+            disabled={selected.size === 0 || skipping}
+            title="Skip selected items and record them in the folder library manifest"
+            className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+              selected.size > 0 && !skipping
+                ? "cursor-pointer border-amber-500/40 bg-amber-500/10 text-amber-700 hover:bg-amber-500/20 dark:text-amber-300"
+                : "cursor-not-allowed border-hairline bg-raised text-faint"
+            }`}
+          >
+            {skipping ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <EyeOff className="h-4 w-4" />
+            )}
+            <span>{skipping ? "Skipping…" : `Skip selected (${selected.size})`}</span>
+          </button>
+          <button
+            type="button"
+            onClick={onDownload}
+            disabled={selected.size === 0 || downloading}
+            className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all ${
+              selected.size > 0 && !downloading
+                ? "cursor-pointer bg-accent text-on-accent shadow-md shadow-accent/25 hover:bg-accent-vivid"
+                : "cursor-not-allowed border border-hairline bg-raised text-faint"
+            }`}
+          >
+            {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+            <span>{downloading ? "Queueing…" : `Download selected (${selected.size})`}</span>
+          </button>
+        </div>
       </div>
 
       {!hasResults && runningCount === 0 ? (
@@ -243,6 +272,7 @@ export function PostBrowser({
               onShowMore={() => setVideoLimit((limit) => limit + VIDEO_PAGE_SIZE)}
               selected={selected}
               downloaded={downloaded}
+              skipped={skipped}
               bookmarked={bookmarked}
               bookmarkBusy={bookmarkBusy}
               savedLinks={savedLinks}
@@ -262,6 +292,7 @@ export function PostBrowser({
               filter="image"
               selected={selected}
               downloaded={downloaded}
+              skipped={skipped}
               bookmarked={bookmarked}
               bookmarkBusy={bookmarkBusy}
               savedLinks={savedLinks}
@@ -301,6 +332,7 @@ function VideoShelf({
   onShowMore,
   selected,
   downloaded,
+  skipped,
   bookmarked,
   bookmarkBusy,
   savedLinks,
@@ -317,6 +349,7 @@ function VideoShelf({
   onShowMore: () => void;
   selected: Set<string>;
   downloaded: Set<string>;
+  skipped: Set<string>;
   bookmarked: Set<string>;
   bookmarkBusy: Set<string>;
   savedLinks: Set<string>;
@@ -361,6 +394,7 @@ function VideoShelf({
               isBookmarked={bookmarked.has(item.id)}
               bookmarkBusy={bookmarkBusy.has(post.id) || bookmarkBusy.has(item.id)}
               wasDownloaded={isItemDownloaded(item, downloaded)}
+              isSkipped={isItemSkipped(item, skipped)}
               chosenFormat={chosen}
               isLinkSaved={Boolean(linkUrl && savedLinks.has(linkUrl))}
               onToggle={() => onToggleMedia(item.id)}
@@ -398,6 +432,7 @@ function PostGroup({
   filter,
   selected,
   downloaded,
+  skipped,
   bookmarked,
   bookmarkBusy,
   savedLinks,
@@ -414,6 +449,7 @@ function PostGroup({
   filter: MediaFilter;
   selected: Set<string>;
   downloaded: Set<string>;
+  skipped: Set<string>;
   bookmarked: Set<string>;
   bookmarkBusy: Set<string>;
   savedLinks: Set<string>;
@@ -524,6 +560,7 @@ function PostGroup({
               isBookmarked={bookmarked.has(item.id)}
               bookmarkBusy={postBusy || bookmarkBusy.has(item.id)}
               wasDownloaded={isItemDownloaded(item, downloaded)}
+              isSkipped={isItemSkipped(item, skipped)}
               chosenFormat={chosen}
               onToggle={() => onToggleMedia(item.id)}
               onToggleBookmark={() => onToggleBookmark(item)}
@@ -575,6 +612,7 @@ function MediaCard({
   isBookmarked,
   bookmarkBusy,
   wasDownloaded,
+  isSkipped,
   chosenFormat,
   isLinkSaved = false,
   onToggle,
@@ -589,6 +627,7 @@ function MediaCard({
   isBookmarked: boolean;
   bookmarkBusy: boolean;
   wasDownloaded: boolean;
+  isSkipped: boolean;
   chosenFormat: ReturnType<typeof chooseFormat>;
   isLinkSaved?: boolean;
   onToggle: () => void;
@@ -669,9 +708,13 @@ function MediaCard({
           {displayRes ? ` · ${displayRes}` : ""}
           {duration ? ` · ${duration}` : ""}
         </span>
-        {wasDownloaded && (
-          <span className="absolute bottom-1.5 left-1.5 rounded bg-emerald-600/90 px-1.5 py-0.5 font-mono text-[9px] text-white">
-            downloaded
+        {(wasDownloaded || isSkipped) && (
+          <span
+            className={`absolute bottom-1.5 left-1.5 rounded px-1.5 py-0.5 font-mono text-[9px] text-white ${
+              isSkipped ? "bg-amber-600/90" : "bg-emerald-600/90"
+            }`}
+          >
+            {isSkipped ? "skipped" : "downloaded"}
           </span>
         )}
       </div>

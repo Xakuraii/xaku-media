@@ -77,6 +77,9 @@ class MediaItem(BaseModel):
     mime_type: str | None = None
     extension: str | None = None
     is_thumbnail: bool = False
+    # Transient status from the folder manifest (``downloaded``/``skipped``).
+    # Not persisted in SQLite; set when scan results are serialized.
+    library_status: str | None = None
 
     @property
     def dimensions_label(self) -> str | None:

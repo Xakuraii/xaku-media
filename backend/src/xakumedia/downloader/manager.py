@@ -30,6 +30,7 @@ from ..utils.naming import (
     get_next_sequence_number,
 )
 from .layout import destination_directory, user_folder
+from .library import apply_renames, record_download
 from .stream import download_stream
 
 logger = get_logger("downloader.manager")
@@ -150,6 +151,10 @@ class DownloadManager:
                 return
 
             mapping = {str(old): str(new) for old, new in renamed}
+            try:
+                apply_renames(renamed)
+            except Exception as exc:  # manifest bookkeeping is best effort
+                logger.warning(f"Could not update library manifest after renumbering: {exc}")
             try:
                 self.repository.remap_download_paths(mapping)
             except Exception as exc:  # never block a download on a path remap
@@ -1136,6 +1141,7 @@ class DownloadManager:
 
             task.mark_completed(final_path)
             self.repository.save_download_task(task)
+            record_download(media_item, final_path)
             logger.info(f"Task {task.id} completed successfully: {final_path}")
             _broadcast("completed", {"task": task.model_dump(mode="json")})
 

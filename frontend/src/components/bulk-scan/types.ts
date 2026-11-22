@@ -46,3 +46,24 @@ export function isItemDownloaded(
   if (item.original_url && downloaded.has(item.original_url)) return true;
   return false;
 }
+
+export function isItemSkipped(item: DiscoveredMediaItem, skipped: Set<string>): boolean {
+  if (skipped.has(item.id)) return true;
+  if (item.provider_media_id && skipped.has(item.provider_media_id)) return true;
+  if (item.original_url && skipped.has(item.original_url)) return true;
+  return false;
+}
+
+/** True when a scan item was downloaded or explicitly skipped before. */
+export function isItemHandled(
+  item: DiscoveredMediaItem,
+  downloaded: Set<string>,
+  skipped: Set<string> = new Set()
+): boolean {
+  return isItemDownloaded(item, downloaded) || isItemSkipped(item, skipped);
+}
+
+/** Stable keys used to remember a handled item locally. */
+export function itemKeys(item: DiscoveredMediaItem): string[] {
+  return [item.id, item.provider_media_id ?? "", item.original_url ?? ""].filter(Boolean);
+}

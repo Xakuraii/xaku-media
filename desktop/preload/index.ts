@@ -46,6 +46,7 @@ import type {
   ScanProgressEventPayload,
   ScanStartedPayload,
   SetDownloadConcurrencyResult,
+  SkipMediaItemsResult,
   StartBatchDownloadResult,
   StartDownloadResult,
   SupportedBrowsersResult,
@@ -185,6 +186,9 @@ const api: DesktopApi = {
   },
   deleteMediaItem: async (mediaId: string): Promise<{ id: string; deleted: boolean }> => {
     return ipcRenderer.invoke("python:deleteMediaItem", mediaId);
+  },
+  skipMediaItems: async (items: DiscoveredMediaItem[]): Promise<SkipMediaItemsResult> => {
+    return ipcRenderer.invoke("python:skipMediaItems", items);
   },
   startDownload: async (
     mediaItem: DiscoveredMediaItem,

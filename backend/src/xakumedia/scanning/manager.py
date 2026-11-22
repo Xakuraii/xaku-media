@@ -343,6 +343,9 @@ class ScanManager:
                 for item in new_items:
                     seen_media.add(item.id)
 
+                from ..downloader.library import annotate_items
+
+                annotate_items(new_items)
                 post.media_items = new_items
                 job.posts.append(post)
                 job.progress.posts_discovered += 1

@@ -13,6 +13,7 @@ import type {
   PostWithScan,
   ScanErrorInfo,
 } from "./types";
+import { itemKeys } from "./types";
 import { useScanJobs } from "./useScanJobs";
 import { useScanSelection } from "./useScanSelection";
 import { chooseFormat, countPosts, filterPosts, hostOf, parseUrls } from "./utils";
@@ -54,6 +55,8 @@ export function BulkScanView({
   const [dragging, setDragging] = useState<boolean>(false);
   const [focusedJobId, setFocusedJobId] = useState<string | null>(null);
   const [downloaded, setDownloaded] = useState<Set<string>>(new Set());
+  const [skipped, setSkipped] = useState<Set<string>>(new Set());
+  const [skipping, setSkipping] = useState<boolean>(false);
   const [bookmarked, setBookmarked] = useState<Set<string>>(new Set());
   const [bookmarkBusy, setBookmarkBusy] = useState<Set<string>>(new Set());
   const [bookmarking, setBookmarking] = useState<boolean>(false);
@@ -132,6 +135,33 @@ export function BulkScanView({
     void refreshSavedLinks();
   }, [refreshSavedLinks]);
 
+  // Scan payloads carry the folder-manifest status, so a rescan (or a scan from
+  // another device) marks already downloaded/skipped items without a restart.
+  useEffect(() => {
+    const nextDownloaded = new Set<string>();
+    const nextSkipped = new Set<string>();
+    for (const post of allPosts) {
+      for (const item of post.media_items) {
+        if (item.library_status === "downloaded") itemKeys(item).forEach((key) => nextDownloaded.add(key));
+        else if (item.library_status === "skipped") itemKeys(item).forEach((key) => nextSkipped.add(key));
+      }
+    }
+    if (nextDownloaded.size > 0) {
+      setDownloaded((prev) => {
+        const merged = new Set(prev);
+        nextDownloaded.forEach((key) => merged.add(key));
+        return merged;
+      });
+    }
+    if (nextSkipped.size > 0) {
+      setSkipped((prev) => {
+        const merged = new Set(prev);
+        nextSkipped.forEach((key) => merged.add(key));
+        return merged;
+      });
+    }
+  }, [allPosts]);
+
   const saveScanLink = async (url: string, title: string) => {
     if (!window.api?.saveSource) {
       setError({
@@ -174,7 +204,7 @@ export function BulkScanView({
     clearSelection,
     selectByType,
     invertSelection,
-  } = useScanSelection(allPosts, filteredPosts, filter, downloaded);
+  } = useScanSelection(allPosts, filteredPosts, filter, downloaded, skipped);
 
   const clearBusy = (key: string) =>
     setBookmarkBusy((prev) => {
@@ -389,6 +419,13 @@ export function BulkScanView({
       }));
       const result = await window.api.startBatchDownload(payload);
       setNotice(`Queued ${result.tasks.length} download${result.tasks.length === 1 ? "" : "s"}.`);
+      // An explicit download overrides an earlier skip; the manifest flips to
+      // "downloaded" when the task completes.
+      setSkipped((prev) => {
+        const next = new Set(prev);
+        for (const item of downloadable) itemKeys(item).forEach((key) => next.delete(key));
+        return next;
+      });
       onDownloadStarted?.();
       void refreshDownloaded();
       return true;
@@ -404,6 +441,38 @@ export function BulkScanView({
     if (selectedItems.length === 0) return;
     const queued = await queueDownloadItems(selectedItems);
     if (queued) clearSelection();
+  };
+
+  const skipSelected = async () => {
+    if (selectedItems.length === 0) return;
+    if (!window.api?.skipMediaItems) {
+      setError({
+        title: "Skip unavailable",
+        summary: "The desktop bridge is not available in this environment.",
+        steps: ["Run the desktop app instead of the browser preview."],
+        actions: [],
+      });
+      return;
+    }
+    setSkipping(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await window.api.skipMediaItems(selectedItems);
+      setSkipped((prev) => {
+        const next = new Set(prev);
+        for (const item of selectedItems) itemKeys(item).forEach((key) => next.add(key));
+        return next;
+      });
+      setNotice(
+        `Skipped ${result.count} item${result.count === 1 ? "" : "s"}; they will not show as new again.`
+      );
+      clearSelection();
+    } catch (err) {
+      setError(explainDownloadFailure(err));
+    } finally {
+      setSkipping(false);
+    }
   };
 
   return (
@@ -490,6 +559,7 @@ export function BulkScanView({
           counts={counts}
           selected={selected}
           downloaded={downloaded}
+          skipped={skipped}
           bookmarked={bookmarked}
           bookmarkBusy={bookmarkBusy}
           savedLinks={savedLinks}
@@ -514,6 +584,8 @@ export function BulkScanView({
           onInvertSelection={invertSelection}
           onClearSelection={clearSelection}
           onDownload={() => void downloadSelected()}
+          onSkip={() => void skipSelected()}
+          skipping={skipping}
         />
       )}
 

@@ -286,9 +286,28 @@ class RpcDispatcher:
             if not scan_id or not isinstance(scan_id, str):
                 raise TypeError("Parameter 'scan_id' is required and must be a string.")
             from ..db import default_repository
+            from ..downloader.library import annotate_items
 
             posts = default_repository.get_scan_posts(scan_id)
+            for post in posts:
+                annotate_items(post.media_items)
             return {"posts": [post.model_dump(mode="json") for post in posts]}
+
+        def skip_media_items_handler(params: dict[str, Any]) -> dict[str, Any]:
+            raw_items = params.get("items")
+            if not raw_items or not isinstance(raw_items, list):
+                raise TypeError("Parameter 'items' is required and must be a non-empty list.")
+
+            from ..downloader.library import record_skipped
+            from ..models.media import MediaItem
+
+            items = [MediaItem.model_validate(item) for item in raw_items]
+            identities = record_skipped(items)
+            return {
+                "count": len(items),
+                "identities": identities,
+                "status": "skipped",
+            }
 
         def get_library_stats_handler(params: dict[str, Any]) -> dict[str, Any]:
             from ..db import default_repository
@@ -839,6 +858,7 @@ class RpcDispatcher:
         self.register("get_scan_status", get_scan_status_handler)
         self.register("list_scan_jobs", list_scan_jobs_handler)
         self.register("get_scan_posts", get_scan_posts_handler)
+        self.register("skip_media_items", skip_media_items_handler)
         self.register("get_library_stats", get_library_stats_handler)
         self.register("get_provider_capabilities", get_provider_capabilities_handler)
         self.register("save_media_item", save_media_item_handler)
