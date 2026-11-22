@@ -1543,11 +1543,12 @@ class MediaRepository:
             )
 
     def get_known_item_urls_for_source(self, source_url: str) -> set[str]:
-        """Retrieve set of known item original_url and source_url strings previously recorded."""
+        """Retrieve set of known per-item URLs previously recorded for a source."""
+        root_normalized = source_url.rstrip("/")
         with get_db_session(self.db_path) as conn:
             cursor = conn.execute(
                 """
-                SELECT mi.original_url, mi.source_url
+                SELECT mi.original_url, mi.source_url, mi.post_url
                 FROM media_items mi
                 JOIN scan_history_items shi ON mi.id = shi.media_id
                 JOIN scan_history sh ON shi.scan_id = sh.id
@@ -1559,7 +1560,9 @@ class MediaRepository:
             for row in cursor.fetchall():
                 if row["original_url"]:
                     urls.add(row["original_url"])
-                if row["source_url"]:
+                if row["post_url"] and row["post_url"].rstrip("/") != root_normalized:
+                    urls.add(row["post_url"])
+                if row["source_url"] and row["source_url"].rstrip("/") != root_normalized:
                     urls.add(row["source_url"])
             return urls
 

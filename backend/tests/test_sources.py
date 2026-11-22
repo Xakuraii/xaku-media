@@ -370,3 +370,142 @@ def test_tiktok_secuid_error_reports_clear_reason(monkeypatch) -> None:
         assert exc.details["reason"] == "tiktok_secuid_unavailable"
         assert exc.details["site"] == "tiktok"
         assert "@yuucy_21" in exc.message
+
+
+def test_rescan_keeps_downloaded_library_when_creator_hides_or_deletes_posts(
+    repo: MediaRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from xakumedia.core.config import default_config
+    from xakumedia.downloader.library import record_download, scan_download_library
+    from xakumedia.models.queue import DownloadTask, TaskStatus
+
+    orig_dir = default_config.download_dir
+    default_config.download_dir = tmp_path
+    try:
+        video_dir = tmp_path / "tiktok" / "creator_a" / "video"
+        video_dir.mkdir(parents=True, exist_ok=True)
+        local_file = video_dir / "creator_a_vdo_001.mp4"
+        local_file.write_bytes(b"fake-mp4-data")
+
+        item_old = MediaItem(
+            id="old-vdo-1",
+            source_url="https://www.tiktok.com/@creator_a",
+            post_url="https://www.tiktok.com/@creator_a/video/111",
+            original_url="https://www.tiktok.com/@creator_a/video/111",
+            media_type=MediaType.VIDEO,
+            provider="ytdlp",
+            provider_media_id="111",
+            title="Old video later hidden",
+            author="creator_a",
+        )
+        source = SavedSource(
+            id="src-creator-a",
+            url="https://www.tiktok.com/@creator_a",
+            title="@creator_a",
+            platform="Tiktok",
+        )
+        repo.save_source(source)
+        classified = ClassifiedUrl(
+            raw_url=source.url,
+            normalized_url=source.url,
+            category=UrlCategory.CHANNEL,
+            platform="tiktok",
+        )
+        repo.save_scan_result(classified, [item_old])
+        repo.save_download_task(
+            DownloadTask(
+                id="task-old-1",
+                media_item=item_old,
+                status=TaskStatus.COMPLETED,
+                destination_path=local_file,
+            )
+        )
+        record_download(item_old, local_file)
+
+        # Later, creator hides/deletes post 111 and uploads post 222 (or deletes all)
+        item_new = MediaItem(
+            id="new-vdo-2",
+            source_url="https://www.tiktok.com/@creator_a",
+            post_url="https://www.tiktok.com/@creator_a/video/222",
+            original_url="https://www.tiktok.com/@creator_a/video/222",
+            media_type=MediaType.VIDEO,
+            provider="ytdlp",
+            provider_media_id="222",
+            title="Brand new video",
+            author="creator_a",
+        )
+        with patch(
+            "xakumedia.sources.rescan.scan_source_url",
+            return_value=(classified, [item_new]),
+        ):
+            result = incremental_rescan_source(source, repository=repo)
+
+        assert result.new_item_count == 1
+        assert result.new_items[0].id == "new-vdo-2"
+
+        # Old video remains on disk, in library manifest, and in SQLite history/tasks
+        assert local_file.exists()
+        lib_summary = scan_download_library(tmp_path)
+        assert lib_summary["totals"]["downloaded"] == 1
+        assert repo.get_download_task("task-old-1") is not None
+
+        # Even if creator hides/deletes ALL videos later, rescan preserves existing library
+        with patch(
+            "xakumedia.sources.rescan.scan_source_url",
+            return_value=(classified, []),
+        ):
+            empty_result = incremental_rescan_source(source, repository=repo)
+
+        assert empty_result.total_found == 0
+        assert local_file.exists()
+        assert scan_download_library(tmp_path)["totals"]["downloaded"] == 1
+        assert repo.get_download_task("task-old-1") is not None
+    finally:
+        default_config.download_dir = orig_dir
+
+
+def test_scan_source_url_routes_tiktok_through_unified_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from xakumedia.models.post import Post
+    from xakumedia.sources.rescan import scan_source_url
+
+    sample_item = MediaItem(
+        id="tt-item-1",
+        source_url="https://www.tiktok.com/@creator_x",
+        post_url="https://www.tiktok.com/@creator_x/video/999",
+        original_url="https://www.tiktok.com/@creator_x/video/999",
+        media_type=MediaType.VIDEO,
+        provider="ytdlp",
+        provider_media_id="999",
+        title="Sample clip",
+        author="creator_x",
+    )
+    sample_post = Post(
+        id="tt-post-1",
+        provider="ytdlp",
+        source_url="https://www.tiktok.com/@creator_x",
+        post_url="https://www.tiktok.com/@creator_x/video/999",
+        author="creator_x",
+        media_items=[sample_item],
+    )
+
+    class _FakeProvider:
+        def classify(self, url: str) -> ClassifiedUrl:
+            return ClassifiedUrl(
+                raw_url=url,
+                normalized_url=url,
+                category=UrlCategory.CHANNEL,
+                platform="tiktok",
+            )
+
+        def iter_posts(self, url: str, options: object, cancel_event: object):
+            yield sample_post
+
+    monkeypatch.setattr("xakumedia.sources.rescan.resolve_provider", lambda _u: _FakeProvider())
+    classified, items = scan_source_url("https://www.tiktok.com/@creator_x")
+    assert classified is not None
+    assert classified.platform == "tiktok"
+    assert [it.id for it in items] == ["tt-item-1"]

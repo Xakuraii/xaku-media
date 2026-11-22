@@ -40,7 +40,13 @@ from .base import BaseProvider, PageCallback, TotalCallback, host_of, make_media
 logger = get_logger("providers.ytdlp")
 
 YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "music.youtube.com"}
-TIKTOK_HOSTS = {"tiktok.com", "www.tiktok.com", "m.tiktok.com"}
+TIKTOK_HOSTS = {
+    "tiktok.com",
+    "www.tiktok.com",
+    "m.tiktok.com",
+    "vm.tiktok.com",
+    "vt.tiktok.com",
+}
 VIDEO_HOSTS = {
     "vimeo.com",
     "www.vimeo.com",
@@ -58,7 +64,7 @@ HYDRATE_WORKERS = 6
 
 _CHANNEL_PATH = re.compile(r"^/(@[^/]+|channel/[^/]+|c/[^/]+|user/[^/]+)/?$")
 _CHANNEL_TABS = ("videos", "shorts", "streams")
-_TIKTOK_PROFILE_PATH = re.compile(r"^/@[^/]+/?$")
+_TIKTOK_PROFILE_PATH = re.compile(r"^/@([^/]+)(?:/videos)?/?$")
 _TIKTOK_PHOTO_PATH = re.compile(r"^/(@[^/]+)/photo/(\d+)")
 
 
@@ -134,9 +140,14 @@ def is_collection_url(url: str) -> bool:
 
 
 def enumerate_url(url: str) -> str:
-    """Normalize a YouTube channel root to its Videos tab for enumeration."""
+    """Normalize a channel/profile URL to the canonical form for enumeration."""
     parts = urlsplit(url)
     host = (parts.hostname or "").lower()
+    if host in TIKTOK_HOSTS:
+        match = _TIKTOK_PROFILE_PATH.match(parts.path)
+        if match:
+            return f"https://www.tiktok.com/@{match.group(1)}"
+        return url
     if host not in YOUTUBE_HOSTS:
         return url
     match = _CHANNEL_PATH.match(parts.path)
