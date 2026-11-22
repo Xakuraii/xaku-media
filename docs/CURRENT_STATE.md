@@ -1,6 +1,6 @@
 # XakuMedia — Current Project State
 
-**Last Updated:** November 22, 2026
+**Last Updated:** November 23, 2026
 **Active Milestone:** Release v1.0.0 — Per-Folder Library Manifests, Quality Selection & UI Polish
 **Overall Status:** In Progress - v1.0.0 features implemented and unit/build verified; gallery-dl platforms remain subject to site/auth coverage
 
@@ -278,6 +278,13 @@ The system relies on a secure 3-tier desktop architecture:
     - Full backend suite: **166 passed**.
     - `ruff check backend/src backend/tests`: clean.
     - `npm run typecheck:frontend`: clean; `npm run build:frontend`: clean; `npm run build:desktop`: clean; `npm run test:desktop`: all smoke tests passed, including the bulk discovery IPC check.
+
+- **In-App Remote Media Preview & Release Update UI (Milestone 29 follow-up):**
+  - **Scan Media click-to-preview (`PostBrowser.tsx`, `BulkScanView.tsx`, `App.tsx`):** Clicking any discovered image or video card thumbnail opens the in-app lightbox or video/audio player immediately with an inline **Skip / Unskip** toggle, playback speed controls, and one-click download so users can inspect media before deciding what to keep.
+  - **Header- & Cookie-Aware Preview Proxy (`desktop/main/index.ts`, `desktop/preload/index.ts`, `backend/src/xakumedia/server/dispatcher.py`):** Added `app:registerPreviewStream` + `media-loader://remote/<token>` backed by `node:http`/`node:https` (`fetchRemoteStreamViaNode`) instead of Chromium's `net.fetch`, avoiding forbidden-header stripping (`Cookie`, `User-Agent`, `Referer`), forwarding HTTP `Range` requests, following up to 5 SSRF-validated redirects cleanly, and attaching matching domain cookies via `get_cookie_header` without exposing cookies on cross-site redirects.
+  - **Chromium Codec Compatibility (`App.tsx` `pickPlayableRemoteStream`):** Scores muxed (`!requires_merge`) Chromium-compatible codecs (`h264`, `avc`, `vp8`, `vp9`, `av1`) above `h265`/`hevc`/`bytevc1` streams for preview playback so sites returning dual HEVC/H.264 streams (e.g., TikTok) play natively in Electron without affecting full-quality download selection.
+  - **Top-Right Update Indicator & Auto-Popup (`App.tsx`, `desktop/main/index.ts` `app:checkForUpdates`):** Placed the always-visible **Update** button in the top-right desktop header and added an automatic startup popup modal whenever a newer GitHub Release exists.
+  - **Verification:** `ruff check backend/` clean; `tsc --noEmit` clean; `pytest backend/` **240 passed**; `npm run build:all` clean; live Node HTTPS verification against TikTok `@berrry.18` H.264 stream + cookie header returned `HTTP 206 video/mp4` with valid MP4 header bytes.
 
 ---
 

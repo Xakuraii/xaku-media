@@ -395,6 +395,27 @@ def test_dispatcher_auth_handlers(repo: MediaRepository) -> None:
     assert len(res.result["profiles"]) == 1
     assert res.result["profiles"][0]["domain"] == "testsite.com"
 
+    # 3b. get_cookie_header
+    req = JsonRpcRequest(
+        id="3b",
+        method="get_cookie_header",
+        params={"url": "https://cdn.testsite.com/video.mp4"},
+    )
+    res = dispatcher.dispatch(req)
+    assert res.error is None
+    cookie_header = res.result["cookie_header"]
+    assert cookie_header is not None
+    assert "session_id=abc123xyz" in cookie_header
+
+    req = JsonRpcRequest(
+        id="3c",
+        method="get_cookie_header",
+        params={"url": "https://unrelated.org/video.mp4"},
+    )
+    res = dispatcher.dispatch(req)
+    assert res.error is None
+    assert res.result["cookie_header"] is None
+
     # 4. set_domain_headers
     req = JsonRpcRequest(
         id="4",

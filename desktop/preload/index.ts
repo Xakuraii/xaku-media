@@ -526,9 +526,10 @@ const api: DesktopApi = {
   },
   registerPreviewStream: async (
     url: string,
-    headers?: Record<string, string>
+    headers?: Record<string, string>,
+    sourceUrl?: string | null
   ): Promise<string | null> => {
-    return ipcRenderer.invoke("app:registerPreviewStream", url, headers);
+    return ipcRenderer.invoke("app:registerPreviewStream", url, headers, sourceUrl);
   },
 };
 

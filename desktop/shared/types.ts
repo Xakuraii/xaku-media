@@ -765,7 +765,8 @@ export interface DesktopApi {
    */
   registerPreviewStream?: (
     url: string,
-    headers?: Record<string, string>
+    headers?: Record<string, string>,
+    sourceUrl?: string | null
   ) => Promise<string | null>;
 
   /**

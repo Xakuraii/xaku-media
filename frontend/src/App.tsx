@@ -218,13 +218,55 @@ export const App: React.FC = () => {
       const headers = formats.find((f) => f.http_headers)?.http_headers;
       return { url, headers };
     }
+
+    const withUrls = formats.filter((f) => Boolean(f.url));
     const chosen = chooseFormat(item, preferredResolution);
-    const muxedPlayable = formats.find((f) => f.url && !f.requires_merge);
-    const preferredPlayable =
-      chosen && chosen.url && !chosen.requires_merge ? chosen : muxedPlayable || chosen || formats.find((f) => f.url);
+
+    if (withUrls.length > 0) {
+      const videoCandidates = withUrls.filter(
+        (f) => f.video_codec?.toLowerCase() !== "none" && !/audio/i.test(f.format_id || "")
+      );
+      const pool = videoCandidates.length > 0 ? videoCandidates : withUrls;
+
+      const parseHeight = (res?: string | null): number => {
+        if (!res) return 0;
+        const pMatch = res.match(/(\d+)p/i);
+        if (pMatch) return Number.parseInt(pMatch[1], 10) || 0;
+        const xMatch = res.match(/\d+\s*[xX×]\s*(\d+)/);
+        return xMatch ? Number.parseInt(xMatch[1], 10) || 0 : 0;
+      };
+      const targetHeight = preferredResolution === "best" ? 2160 : parseHeight(preferredResolution) || 1080;
+
+      const scoreFormat = (f: typeof withUrls[number]): number => {
+        const codecText = `${f.video_codec || ""} ${f.format_id || ""}`;
+        const isHevc = /h265|hevc|bytevc|hvc1|hev1/i.test(codecText);
+        const isWebVideo = /h264|avc|vp8|vp9|av1/i.test(codecText);
+        const container = (f.container || "").toLowerCase();
+        const isWebContainer = container === "mp4" || container === "webm";
+        const height = parseHeight(f.resolution);
+        const cappedHeight = height > 0 ? Math.min(height, targetHeight) : 0;
+
+        let score = 0;
+        if (!f.requires_merge) score += 500;
+        if (isHevc) score -= 1000;
+        else if (isWebVideo) score += 200;
+        if (isWebContainer) score += 50;
+        if (chosen && chosen.format_id === f.format_id) score += 25;
+        score += cappedHeight * 0.1;
+        return score;
+      };
+
+      const ranked = [...pool].sort((a, b) => scoreFormat(b) - scoreFormat(a));
+      const best = ranked[0];
+      return {
+        url: best.url || item.original_url || "",
+        headers: best.http_headers || formats.find((f) => f.http_headers)?.http_headers,
+      };
+    }
+
     return {
-      url: preferredPlayable?.url || item.original_url || "",
-      headers: preferredPlayable?.http_headers || formats.find((f) => f.http_headers)?.http_headers,
+      url: chosen?.url || item.original_url || "",
+      headers: chosen?.http_headers || formats.find((f) => f.http_headers)?.http_headers,
     };
   };
 
@@ -251,7 +293,11 @@ export const App: React.FC = () => {
       streamUrl = picked.url || null;
       if (streamUrl && /^https?:\/\//i.test(streamUrl) && window.api?.registerPreviewStream) {
         try {
-          const proxied = await window.api.registerPreviewStream(streamUrl, picked.headers);
+          const proxied = await window.api.registerPreviewStream(
+            streamUrl,
+            picked.headers,
+            item.source_url
+          );
           if (proxied) streamUrl = proxied;
         } catch {
           // Fall back to direct URL if proxy registration fails

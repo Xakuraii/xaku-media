@@ -787,6 +787,35 @@ class RpcDispatcher:
             deleted = repo.delete_domain_headers(str(domain))
             return {"deleted": deleted, "domain": domain}
 
+        def get_cookie_header_handler(params: dict[str, Any]) -> dict[str, Any]:
+            url = params.get("url")
+            source_url = params.get("source_url")
+            candidates = [
+                str(candidate).strip()
+                for candidate in (url, source_url)
+                if isinstance(candidate, str) and candidate.strip()
+            ]
+            if not candidates:
+                raise TypeError("Parameter 'url' or 'source_url' is required.")
+
+            from ..auth.cookies import get_cookies_dict_from_file
+            from ..db import default_repository
+
+            repo = self.repository or default_repository
+            for candidate in candidates:
+                profile = repo.get_cookie_profile_for_domain(candidate)
+                if not profile or not profile.cookie_file_path:
+                    continue
+                try:
+                    cookies_dict = get_cookies_dict_from_file(profile.cookie_file_path)
+                except Exception as exc:
+                    logger.debug(f"Could not read cookie file for {candidate}: {exc}")
+                    continue
+                if cookies_dict:
+                    cookie_header = "; ".join(f"{k}={v}" for k, v in cookies_dict.items())
+                    return {"cookie_header": cookie_header}
+            return {"cookie_header": None}
+
         def save_source_handler(params: dict[str, Any]) -> dict[str, Any]:
             import uuid
 
@@ -1009,6 +1038,7 @@ class RpcDispatcher:
         self.register("get_domain_headers", get_domain_headers_handler)
         self.register("set_domain_headers", set_domain_headers_handler)
         self.register("delete_domain_headers", delete_domain_headers_handler)
+        self.register("get_cookie_header", get_cookie_header_handler)
         self.register("save_source", save_source_handler)
         self.register("get_saved_sources", get_saved_sources_handler)
         self.register("get_source", get_source_handler)
