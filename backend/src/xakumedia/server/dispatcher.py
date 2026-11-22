@@ -823,11 +823,28 @@ class RpcDispatcher:
 
         def get_saved_sources_handler(params: dict[str, Any]) -> dict[str, Any]:
             from ..db import default_repository
+            from ..sources.rescan import _is_usable_avatar_url, enrich_source_metadata
 
             repo = self.repository or default_repository
             tag = params.get("tag")
             sources = repo.list_saved_sources(tag=tag)
-            return {"sources": [s.model_dump() for s in sources], "count": len(sources)}
+            repaired: list[Any] = []
+            for s in sources:
+                needs_repair = (
+                    not _is_usable_avatar_url(s.thumbnail_url)
+                    or not s.author
+                    or s.author.strip().lower() in ("gallery", "unknown")
+                )
+                if needs_repair:
+                    before = (s.thumbnail_url, s.author, s.title, s.platform)
+                    enrich_source_metadata(s, repository=repo, fetch_remote=False)
+                    if (s.thumbnail_url, s.author, s.title, s.platform) != before:
+                        try:
+                            s = repo.save_source(s)
+                        except Exception:
+                            pass
+                repaired.append(s)
+            return {"sources": [s.model_dump() for s in repaired], "count": len(repaired)}
 
         def get_source_handler(params: dict[str, Any]) -> dict[str, Any]:
             from ..db import default_repository

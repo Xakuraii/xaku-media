@@ -56,6 +56,50 @@ _META_IMAGE_PATTERNS = (
 )
 
 
+_BAD_AVATAR_PATH_RE = re.compile(
+    r"/(?:avatar|posts|photos|videos|reels|likes|reposts)/?$",
+    re.IGNORECASE,
+)
+
+
+def _is_usable_avatar_url(url: str | None) -> bool:
+    """Return True when ``url`` is an actual image/media asset rather than a web page."""
+    if not url or not isinstance(url, str):
+        return False
+    stripped = url.strip()
+    if not stripped:
+        return False
+    if stripped.startswith(("media-loader://", "data:image/")):
+        return True
+    try:
+        parts = urlsplit(stripped)
+    except ValueError:
+        return False
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        return False
+    path = (parts.path or "").rstrip("/")
+    if not path:
+        return False
+    if _BAD_AVATAR_PATH_RE.search(path) or re.match(r"^/@[^/]+$", path):
+        return False
+    host = (parts.hostname or "").lower()
+    if host.endswith(
+        ("tiktok.com", "instagram.com", "facebook.com", "fb.com", "x.com", "twitter.com")
+    ):
+        # Bare user/page routes on main site hosts are HTML pages, not CDN image assets.
+        if not parts.query and "." not in path.rsplit("/", 1)[-1]:
+            return False
+    return not path.lower().endswith((".html", ".htm", ".php"))
+
+
+def _clean_author(author: str | None, fallback: str | None = None) -> str | None:
+    if isinstance(author, str):
+        stripped = author.strip().lstrip("@")
+        if stripped and stripped.lower() not in ("gallery", "unknown", "none", "user"):
+            return stripped
+    return fallback
+
+
 def infer_source_identity(url: str) -> tuple[str | None, str | None]:
     """Infer ``(platform, author)`` from a source URL without network calls."""
     try:
@@ -104,29 +148,51 @@ def _lookup_cached_avatar(repo: MediaRepository, url: str, author: str | None) -
     """Return a known thumbnail/avatar URL from local SQLite history when available."""
     try:
         with get_db_session(repo.db_path) as conn:
-            row = conn.execute(
+            rows = conn.execute(
                 """
-                SELECT thumbnail_url FROM media_items
+                SELECT thumbnail_url,
+                       CASE WHEN media_type = 'image' THEN original_url ELSE NULL END AS img_url
+                FROM media_items
                 WHERE (source_url = ? OR post_url = ?)
-                  AND thumbnail_url IS NOT NULL AND thumbnail_url != ''
-                ORDER BY created_at DESC LIMIT 1
+                  AND (
+                    (thumbnail_url IS NOT NULL AND thumbnail_url != '')
+                    OR (
+                      media_type = 'image'
+                      AND original_url IS NOT NULL
+                      AND original_url != ''
+                    )
+                  )
+                ORDER BY created_at DESC LIMIT 25
                 """,
                 (url, url),
-            ).fetchone()
-            if row and row["thumbnail_url"]:
-                return str(row["thumbnail_url"])
+            ).fetchall()
+            for row in rows:
+                for candidate in (row["thumbnail_url"], row["img_url"]):
+                    if _is_usable_avatar_url(candidate):
+                        return str(candidate)
             if author:
-                row = conn.execute(
+                rows = conn.execute(
                     """
-                    SELECT thumbnail_url FROM media_items
+                    SELECT thumbnail_url,
+                           CASE WHEN media_type = 'image' THEN original_url ELSE NULL END AS img_url
+                    FROM media_items
                     WHERE LOWER(author) = LOWER(?)
-                      AND thumbnail_url IS NOT NULL AND thumbnail_url != ''
-                    ORDER BY created_at DESC LIMIT 1
+                      AND (
+                        (thumbnail_url IS NOT NULL AND thumbnail_url != '')
+                        OR (
+                          media_type = 'image'
+                          AND original_url IS NOT NULL
+                          AND original_url != ''
+                        )
+                      )
+                    ORDER BY created_at DESC LIMIT 25
                     """,
                     (author,),
-                ).fetchone()
-                if row and row["thumbnail_url"]:
-                    return str(row["thumbnail_url"])
+                ).fetchall()
+                for row in rows:
+                    for candidate in (row["thumbnail_url"], row["img_url"]):
+                        if _is_usable_avatar_url(candidate):
+                            return str(candidate)
     except Exception:
         pass
     return None
@@ -173,10 +239,17 @@ def enrich_source_metadata(
     inferred_platform, inferred_author = infer_source_identity(source.url)
     if not source.platform and inferred_platform:
         source.platform = inferred_platform
-    if not source.author and inferred_author:
-        source.author = inferred_author
-    if (source.title == source.url or not source.title) and source.author:
+
+    cleaned_author = _clean_author(source.author, inferred_author)
+    if cleaned_author:
+        source.author = cleaned_author
+
+    generic_titles = {source.url, "", "facebook.com", "tiktok.com", "instagram.com", "x.com"}
+    if ((source.title or "").strip().lower() in generic_titles) and source.author:
         source.title = f"@{source.author}" if not source.author.startswith("@") else source.author
+
+    if not _is_usable_avatar_url(source.thumbnail_url):
+        source.thumbnail_url = None
 
     if not source.thumbnail_url:
         cached = _lookup_cached_avatar(repo, source.url, source.author)
@@ -184,7 +257,7 @@ def enrich_source_metadata(
             source.thumbnail_url = cached
         elif fetch_remote:
             remote = _fetch_page_avatar(source.url)
-            if remote:
+            if remote and _is_usable_avatar_url(remote):
                 source.thumbnail_url = remote
     return source
 

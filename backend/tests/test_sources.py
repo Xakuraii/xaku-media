@@ -284,3 +284,89 @@ def test_enrich_source_metadata_infers_identity_and_uses_cached_pfp(repo: MediaR
     assert enriched.author == "xakuraii"
     assert enriched.title == "@xakuraii"
     assert enriched.thumbnail_url == "https://cdn.example.com/avatar.jpg"
+
+
+def test_get_saved_sources_repairs_bad_queue_avatars_and_gallery_author(
+    repo: MediaRepository,
+) -> None:
+    classified = ClassifiedUrl(
+        raw_url="https://www.facebook.com/zerm.mer",
+        normalized_url="https://www.facebook.com/zerm.mer",
+        category=UrlCategory.GALLERY,
+    )
+    bad_queue_item = MediaItem(
+        id="bad-queue-1",
+        source_url="https://www.facebook.com/zerm.mer",
+        media_type=MediaType.IMAGE,
+        author="gallery",
+        thumbnail_url="https://www.facebook.com/zerm.mer/photos",
+        original_url="https://www.facebook.com/zerm.mer/photos",
+    )
+    real_img_item = MediaItem(
+        id="real-img-1",
+        source_url="https://www.facebook.com/zerm.mer",
+        media_type=MediaType.IMAGE,
+        author="zerm.mer",
+        thumbnail_url=None,
+        original_url="https://scontent.xx.fbcdn.net/v/t39.30808-6/photo.jpg",
+    )
+    repo.save_scan_result(classified, [bad_queue_item, real_img_item])
+    repo.save_source(
+        SavedSource(
+            id="src-fb-broken",
+            url="https://www.facebook.com/zerm.mer",
+            title="facebook.com",
+            platform="Facebook",
+            author="gallery",
+            thumbnail_url="https://www.facebook.com/zerm.mer/photos",
+        )
+    )
+
+    dispatcher = RpcDispatcher(repository=repo)
+    res = dispatcher.dispatch(JsonRpcRequest(id="fix-1", method="get_saved_sources"))
+    assert res.error is None
+    src = res.result["sources"][0]
+    assert src["author"] == "zerm.mer"
+    assert src["title"] == "@zerm.mer"
+    assert src["thumbnail_url"] == "https://scontent.xx.fbcdn.net/v/t39.30808-6/photo.jpg"
+
+
+def test_tiktok_secuid_error_reports_clear_reason(monkeypatch) -> None:
+    import threading
+
+    from yt_dlp.utils import DownloadError
+
+    from xakumedia.exceptions import MediaUnavailableError
+    from xakumedia.providers.base import ScanOptions
+    from xakumedia.providers.ytdlp import YtDlpProvider
+
+    class _FakeYdl:
+        def __init__(self, _opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def extract_info(self, url: str, download: bool = False):
+            raise DownloadError(
+                "ERROR: [tiktok:user] yuucy_21: Unable to extract secondary user ID."
+            )
+
+    monkeypatch.setattr("yt_dlp.YoutubeDL", _FakeYdl)
+    provider = YtDlpProvider()
+    try:
+        list(
+            provider.iter_posts(
+                "https://www.tiktok.com/@yuucy_21",
+                ScanOptions(max_posts=5),
+                cancel_event=threading.Event(),
+            )
+        )
+        raise AssertionError("Expected MediaUnavailableError")
+    except MediaUnavailableError as exc:
+        assert exc.details["reason"] == "tiktok_secuid_unavailable"
+        assert exc.details["site"] == "tiktok"
+        assert "@yuucy_21" in exc.message
