@@ -62,6 +62,7 @@ export function BulkScanView({
   const [skipping, setSkipping] = useState<boolean>(false);
   const [bookmarking, setBookmarking] = useState<boolean>(false);
   const [savedLinks, setSavedLinks] = useState<Set<string>>(new Set());
+  const [savedAvatars, setSavedAvatars] = useState<Map<string, string>>(new Map());
   const [preferredResolution, setPreferredResolution] = useState<string>("1080p");
   const [hideSkipped, setHideSkipped] = useState<boolean>(false);
   const [refreshingStats, setRefreshingStats] = useState<boolean>(false);
@@ -116,7 +117,16 @@ export function BulkScanView({
   const refreshSavedLinks = useCallback(async () => {
     try {
       const result = await window.api?.getSavedSources?.();
-      if (result) setSavedLinks(new Set((result.sources || []).map((source) => source.url)));
+      if (result) {
+        const links = new Set<string>();
+        const avatars = new Map<string, string>();
+        for (const source of result.sources || []) {
+          links.add(source.url);
+          if (source.thumbnail_url) avatars.set(source.url, source.thumbnail_url);
+        }
+        setSavedLinks(links);
+        setSavedAvatars(avatars);
+      }
     } catch {
       // Non-fatal; Save buttons simply start unset.
     }
@@ -169,6 +179,7 @@ export function BulkScanView({
     }
     setError(null);
     try {
+      const alreadySaved = savedLinks.has(url);
       await window.api.saveSource({
         url,
         title: title || url,
@@ -176,7 +187,14 @@ export function BulkScanView({
         thumbnail_url: extra?.thumbnail_url || undefined,
       });
       setSavedLinks((prev) => new Set(prev).add(url));
-      setNotice(`Saved source link: ${url}`);
+      if (extra?.thumbnail_url) {
+        setSavedAvatars((prev) => new Map(prev).set(url, extra.thumbnail_url!));
+      }
+      setNotice(
+        alreadySaved && extra?.thumbnail_url
+          ? `Updated profile avatar for ${title || url} in Saved Sources.`
+          : `Saved source link: ${url}`
+      );
     } catch (err) {
       setError(explainStartFailure(err));
     }
@@ -674,6 +692,7 @@ export function BulkScanView({
           downloaded={downloaded}
           skipped={skipped}
           savedLinks={savedLinks}
+          savedAvatars={savedAvatars}
           runningCount={runningJobs.length}
           totalProgress={totalProgress}
           filter={filter}

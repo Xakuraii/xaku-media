@@ -14,12 +14,41 @@ import {
 } from "lucide-react";
 import type { DiscoveredMediaItem } from "../../../../desktop/shared/types";
 import { isItemDownloaded, isItemSkipped, type MediaFilter, type PostWithScan } from "./types";
-import { chooseFormat, formatBytes, visibleMedia } from "./utils";
+import { chooseFormat, formatBytes, hostOf, visibleMedia } from "./utils";
 
 /** Keep the DOM small while a large scan is still streaming in. */
 const POST_PAGE_SIZE = 24;
 const GROUP_MEDIA_PAGE_SIZE = 12;
 const VIDEO_PAGE_SIZE = 120;
+
+function cleanCreatorHandle(raw?: string | null): string | null {
+  const trimmed = (raw || "").trim().replace(/^@/, "");
+  if (!trimmed || ["gallery", "unknown", "none", "user"].includes(trimmed.toLowerCase())) {
+    return null;
+  }
+  return trimmed;
+}
+
+function mainSourceFor(post: PostWithScan, item?: DiscoveredMediaItem) {
+  const url = post.source_url || item?.source_url || post.post_url || item?.original_url || "";
+  let author = cleanCreatorHandle(item?.author) || cleanCreatorHandle(post.author);
+  if (!author && url) {
+    try {
+      const seg = new URL(url).pathname.split("/").filter(Boolean)[0];
+      if (seg && !["watch", "playlist", "shorts", "reel", "reels", "p", "explore", "share"].includes(seg)) {
+        author = cleanCreatorHandle(seg);
+      }
+    } catch {
+      // ignore invalid url
+    }
+  }
+  const title = author ? `@${author}` : url ? hostOf(url) : "Saved Source";
+  return { url, author, title };
+}
+
+function avatarThumbFor(item: DiscoveredMediaItem): string | null {
+  return item.thumbnail_url || item.original_url || null;
+}
 
 interface PostBrowserProps {
   filteredPosts: PostWithScan[];
@@ -28,6 +57,7 @@ interface PostBrowserProps {
   downloaded: Set<string>;
   skipped: Set<string>;
   savedLinks: Set<string>;
+  savedAvatars?: Map<string, string>;
   runningCount: number;
   totalProgress: { posts: number; media: number };
   filter: MediaFilter;
@@ -70,6 +100,7 @@ export function PostBrowser({
   downloaded,
   skipped,
   savedLinks,
+  savedAvatars,
   runningCount,
   totalProgress,
   filter,
@@ -326,6 +357,7 @@ export function PostBrowser({
               downloaded={downloaded}
               skipped={skipped}
               savedLinks={savedLinks}
+              savedAvatars={savedAvatars}
               preferredResolution={preferredResolution}
               downloading={downloading}
               onToggleMedia={onToggleMedia}
@@ -343,6 +375,7 @@ export function PostBrowser({
               downloaded={downloaded}
               skipped={skipped}
               savedLinks={savedLinks}
+              savedAvatars={savedAvatars}
               preferredResolution={preferredResolution}
               downloading={downloading}
               onToggleMedia={onToggleMedia}
@@ -379,6 +412,7 @@ function VideoShelf({
   downloaded,
   skipped,
   savedLinks,
+  savedAvatars,
   preferredResolution,
   downloading,
   onToggleMedia,
@@ -393,6 +427,7 @@ function VideoShelf({
   downloaded: Set<string>;
   skipped: Set<string>;
   savedLinks: Set<string>;
+  savedAvatars?: Map<string, string>;
   preferredResolution?: string;
   downloading: boolean;
   onToggleMedia: (itemId: string) => void;
@@ -425,25 +460,32 @@ function VideoShelf({
       <div className="grid grid-cols-1 gap-3 p-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {entries.map(({ item, post }) => {
           const chosen = chooseFormat(item, preferredResolution);
-          const linkUrl = item.post_url || item.original_url;
+          const source = mainSourceFor(post, item);
+          const thumb = avatarThumbFor(item);
+          const isAvatarMatch = Boolean(
+            source.url &&
+              thumb &&
+              savedLinks.has(source.url) &&
+              savedAvatars?.get(source.url) === thumb
+          );
           return (
             <MediaCard
               key={item.id}
               item={item}
               index={0}
               variant="video"
-              caption={post.author || post.title}
+              caption={source.author || post.author || post.title}
               isSelected={selected.has(item.id)}
               wasDownloaded={isItemDownloaded(item, downloaded)}
               isSkipped={isItemSkipped(item, skipped)}
               chosenFormat={chosen}
-              isLinkSaved={Boolean(linkUrl && savedLinks.has(linkUrl))}
+              isLinkSaved={isAvatarMatch}
               onToggle={() => onToggleMedia(item.id)}
               onSaveLink={() =>
-                linkUrl &&
-                onSaveLink(linkUrl, item.title || `${post.author} video`, {
-                  author: item.author || post.author,
-                  thumbnail_url: item.thumbnail_url,
+                source.url &&
+                onSaveLink(source.url, source.title, {
+                  author: source.author,
+                  thumbnail_url: thumb,
                 })
               }
             />
@@ -478,6 +520,7 @@ function PostGroup({
   downloaded,
   skipped,
   savedLinks,
+  savedAvatars,
   preferredResolution,
   downloading,
   onToggleMedia,
@@ -491,6 +534,7 @@ function PostGroup({
   downloaded: Set<string>;
   skipped: Set<string>;
   savedLinks: Set<string>;
+  savedAvatars?: Map<string, string>;
   preferredResolution?: string;
   downloading: boolean;
   onToggleMedia: (itemId: string) => void;
@@ -514,9 +558,13 @@ function PostGroup({
   const videos = items.filter((item) => item.media_type === "video").length;
   const label = items.length > 1 ? "album" : "post";
   const heading = post.title || post.provider_post_id || `Untitled ${label}`;
-  const linkUrl = post.post_url || post.source_url;
-  const linkSaved = Boolean(linkUrl && savedLinks.has(linkUrl));
-  const groupThumb = items.find((item) => item.thumbnail_url)?.thumbnail_url ?? null;
+  const source = mainSourceFor(post);
+  const linkSaved = Boolean(source.url && savedLinks.has(source.url));
+  const groupThumb =
+    items.find((item) => item.thumbnail_url)?.thumbnail_url ||
+    items.find((item) => item.media_type === "image")?.original_url ||
+    items[0]?.original_url ||
+    null;
 
   return (
     <section className="overflow-hidden rounded-xl border border-hairline bg-surface">
@@ -537,7 +585,7 @@ function PostGroup({
             {heading}
           </p>
           <p className="truncate font-mono text-[10px] text-muted">
-            {post.author || "unknown"}
+            {source.author || post.author || "unknown"}
             {post.post_url ? ` · ${post.post_url}` : ""}
           </p>
         </div>
@@ -546,16 +594,20 @@ function PostGroup({
           {images > 0 ? ` · ${images} img` : ""}
           {videos > 0 ? ` · ${videos} vid` : ""}
         </span>
-        {linkUrl && (
+        {source.url && (
           <button
             type="button"
             onClick={() =>
-              onSaveLink(linkUrl, heading, {
-                author: post.author,
+              onSaveLink(source.url, source.title, {
+                author: source.author,
                 thumbnail_url: groupThumb,
               })
             }
-            title={linkSaved ? "This source link is already saved" : "Save source link"}
+            title={
+              linkSaved
+                ? "Update Saved Source avatar using this post's thumbnail"
+                : "Save main user/source URL to Saved Sources"
+            }
             className={`inline-flex items-center gap-1 rounded border px-2 py-1 font-mono text-[10px] transition-colors ${
               linkSaved
                 ? "border-accent/40 bg-accent/10 text-accent"
@@ -584,6 +636,14 @@ function PostGroup({
       <div className="grid grid-cols-2 gap-3 p-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
         {shownItems.map((item, index) => {
           const chosen = chooseFormat(item, preferredResolution);
+          const itemSource = mainSourceFor(post, item);
+          const itemThumb = avatarThumbFor(item);
+          const isAvatarMatch = Boolean(
+            itemSource.url &&
+              itemThumb &&
+              savedLinks.has(itemSource.url) &&
+              savedAvatars?.get(itemSource.url) === itemThumb
+          );
           return (
             <MediaCard
               key={item.id}
@@ -593,7 +653,16 @@ function PostGroup({
               wasDownloaded={isItemDownloaded(item, downloaded)}
               isSkipped={isItemSkipped(item, skipped)}
               chosenFormat={chosen}
+              isLinkSaved={isAvatarMatch}
               onToggle={() => onToggleMedia(item.id)}
+              onSaveLink={() =>
+                itemSource.url &&
+                itemThumb &&
+                onSaveLink(itemSource.url, itemSource.title, {
+                  author: itemSource.author,
+                  thumbnail_url: itemThumb,
+                })
+              }
             />
           );
         })}
@@ -707,8 +776,12 @@ function MediaCard({
                 ? "bg-accent text-on-accent"
                 : "bg-black/60 text-white/75 hover:bg-accent hover:text-on-accent"
             }`}
-            aria-label={isLinkSaved ? "Source link saved" : "Save source link"}
-            title={isLinkSaved ? "Source link saved" : "Save source link"}
+            aria-label={isLinkSaved ? "Selected as Saved Source avatar" : "Save main user URL with this pic as avatar"}
+            title={
+              isLinkSaved
+                ? "Currently used as this source's Saved Source avatar"
+                : "Save user source and set this pic as its avatar"
+            }
           >
             <Bookmark className={`h-3.5 w-3.5 ${isLinkSaved ? "fill-current" : ""}`} />
           </button>
