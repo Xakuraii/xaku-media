@@ -28,11 +28,61 @@ protocol.registerSchemesAsPrivileged([
 let mainWindow: BrowserWindow | null = null;
 const pythonBridge = new PythonBridge();
 let isQuitting = false;
+let libraryWatcher: fs.FSWatcher | null = null;
+let watchedDownloadDir: string | null = null;
+let libraryNotifyTimer: NodeJS.Timeout | null = null;
+
+function notifyLibraryChanged(): void {
+  if (libraryNotifyTimer) clearTimeout(libraryNotifyTimer);
+  libraryNotifyTimer = setTimeout(() => {
+    libraryNotifyTimer = null;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("library:changed");
+    }
+  }, 400);
+}
+
+function startLibraryWatcher(downloadDir: string | null | undefined): void {
+  if (!downloadDir || typeof downloadDir !== "string") return;
+  const resolved = path.resolve(downloadDir);
+  if (watchedDownloadDir === resolved && libraryWatcher) return;
+
+  if (libraryWatcher) {
+    try {
+      libraryWatcher.close();
+    } catch {
+      // Ignore close errors
+    }
+    libraryWatcher = null;
+  }
+  watchedDownloadDir = resolved;
+
+  try {
+    if (!fs.existsSync(resolved)) {
+      fs.mkdirSync(resolved, { recursive: true });
+    }
+    libraryWatcher = fs.watch(resolved, { recursive: true }, (_eventType, filename) => {
+      if (typeof filename === "string") {
+        const lower = filename.toLowerCase();
+        if (lower.endsWith(".part") || lower.endsWith(".tmp")) return;
+      }
+      notifyLibraryChanged();
+    });
+    libraryWatcher.on("error", (err) => {
+      console.warn("[desktop] Library folder watcher error:", err);
+    });
+  } catch (err) {
+    console.warn(`[desktop] Could not watch download directory '${resolved}':`, err);
+  }
+}
 
 // Forward real-time Python notifications to the renderer window
 pythonBridge.onNotification((method, params) => {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(method, params);
+  }
+  if (method === "download:completed" || method === "download_completed") {
+    notifyLibraryChanged();
   }
 });
 
@@ -202,12 +252,38 @@ function registerIpcHandlers(): void {
   });
 
   ipcMain.handle("python:skipMediaItems", async (_event, items: DiscoveredMediaItem[]) => {
-    return pythonBridge.sendRequest("skip_media_items", { items });
+    const res = await pythonBridge.sendRequest("skip_media_items", { items });
+    notifyLibraryChanged();
+    return res;
   });
 
   ipcMain.handle("python:unskipMediaItems", async (_event, items: DiscoveredMediaItem[]) => {
-    return pythonBridge.sendRequest("unskip_media_items", { items });
+    const res = await pythonBridge.sendRequest("unskip_media_items", { items });
+    notifyLibraryChanged();
+    return res;
   });
+
+  ipcMain.handle("python:scanDownloadLibrary", async (_event, baseDir?: string) => {
+    return pythonBridge.sendRequest("scan_download_library", baseDir ? { base_dir: baseDir } : {});
+  });
+
+  ipcMain.handle("python:deleteLibraryFile", async (_event, filePath: string) => {
+    const res = await pythonBridge.sendRequest("delete_library_file", { file_path: filePath });
+    notifyLibraryChanged();
+    return res;
+  });
+
+  ipcMain.handle(
+    "python:unskipLibraryEntry",
+    async (_event, folderPath: string, identity: string) => {
+      const res = await pythonBridge.sendRequest("unskip_library_entry", {
+        folder_path: folderPath,
+        identity,
+      });
+      notifyLibraryChanged();
+      return res;
+    }
+  );
 
   // Download Manager IPC Handlers
   ipcMain.handle(
@@ -442,11 +518,23 @@ function registerIpcHandlers(): void {
   });
 
   ipcMain.handle("preferences:update", async (_event, preferences: Partial<AppPreferences>) => {
-    return pythonBridge.sendRequest("update_preferences", { preferences });
+    const updated = await pythonBridge.sendRequest<AppPreferences>("update_preferences", {
+      preferences,
+    });
+    if (updated?.download_dir) {
+      startLibraryWatcher(updated.download_dir);
+      notifyLibraryChanged();
+    }
+    return updated;
   });
 
   ipcMain.handle("preferences:reset", async () => {
-    return pythonBridge.sendRequest("reset_preferences");
+    const defaults = await pythonBridge.sendRequest<AppPreferences>("reset_preferences");
+    if (defaults?.download_dir) {
+      startLibraryWatcher(defaults.download_dir);
+      notifyLibraryChanged();
+    }
+    return defaults;
   });
 
   // Authentication, Cookies & Custom Request Headers
@@ -918,6 +1006,14 @@ app.whenReady().then(async () => {
     } catch (recErr) {
       console.warn("[desktop] Interrupted task recovery startup check failed:", recErr);
     }
+    try {
+      const prefs = await pythonBridge.sendRequest<AppPreferences>("get_preferences", {});
+      if (prefs?.download_dir) {
+        startLibraryWatcher(prefs.download_dir);
+      }
+    } catch {
+      // Watcher is best-effort
+    }
   } catch (err) {
     console.error("[desktop] Failed to start Python bridge:", err);
   }
@@ -935,6 +1031,18 @@ app.on("before-quit", async (event) => {
   if (!isQuitting) {
     isQuitting = true;
     event.preventDefault();
+    if (libraryNotifyTimer) {
+      clearTimeout(libraryNotifyTimer);
+      libraryNotifyTimer = null;
+    }
+    if (libraryWatcher) {
+      try {
+        libraryWatcher.close();
+      } catch {
+        // Ignore close errors
+      }
+      libraryWatcher = null;
+    }
     console.log("[desktop] Shutting down Python engine before quitting...");
     try {
       await pythonBridge.stop();

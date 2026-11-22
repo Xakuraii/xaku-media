@@ -325,6 +325,76 @@ export interface SkipMediaItemsResult {
   status: "skipped";
 }
 
+export interface LibraryEntryItem {
+  identity: string;
+  status: "downloaded" | "skipped";
+  media_type: "image" | "video" | "audio";
+  filename?: string | null;
+  file_path?: string | null;
+  size_bytes?: number | null;
+  extension?: string | null;
+  title?: string | null;
+  author?: string | null;
+  platform?: string | null;
+  provider?: string | null;
+  provider_media_id?: string | null;
+  attachment_index?: number;
+  source_url?: string | null;
+  original_url?: string | null;
+  post_url?: string | null;
+  updated_at?: string | null;
+}
+
+export interface LibraryKindFolder {
+  name: string;
+  media_type: "image" | "video" | "audio";
+  path: string;
+  downloaded_count: number;
+  skipped_count: number;
+  video_count: number;
+  image_count: number;
+  size_bytes: number;
+  items: LibraryEntryItem[];
+}
+
+export interface LibraryUserFolder {
+  name: string;
+  path: string;
+  downloaded_count: number;
+  skipped_count: number;
+  video_count: number;
+  image_count: number;
+  size_bytes: number;
+  preview_path?: string | null;
+  folders: LibraryKindFolder[];
+}
+
+export interface LibraryPlatformFolder {
+  name: string;
+  path: string;
+  user_count: number;
+  downloaded_count: number;
+  skipped_count: number;
+  video_count: number;
+  image_count: number;
+  size_bytes: number;
+  users: LibraryUserFolder[];
+}
+
+export interface DownloadLibrarySnapshot {
+  root_dir: string;
+  totals: {
+    platforms: number;
+    users: number;
+    downloaded: number;
+    skipped: number;
+    videos: number;
+    images: number;
+    size_bytes: number;
+  };
+  platforms: LibraryPlatformFolder[];
+}
+
 export interface ClearScanHistoryResult {
   deleted_count: number;
 }
@@ -643,6 +713,29 @@ export interface DesktopApi {
   unskipMediaItems?: (
     items: DiscoveredMediaItem[]
   ) => Promise<{ count: number; identities: string[]; status: string }>;
+
+  /**
+   * Scan the configured download folder and its xakumedia-library.json manifests.
+   */
+  scanDownloadLibrary?: (baseDir?: string) => Promise<DownloadLibrarySnapshot>;
+
+  /**
+   * Delete a media file inside the download folder and update its JSON manifest.
+   */
+  deleteLibraryFile?: (filePath: string) => Promise<{ deleted: boolean; file_path: string }>;
+
+  /**
+   * Remove a skipped item entry from a folder's xakumedia-library.json manifest.
+   */
+  unskipLibraryEntry?: (
+    folderPath: string,
+    identity: string
+  ) => Promise<{ removed: boolean; identity: string }>;
+
+  /**
+   * Subscribe to live updates when the download library folder changes on disk.
+   */
+  onLibraryChanged?: (callback: () => void) => () => void;
 
   /**
    * Enqueue and begin streaming download for a media item.

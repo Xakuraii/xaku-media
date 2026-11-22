@@ -12,6 +12,7 @@ import type {
   DeleteDownloadedMediaResult,
   DesktopApi,
   DiscoveredMediaItem,
+  DownloadLibrarySnapshot,
   DownloadQueueStateResult,
   DownloadTaskRecord,
   ExportMetadataResult,
@@ -194,6 +195,27 @@ const api: DesktopApi = {
     items: DiscoveredMediaItem[]
   ): Promise<{ count: number; identities: string[]; status: string }> => {
     return ipcRenderer.invoke("python:unskipMediaItems", items);
+  },
+  scanDownloadLibrary: async (baseDir?: string): Promise<DownloadLibrarySnapshot> => {
+    return ipcRenderer.invoke("python:scanDownloadLibrary", baseDir);
+  },
+  deleteLibraryFile: async (
+    filePath: string
+  ): Promise<{ deleted: boolean; file_path: string }> => {
+    return ipcRenderer.invoke("python:deleteLibraryFile", filePath);
+  },
+  unskipLibraryEntry: async (
+    folderPath: string,
+    identity: string
+  ): Promise<{ removed: boolean; identity: string }> => {
+    return ipcRenderer.invoke("python:unskipLibraryEntry", folderPath, identity);
+  },
+  onLibraryChanged: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on("library:changed", handler);
+    return () => {
+      ipcRenderer.removeListener("library:changed", handler);
+    };
   },
   startDownload: async (
     mediaItem: DiscoveredMediaItem,
