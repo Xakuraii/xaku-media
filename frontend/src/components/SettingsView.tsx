@@ -26,9 +26,11 @@ import {
   Plus,
   FileText,
   CheckCircle2,
+  Download,
 } from "lucide-react";
 import type {
   AppPreferences,
+  AppUpdateCheckResult,
   CookieProfileRecord,
   FFmpegInfoResult,
   PythonBridgeStatus,
@@ -46,6 +48,10 @@ interface SettingsViewProps {
   onThemeChange?: (theme: "dark" | "light" | "system", origin?: HTMLElement | null) => void;
   onPreferencesUpdated?: (prefs: AppPreferences) => void;
   theme?: "dark" | "light" | "system";
+  updateInfo?: AppUpdateCheckResult | null;
+  checkingUpdates?: boolean;
+  onCheckUpdates?: () => void;
+  onOpenExternal?: (url: string) => void;
 }
 
 const COOKIE_EXPORT_EXTENSION_URL =
@@ -87,6 +93,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onThemeChange,
   onPreferencesUpdated,
   theme: activeTheme,
+  updateInfo,
+  checkingUpdates = false,
+  onCheckUpdates,
+  onOpenExternal,
 }) => {
   const [prefs, setPrefs] = useState<AppPreferences>(DEFAULT_PREFERENCES);
   const [draft, setDraft] = useState<AppPreferences>(DEFAULT_PREFERENCES);
@@ -1266,6 +1276,86 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <option value="ERROR">ERROR (Quietest)</option>
             <option value="CRITICAL">CRITICAL</option>
           </select>
+        </div>
+      </section>
+
+      {/* ========================================================================= */}
+      {/* 7. Software Updates */}
+      {/* ========================================================================= */}
+      <section className="bg-surface border border-hairline rounded-2xl p-6 space-y-4 shadow-card">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-hairline pb-3">
+          <div className="flex items-center space-x-2.5">
+            <Download className="h-5 w-5 text-accent" />
+            <div>
+              <h2 className="text-sm font-semibold text-ink">Software Updates</h2>
+              <p className="text-[11px] text-muted font-mono">
+                Check GitHub Releases for newer XakuMedia desktop installers.
+              </p>
+            </div>
+          </div>
+          <span className="px-2.5 py-0.5 rounded text-xs font-mono bg-page border border-hairline text-ink/80">
+            Installed v{updateInfo?.currentVersion || systemInfo?.version || "1.0.0"}
+          </span>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="space-y-1 text-xs font-mono">
+            {updateInfo?.hasUpdate ? (
+              <p className="text-accent font-semibold">
+                Update available: {updateInfo.latestVersion} (installed v{updateInfo.currentVersion})
+              </p>
+            ) : updateInfo?.status === "up_to_date" ? (
+              <p className="text-emerald-700 dark:text-emerald-300">
+                You are running the latest published release ({updateInfo.latestVersion || `v${updateInfo.currentVersion}`}).
+              </p>
+            ) : updateInfo?.status === "unpublished" ? (
+              <p className="text-muted">
+                No GitHub Release has been published yet for this version.
+              </p>
+            ) : updateInfo?.status === "error" ? (
+              <p className="text-amber-700 dark:text-amber-300">
+                Could not check updates: {updateInfo.error || "Network unavailable"}
+              </p>
+            ) : (
+              <p className="text-muted">
+                Click Check for Updates to compare against GitHub Releases.
+              </p>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onCheckUpdates?.()}
+              disabled={checkingUpdates || !onCheckUpdates}
+              className="px-3.5 py-2 bg-raised hover:bg-hairline/70 border border-hairline text-ink rounded-xl text-xs font-mono transition-colors flex items-center space-x-1.5 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${checkingUpdates ? "animate-spin" : ""}`} />
+              <span>{checkingUpdates ? "Checking..." : "Check for Updates"}</span>
+            </button>
+
+            {updateInfo?.hasUpdate && (
+              <button
+                type="button"
+                onClick={() => onOpenExternal?.(updateInfo.downloadUrl || updateInfo.releaseUrl)}
+                className="px-4 py-2 bg-accent hover:bg-accent-vivid text-on-accent font-semibold rounded-xl text-xs transition-colors flex items-center space-x-1.5 shadow-sm shadow-accent/25"
+              >
+                <Download className="h-3.5 w-3.5" />
+                <span>Download {updateInfo.latestVersion}</span>
+              </button>
+            )}
+
+            {updateInfo?.releaseUrl && (
+              <button
+                type="button"
+                onClick={() => onOpenExternal?.(updateInfo.releaseUrl)}
+                className="px-3 py-2 bg-page hover:bg-raised border border-hairline text-muted hover:text-ink rounded-xl text-xs font-mono transition-colors flex items-center space-x-1"
+              >
+                <span>Releases</span>
+                <ExternalLink className="h-3 w-3" />
+              </button>
+            )}
+          </div>
         </div>
       </section>
 

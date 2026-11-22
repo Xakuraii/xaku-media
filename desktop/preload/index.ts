@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   AppPreferences,
+  AppUpdateCheckResult,
   BatchDownloadItemParam,
   CancelAllDownloadsResult,
   CancelDownloadResult,
@@ -519,6 +520,9 @@ const api: DesktopApi = {
     tag?: string
   ): Promise<{ summary: RescanAllSummary }> => {
     return ipcRenderer.invoke("python:rescanAllSources", tag);
+  },
+  checkForUpdates: async (): Promise<AppUpdateCheckResult> => {
+    return ipcRenderer.invoke("app:checkForUpdates");
   },
 };
 

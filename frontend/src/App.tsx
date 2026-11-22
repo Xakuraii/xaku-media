@@ -40,6 +40,7 @@ import {
   Moon,
 } from "lucide-react";
 import type {
+  AppUpdateCheckResult,
   ClassifyUrlResult,
   DiscoveredMediaItem,
   DownloadQueueStateResult,
@@ -81,6 +82,8 @@ export const App: React.FC = () => {
     useDesktopTheme();
   const [ipcStatus, setIpcStatus] = useState<string>("Checking IPC...");
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<AppUpdateCheckResult | null>(null);
+  const [checkingUpdates, setCheckingUpdates] = useState<boolean>(false);
   const [pythonStatus, setPythonStatus] = useState<PythonBridgeStatus | null>(null);
   const [pythonPing, setPythonPing] = useState<PythonPingResult | null>(null);
   const [pythonLatency, setPythonLatency] = useState<number | null>(null);
@@ -713,6 +716,19 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleCheckUpdates = async () => {
+    if (!window.api?.checkForUpdates) return;
+    setCheckingUpdates(true);
+    try {
+      const res = await window.api.checkForUpdates();
+      setUpdateInfo(res);
+    } catch (err) {
+      console.warn("Update check failed:", err);
+    } finally {
+      setCheckingUpdates(false);
+    }
+  };
+
   useEffect(() => {
     async function checkDesktopBridge() {
       if (window.api) {
@@ -721,6 +737,7 @@ export const App: React.FC = () => {
           const info = await window.api.getSystemInfo();
           setIpcStatus(`IPC Connected (${pong})`);
           setSystemInfo(info);
+          void handleCheckUpdates();
 
           if (window.api.getPythonStatus) {
             const pyStatus = await window.api.getPythonStatus();
@@ -1032,6 +1049,17 @@ export const App: React.FC = () => {
             <span className="truncate text-[13px] font-semibold text-ink">{currentTabLabel}</span>
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            {updateInfo?.hasUpdate && (
+              <button
+                type="button"
+                onClick={() => openExternal(updateInfo.downloadUrl || updateInfo.releaseUrl)}
+                title={`Download XakuMedia ${updateInfo.latestVersion} update`}
+                className="flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent/10 px-3 py-1 font-mono text-[11px] font-semibold text-accent transition-colors hover:bg-accent/20"
+              >
+                <Download className="h-3 w-3" />
+                <span>Update {updateInfo.latestVersion}</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={(e) =>
@@ -1122,60 +1150,9 @@ export const App: React.FC = () => {
                   </button>
                 </form>
 
-                {/* Quick Presets for User Testing */}
-                <div className="space-y-1.5 pt-1">
-                  <div className="text-[11px] text-muted font-mono flex items-center space-x-1.5">
-                    <Sparkles className="h-3 w-3 text-amber-600 dark:text-amber-400" />
-                    <span>Quick Test Samples:</span>
-                  </div>
-                  <div className="flex flex-wrap gap-2 text-xs font-mono">
-                    <button
-                      type="button"
-                      onClick={() => setUrlInput("https://picsum.photos/800/600")}
-                      className="px-2.5 py-1 bg-raised hover:bg-raised border border-hairline rounded text-ink/80 hover:text-ink transition-colors"
-                    >
-                      Direct Image (Picsum JPG)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setUrlInput("https://www.w3schools.com/html/mov_bbb.mp4")
-                      }
-                      className="px-2.5 py-1 bg-raised hover:bg-raised border border-hairline rounded text-ink/80 hover:text-ink transition-colors"
-                    >
-                      Direct Video (MP4)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setUrlInput("https://www.youtube.com/watch?v=aqz-KE-bpKQ")
-                      }
-                      className="px-2.5 py-1 bg-raised hover:bg-raised border border-hairline rounded text-ink/80 hover:text-ink transition-colors"
-                    >
-                      Platform Video (YouTube yt-dlp)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setUrlInput("https://commons.wikimedia.org/wiki/Category:Cats")
-                      }
-                      className="px-2.5 py-1 bg-raised hover:bg-raised border border-hairline rounded text-ink/80 hover:text-ink transition-colors"
-                    >
-                      Gallery Album (Wikimedia Category)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setUrlInput("http://127.0.0.1/private_camera.mp4")}
-                      className="px-2.5 py-1 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded text-red-700 dark:text-red-300 hover:text-red-600 dark:hover:text-red-300 transition-colors"
-                    >
-                      SSRF Defense (Blocked 127.0.0.1)
-                    </button>
-                  </div>
-                </div>
-
                 <div className="flex items-center justify-between text-xs text-muted border-t border-hairline pt-3">
                   <div className="flex items-center space-x-3 text-[11px]">
-                    <span className="text-muted">Supported in M8:</span>
+                    <span className="text-muted">Supported:</span>
                     <span className="text-emerald-600 dark:text-emerald-400 font-medium">Direct Files</span>
                     <span>·</span>
                     <span className="text-emerald-600 dark:text-emerald-400 font-medium">Video Platforms (yt-dlp)</span>
@@ -2609,6 +2586,10 @@ export const App: React.FC = () => {
                 }
               }}
               theme={themePreference}
+              updateInfo={updateInfo}
+              checkingUpdates={checkingUpdates}
+              onCheckUpdates={() => void handleCheckUpdates()}
+              onOpenExternal={openExternal}
             />
           )}
 

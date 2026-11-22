@@ -329,6 +329,19 @@ export interface SkipMediaItemsResult {
   status: "skipped";
 }
 
+export interface AppUpdateCheckResult {
+  currentVersion: string;
+  latestVersion: string | null;
+  hasUpdate: boolean;
+  status: "update_available" | "up_to_date" | "unpublished" | "error";
+  releaseUrl: string;
+  downloadUrl: string | null;
+  assetName: string | null;
+  publishedAt?: string | null;
+  notes?: string | null;
+  error?: string | null;
+}
+
 export interface LibraryEntryItem {
   identity: string;
   status: "downloaded" | "skipped";
@@ -740,6 +753,11 @@ export interface DesktopApi {
    * Subscribe to live updates when the download library folder changes on disk.
    */
   onLibraryChanged?: (callback: () => void) => () => void;
+
+  /**
+   * Check GitHub Releases for a newer XakuMedia desktop release.
+   */
+  checkForUpdates?: () => Promise<AppUpdateCheckResult>;
 
   /**
    * Enqueue and begin streaming download for a media item.
