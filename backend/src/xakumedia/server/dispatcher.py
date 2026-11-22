@@ -779,6 +779,7 @@ class RpcDispatcher:
 
             from ..db import default_repository
             from ..models.source import SavedSource
+            from ..sources.rescan import enrich_source_metadata
 
             repo = self.repository or default_repository
             url = params.get("url")
@@ -803,6 +804,7 @@ class RpcDispatcher:
                 last_scanned_at=params.get("last_scanned_at"),
                 last_item_count=params.get("last_item_count", 0),
             )
+            source = enrich_source_metadata(source, repository=repo, fetch_remote=True)
             saved = repo.save_source(source)
             return {"source": saved.model_dump()}
 
@@ -858,6 +860,65 @@ class RpcDispatcher:
             tag = params.get("tag")
             summary = rescan_all_sources(repository=repo, tag=tag)
             return {"summary": summary.model_dump()}
+
+        def scan_download_library_handler(params: dict[str, Any]) -> dict[str, Any]:
+            from ..downloader.library import scan_download_library
+
+            base_dir = params.get("base_dir")
+            return scan_download_library(base_dir)
+
+        def delete_library_file_handler(params: dict[str, Any]) -> dict[str, Any]:
+            from pathlib import Path
+
+            from ..core.config import default_config
+            from ..db import default_repository
+            from ..db.connection import get_db_session
+            from ..downloader.library import remove_file
+            from ..utils.paths import validate_destination_path
+
+            file_path_str = params.get("file_path")
+            if not file_path_str or not isinstance(file_path_str, str):
+                raise TypeError("Parameter 'file_path' is required and must be a string.")
+
+            target = validate_destination_path(
+                Path(file_path_str), default_config.download_dir
+            )
+            deleted = False
+            if target.exists() and target.is_file():
+                target.unlink()
+                deleted = True
+            remove_file(target)
+
+            repo = self.repository or default_repository
+            try:
+                with get_db_session(repo.db_path) as conn:
+                    conn.execute(
+                        "DELETE FROM download_tasks WHERE destination_path = ?",
+                        (str(target),),
+                    )
+            except Exception:
+                pass
+            return {"deleted": deleted, "file_path": str(target)}
+
+        def unskip_library_entry_handler(params: dict[str, Any]) -> dict[str, Any]:
+            from pathlib import Path
+
+            from ..core.config import default_config
+            from ..downloader.library import unskip_entry_by_id
+            from ..utils.paths import validate_destination_path
+
+            folder_path_str = params.get("folder_path")
+            identity = params.get("identity")
+            if not folder_path_str or not isinstance(folder_path_str, str):
+                raise TypeError("Parameter 'folder_path' is required and must be a string.")
+            if not identity or not isinstance(identity, str):
+                raise TypeError("Parameter 'identity' is required and must be a string.")
+
+            folder = validate_destination_path(
+                Path(folder_path_str), default_config.download_dir
+            )
+            removed = unskip_entry_by_id(folder, identity)
+            return {"removed": removed, "identity": identity}
 
         self.register("ping", ping_handler)
         self.register("get_version", version_handler)
@@ -924,4 +985,7 @@ class RpcDispatcher:
         self.register("delete_saved_source", delete_saved_source_handler)
         self.register("rescan_source", rescan_source_handler)
         self.register("rescan_all_sources", rescan_all_sources_handler)
+        self.register("scan_download_library", scan_download_library_handler)
+        self.register("delete_library_file", delete_library_file_handler)
+        self.register("unskip_library_entry", unskip_library_entry_handler)
 
