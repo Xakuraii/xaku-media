@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, CheckSquare, Layers, RefreshCw, X } from "lucide-react";
-import type { DiscoveredMediaItem, ScanOptionsPayload } from "../../../../desktop/shared/types";
+import type {
+  DiscoveredMediaItem,
+  ScanOptionsPayload,
+  ScanPost,
+} from "../../../../desktop/shared/types";
 import { JobStatusList } from "./JobStatusList";
 import { PostBrowser } from "./PostBrowser";
 import { ScanErrorPanel } from "./ScanErrorPanel";
@@ -61,6 +65,7 @@ export function BulkScanView({
   const [preferredResolution, setPreferredResolution] = useState<string>("1080p");
   const [hideSkipped, setHideSkipped] = useState<boolean>(false);
   const [refreshingStats, setRefreshingStats] = useState<boolean>(false);
+  const [savingUrls, setSavingUrls] = useState<Set<string>>(new Set());
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -201,6 +206,117 @@ export function BulkScanView({
     invertSelection,
   } = useScanSelection(allPosts, filteredPosts, filter, downloaded, skipped);
 
+  const isUsableAvatarCandidate = (candidate?: string | null): candidate is string => {
+    if (!candidate) return false;
+    const lower = candidate.trim().toLowerCase();
+    if (!lower) return false;
+    if (/\/(?:avatar|posts|photos|videos|reels|likes|reposts)\/?$/.test(lower)) return false;
+    if (/tiktok\.com\/@[^/]+\/?$/.test(lower)) return false;
+    return true;
+  };
+
+  const pickSourceDetailsFromPosts = (url: string, posts: ScanPost[]) => {
+    const cleanAuthor = (raw?: string | null) => {
+      const trimmed = (raw || "").trim().replace(/^@/, "");
+      if (!trimmed || ["gallery", "unknown", "none", "user"].includes(trimmed.toLowerCase())) {
+        return null;
+      }
+      return trimmed;
+    };
+
+    const inferredAuthor = (() => {
+      for (const post of posts) {
+        const a = cleanAuthor(post.author);
+        if (a) return a;
+        for (const item of post.media_items) {
+          const ia = cleanAuthor(item.author);
+          if (ia) return ia;
+        }
+      }
+      try {
+        const seg = new URL(url).pathname.split("/").filter(Boolean)[0];
+        if (seg && !["watch", "playlist", "shorts", "reel", "reels", "p", "explore"].includes(seg)) {
+          return seg.replace(/^@/, "");
+        }
+      } catch {
+        // ignore invalid url
+      }
+      return null;
+    })();
+
+    let thumbnailUrl: string | undefined;
+    // 1. Prefer image thumbnail_url
+    for (const post of posts) {
+      for (const item of post.media_items) {
+        if (isUsableAvatarCandidate(item.thumbnail_url)) {
+          thumbnailUrl = item.thumbnail_url;
+          break;
+        }
+      }
+      if (thumbnailUrl) break;
+    }
+    // 2. Fallback to image original_url (gallery-dl albums often omit thumbnail_url)
+    if (!thumbnailUrl) {
+      for (const post of posts) {
+        for (const item of post.media_items) {
+          if (item.media_type === "image" && isUsableAvatarCandidate(item.original_url)) {
+            thumbnailUrl = item.original_url;
+            break;
+          }
+        }
+        if (thumbnailUrl) break;
+      }
+    }
+    // 3. Fallback to first video's stream URL (SourceAvatar renders a <video> poster)
+    if (!thumbnailUrl) {
+      for (const post of posts) {
+        for (const item of post.media_items) {
+          if (item.media_type === "video" && isUsableAvatarCandidate(item.original_url)) {
+            thumbnailUrl = item.original_url;
+            break;
+          }
+        }
+        if (thumbnailUrl) break;
+      }
+    }
+
+    let host = url;
+    try {
+      host = new URL(url).hostname.replace(/^www\./, "");
+    } catch {
+      // keep raw url
+    }
+    const title = inferredAuthor ? `@${inferredAuthor}` : host;
+    return {
+      title,
+      author: inferredAuthor || undefined,
+      thumbnail_url: thumbnailUrl,
+    };
+  };
+
+  const saveScanJobSource = async (entry: JobEntry) => {
+    const url = entry.snapshot.url;
+    if (!window.api?.saveSource) return;
+    setSavingUrls((prev) => new Set(prev).add(url));
+    try {
+      const jobPosts =
+        entry.posts.length > 0
+          ? entry.posts
+          : allPosts.filter((p) => p._job_id === entry.snapshot.job_id || p.source_url === url);
+      const details = pickSourceDetailsFromPosts(url, jobPosts);
+      await saveScanLink(url, details.title, {
+        author: details.author,
+        thumbnail_url: details.thumbnail_url,
+      });
+    } finally {
+      setSavingUrls((prev) => {
+        const next = new Set(prev);
+        next.delete(url);
+        return next;
+      });
+    }
+  };
+
   const bookmarkInput = async () => {
     const urls = parseUrls(input);
     if (urls.length === 0) {
@@ -226,19 +342,16 @@ export function BulkScanView({
     try {
       let saved = 0;
       for (const url of urls) {
-        let host = url;
-        try {
-          host = new URL(url).hostname.replace(/^www\./, "");
-        } catch {
-          // keep raw url
-        }
-        const matchingPost = allPosts.find((p) => p.source_url === url || p.post_url === url);
-        const thumb = matchingPost?.media_items.find((m) => m.thumbnail_url)?.thumbnail_url;
+        const matchingJob = activeJobs.find((j) => j.snapshot.url === url);
+        const relatedPosts = matchingJob?.posts?.length
+          ? matchingJob.posts
+          : allPosts.filter((p) => p.source_url === url || p.post_url === url);
+        const details = pickSourceDetailsFromPosts(url, relatedPosts);
         await window.api.saveSource({
           url,
-          title: matchingPost?.author ? `@${matchingPost.author}` : host,
-          author: matchingPost?.author || undefined,
-          thumbnail_url: thumb || undefined,
+          title: details.title,
+          author: details.author,
+          thumbnail_url: details.thumbnail_url,
         });
         setSavedLinks((prev) => new Set(prev).add(url));
         saved += 1;
@@ -542,9 +655,12 @@ export function BulkScanView({
       <JobStatusList
         jobs={activeJobs}
         focusedJobId={focusedJobId}
+        savedLinks={savedLinks}
+        savingUrls={savingUrls}
         onCancel={(jobId) => void cancelJob(jobId)}
         onFocus={(jobId) => setFocusedJobId((prev) => (prev === jobId ? null : jobId))}
         onShowAll={() => setFocusedJobId(null)}
+        onSaveSource={(job) => void saveScanJobSource(job)}
         onDelete={(job) => void deleteScan(job)}
         onOpenSettings={onOpenSettings}
         onOpenExternal={onOpenExternal}

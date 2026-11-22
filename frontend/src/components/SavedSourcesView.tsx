@@ -29,6 +29,17 @@ interface SavedSourcesViewProps {
   onNavigateToDownloads?: () => void;
 }
 
+function isVideoAvatarUrl(url: string): boolean {
+  const lower = url.toLowerCase();
+  if (/\.(?:jpg|jpeg|png|webp|gif|avif|bmp|svg)(?:$|[?#])/i.test(lower)) {
+    return false;
+  }
+  return (
+    /\.(?:mp4|webm|mov|m4v|mkv)(?:$|[?#])/i.test(lower) ||
+    lower.includes("video.") && lower.includes("fbcdn.net")
+  );
+}
+
 const SourceAvatar: React.FC<{
   thumbnailUrl?: string | null;
   author?: string | null;
@@ -38,7 +49,23 @@ const SourceAvatar: React.FC<{
   const label = (author || title || "?").replace(/^@/, "").trim();
   const initials = label.slice(0, 2).toUpperCase() || "?";
 
+  useEffect(() => {
+    setFailed(false);
+  }, [thumbnailUrl]);
+
   if (thumbnailUrl && !failed) {
+    if (isVideoAvatarUrl(thumbnailUrl)) {
+      return (
+        <video
+          src={`${thumbnailUrl}#t=0.5`}
+          muted
+          playsInline
+          preload="metadata"
+          onError={() => setFailed(true)}
+          className="h-11 w-11 shrink-0 rounded-full border border-hairline bg-raised object-cover"
+        />
+      );
+    }
     return (
       <img
         src={thumbnailUrl}
