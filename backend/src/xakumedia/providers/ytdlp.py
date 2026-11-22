@@ -771,7 +771,7 @@ class YtDlpProvider(BaseProvider):
         enum_opts = self._base_opts() | {
             "extract_flat": "in_playlist",
             "playlistend": limit,
-            "ignoreerrors": True,
+            "ignoreerrors": "only_download",
         }
         hydrate_opts = self._base_opts() | {"noplaylist": True, "extract_flat": False}
         self._apply_auth(safe_url, enum_opts)
@@ -821,7 +821,21 @@ class YtDlpProvider(BaseProvider):
 
             if not entries:
                 if first_error is not None:
-                    raise parse_yt_dlp_error(str(first_error), safe_url) from first_error
+                    err_text = str(first_error)
+                    if is_tiktok(safe_url) and "secondary user id" in err_text.lower():
+                        user = author_hint(safe_url) or safe_url
+                        raise MediaUnavailableError(
+                            f"TikTok did not expose public profile posts for '@{user}' "
+                            "(embeds may be disabled, the account may be private, or profile "
+                            "listing is restricted even with saved cookies). Try scanning a "
+                            "direct video or slideshow URL from this creator instead.",
+                            details={
+                                "url": safe_url,
+                                "site": "tiktok",
+                                "reason": "tiktok_secuid_unavailable",
+                            },
+                        ) from first_error
+                    raise parse_yt_dlp_error(err_text, safe_url) from first_error
                 raise MediaUnavailableError(f"No posts found in collection: {url}")
 
             if on_total:
