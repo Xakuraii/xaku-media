@@ -71,10 +71,30 @@ export function parseUrls(text: string): string[] {
   return Array.from(new Set(found));
 }
 
+const MACROBLOCK_TOLERANCE = 16;
+
 function resolutionHeight(resolution?: string | null): number {
   if (!resolution) return 0;
+  const dim = resolution.match(/(\d{3,4})\s*[xX×]\s*(\d{3,4})/);
+  if (dim) return Math.min(parseInt(dim[1], 10), parseInt(dim[2], 10));
   const match = resolution.match(/(\d{3,4})/);
   return match ? parseInt(match[1], 10) : 0;
+}
+
+/**
+ * Effective quality tier for a stream. Portrait 1080x1920 videos (TikTok,
+ * Shorts, Reels) are 1080p Full HD — using the short edge prevents a 1080p
+ * resolution cap from rejecting 1080x1920 and dropping to 480p/360p.
+ */
+function qualityTier(format: MediaFormatInfoPayload): number {
+  if (format.width && format.height) {
+    return Math.min(format.width, format.height);
+  }
+  if (format.height) return format.height;
+  const parsed = resolutionHeight(format.resolution);
+  if (parsed > 0) return parsed;
+  if (format.width) return Math.round((format.width * 9) / 16);
+  return 0;
 }
 
 function hasVideo(format: MediaFormatInfoPayload): boolean {
@@ -90,8 +110,9 @@ function formatSize(format: MediaFormatInfoPayload): number {
 }
 
 /**
- * Rank candidate video tracks: highest resolution first, then complete streams
- * (no FFmpeg merge), then largest file. `targetHeight` is Infinity for "best".
+ * Rank candidate video tracks: highest quality tier first, then complete
+ * streams (no FFmpeg merge), then higher fps, then largest file.
+ * `targetHeight` is Infinity for "best".
  */
 function pickVideoTrack(
   tracks: MediaFormatInfoPayload[],
@@ -100,15 +121,19 @@ function pickVideoTrack(
   if (tracks.length === 0) return null;
   const ranked = [...tracks].sort(
     (a, b) =>
-      (b.height || 0) - (a.height || 0) ||
+      qualityTier(b) - qualityTier(a) ||
       Number(hasAudio(b)) - Number(hasAudio(a)) ||
+      (b.fps || 0) - (a.fps || 0) ||
       formatSize(b) - formatSize(a)
   );
   if (!Number.isFinite(targetHeight)) return ranked[0];
-  const within = ranked.filter((format) => (format.height || 0) <= targetHeight);
+  const known = ranked.filter((format) => qualityTier(format) > 0);
+  const within = known.filter(
+    (format) => qualityTier(format) <= targetHeight + MACROBLOCK_TOLERANCE
+  );
   if (within.length > 0) return within[0];
-  // Nothing at or below the requested quality: take the closest above it.
-  return ranked[ranked.length - 1];
+  if (known.length > 0) return known[known.length - 1];
+  return ranked[0];
 }
 
 export function chooseFormat(

@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 import yt_dlp
 from yt_dlp.utils import DownloadError, ExtractorError
 
+from ..core.config import default_config
 from ..core.logging import get_logger
 from ..exceptions.base import (
     DRMProtectedError,
@@ -67,7 +68,7 @@ def normalize_formats(
     attaches to the post (Referer, User-Agent, cookies-dependent headers). Some
     CDNs reject the stream without them even when the URL is still valid.
     """
-    normalized: list[MediaFormatInfo] = []
+    normalized: list[tuple[MediaFormatInfo, float]] = []
     base_headers = {
         str(key): str(value)
         for key, value in (default_headers or {}).items()
@@ -91,13 +92,15 @@ def normalize_formats(
         width = f.get("width")
         fps = float(f["fps"]) if f.get("fps") else None
         filesize = f.get("filesize") or f.get("filesize_approx")
+        tbr = float(f.get("tbr") or f.get("vbr") or 0.0)
 
         # Determine if separate audio/video stream requiring FFmpeg merge
         is_video = vcodec != "none"
         has_audio = acodec != "none"
         requires_merge = is_video and not has_audio
 
-        resolution_str = f"{height}p" if height else (f.get("resolution") or None)
+        tier = min(width, height) if (width and height) else height
+        resolution_str = f"{tier}p" if tier else (f.get("resolution") or None)
 
         format_headers = {
             **base_headers,
@@ -109,27 +112,37 @@ def normalize_formats(
         }
 
         normalized.append(
-            MediaFormatInfo(
-                format_id=format_id,
-                container=container,
-                resolution=resolution_str,
-                video_codec=vcodec if vcodec != "none" else None,
-                audio_codec=acodec if acodec != "none" else None,
-                width=width,
-                height=height,
-                fps=fps,
-                filesize_bytes=filesize,
-                is_direct_stream=not requires_merge,
-                url=f.get("url"),
-                requires_merge=requires_merge,
-                format_note=f.get("format_note"),
-                http_headers=format_headers,
+            (
+                MediaFormatInfo(
+                    format_id=format_id,
+                    container=container,
+                    resolution=resolution_str,
+                    video_codec=vcodec if vcodec != "none" else None,
+                    audio_codec=acodec if acodec != "none" else None,
+                    width=width,
+                    height=height,
+                    fps=fps,
+                    filesize_bytes=filesize,
+                    is_direct_stream=not requires_merge,
+                    url=f.get("url"),
+                    requires_merge=requires_merge,
+                    format_note=f.get("format_note"),
+                    http_headers=format_headers,
+                ),
+                tbr,
             )
         )
 
-    # Sort formats from highest resolution to lowest
-    normalized.sort(key=lambda fmt: (fmt.height or 0, fmt.filesize_bytes or 0), reverse=True)
-    return normalized
+    # Sort formats from highest effective resolution tier to lowest
+    normalized.sort(
+        key=lambda entry: (
+            entry[0].quality_tier,
+            entry[0].filesize_bytes or 0,
+            entry[1],
+        ),
+        reverse=True,
+    )
+    return [entry[0] for entry in normalized]
 
 
 def extract_video_info(
@@ -150,7 +163,8 @@ def extract_video_info(
         "no_warnings": True,
         "simulate": True,
         "noplaylist": True,
-        "socket_timeout": 15,
+        "socket_timeout": float(default_config.request_timeout_seconds),
+        "retries": int(default_config.max_retries),
     }
     if ydl_opts:
         base_opts.update(ydl_opts)
