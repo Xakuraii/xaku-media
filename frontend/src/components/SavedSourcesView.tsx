@@ -29,6 +29,34 @@ interface SavedSourcesViewProps {
   onNavigateToDownloads?: () => void;
 }
 
+const SourceAvatar: React.FC<{
+  thumbnailUrl?: string | null;
+  author?: string | null;
+  title: string;
+}> = ({ thumbnailUrl, author, title }) => {
+  const [failed, setFailed] = useState(false);
+  const label = (author || title || "?").replace(/^@/, "").trim();
+  const initials = label.slice(0, 2).toUpperCase() || "?";
+
+  if (thumbnailUrl && !failed) {
+    return (
+      <img
+        src={thumbnailUrl}
+        alt={label}
+        referrerPolicy="no-referrer"
+        onError={() => setFailed(true)}
+        className="h-11 w-11 shrink-0 rounded-full border border-hairline bg-raised object-cover"
+      />
+    );
+  }
+
+  return (
+    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-accent/30 bg-accent/10 font-mono text-xs font-bold text-accent">
+      {initials}
+    </div>
+  );
+};
+
 export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
   onScanUrl,
   onBatchDownload,
@@ -387,16 +415,23 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
                     </span>
                   </div>
 
-                  {/* Title & Author */}
-                  <div>
-                    <h3 className="text-sm font-bold text-ink line-clamp-1" title={source.title}>
-                      {source.title}
-                    </h3>
-                    {source.author && (
-                      <span className="text-xs text-muted font-mono">
-                        by @{source.author}
-                      </span>
-                    )}
+                  {/* PFP, Title & Author */}
+                  <div className="flex items-center gap-3">
+                    <SourceAvatar
+                      thumbnailUrl={source.thumbnail_url}
+                      author={source.author}
+                      title={source.title}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-sm font-bold text-ink line-clamp-1" title={source.title}>
+                        {source.title}
+                      </h3>
+                      {source.author && (
+                        <span className="block truncate text-xs text-muted font-mono">
+                          @{source.author.replace(/^@/, "")}
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   {/* Target URL */}

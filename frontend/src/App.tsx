@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useMemo } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import {
   Search,
   FolderArchive,
@@ -28,8 +28,6 @@ import {
   FileJson,
   Copy,
   Check,
-  Filter,
-  ArrowUpDown,
   Music,
   Pause,
   CheckSquare,
@@ -58,6 +56,7 @@ import type {
 } from "../../desktop/shared/types";
 import { SettingsView } from "./components/SettingsView";
 import { SavedSourcesView } from "./components/SavedSourcesView";
+import { DownloadLibraryView } from "./components/DownloadLibraryView";
 import { BulkScanView } from "./components/bulk-scan/BulkScanView";
 import { chooseFormat } from "./components/bulk-scan/utils";
 import { useDesktopTheme } from "./desktop/theme";
@@ -95,14 +94,7 @@ export const App: React.FC = () => {
   const [scanError, setScanError] = useState<string | null>(null);
   const [savedSourceStatus, setSavedSourceStatus] = useState<{ message: string; isError?: boolean } | null>(null);
 
-  // SQLite Persistence State (Media Library & Scan History)
-  const [savedMediaItems, setSavedMediaItems] = useState<DiscoveredMediaItem[]>([]);
-  const [savedMediaLoading, setSavedMediaLoading] = useState<boolean>(false);
-  const [savedMediaFilter, setSavedMediaFilter] = useState<"all" | "image" | "video" | "audio">("all");
-  const [libraryQuery, setLibraryQuery] = useState<string>("");
-  const [libraryContainer, setLibraryContainer] = useState<string>("all");
-  const [librarySort, setLibrarySort] = useState<"newest" | "oldest" | "title" | "size_desc" | "size_asc">("newest");
-  const [bookmarkedIds, setBookmarkedIds] = useState<Set<string>>(new Set());
+  // SQLite Persistence State (Scan History)
 
   // Media Preview & Lightbox State
   const [previewModal, setPreviewModal] = useState<{
@@ -179,18 +171,6 @@ export const App: React.FC = () => {
   const [galleryPage, setGalleryPage] = useState<number>(1);
   const [queuePage, setQueuePage] = useState<number>(1);
 
-  // Memoized completed downloads map for O(1) lookup in library grid
-  const completedDownloadsMap = useMemo(() => {
-    const map = new Map<string, DownloadTaskRecord>();
-    for (const t of downloadTasks) {
-      if (t.status === "completed") {
-        if (t.media_item?.id) map.set(t.media_item.id, t);
-        if (t.id) map.set(t.id, t);
-      }
-    }
-    return map;
-  }, [downloadTasks]);
-
   const formatBytes = (bytes?: number | null): string => {
     if (!bytes) return "Unknown size";
     const units = ["B", "KB", "MB", "GB"];
@@ -214,38 +194,6 @@ export const App: React.FC = () => {
     const mins = Math.floor(seconds / 60);
     const secs = Math.round(seconds % 60);
     return `${mins}m ${secs}s`;
-  };
-
-  const fetchSavedMedia = async (
-    mediaType = savedMediaFilter,
-    query = libraryQuery,
-    container = libraryContainer,
-    sortBy = librarySort
-  ) => {
-    setSavedMediaLoading(true);
-    try {
-      if (window.api?.querySavedMedia) {
-        const res = await window.api.querySavedMedia({
-          media_type: mediaType === "all" ? undefined : mediaType,
-          query: query.trim() || undefined,
-          container: container === "all" ? undefined : container,
-          sort_by: sortBy,
-        });
-        setSavedMediaItems(res.items || []);
-        setBookmarkedIds(new Set((res.items || []).map((i) => i.id)));
-      } else if (window.api?.getSavedMedia) {
-        const typeParam = mediaType && mediaType !== "all" ? mediaType : undefined;
-        const res = await window.api.getSavedMedia(typeParam);
-        setSavedMediaItems(res.items || []);
-        if (!typeParam) {
-          setBookmarkedIds(new Set((res.items || []).map((i) => i.id)));
-        }
-      }
-    } catch (err) {
-      console.error("Failed to load saved media:", err);
-    } finally {
-      setSavedMediaLoading(false);
-    }
   };
 
   const handleOpenPreview = (
@@ -366,12 +314,6 @@ export const App: React.FC = () => {
       if (window.api?.deleteMediaItem) {
         await window.api.deleteMediaItem(itemId);
       }
-      setBookmarkedIds((prev) => {
-        const next = new Set(prev);
-        next.delete(itemId);
-        return next;
-      });
-      setSavedMediaItems((prev) => prev.filter((i) => i.id !== itemId));
       setDownloadTasks((prev) =>
         prev.filter((t) => t.media_item.id !== itemId && t.id !== itemId)
       );
@@ -401,27 +343,6 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleToggleBookmark = async (item: DiscoveredMediaItem) => {
-    if (!window.api?.toggleSaveMedia) return;
-    try {
-      const res = await window.api.toggleSaveMedia(item.id);
-      setBookmarkedIds((prev) => {
-        const next = new Set(prev);
-        if (res.is_saved) {
-          next.add(item.id);
-        } else {
-          next.delete(item.id);
-        }
-        return next;
-      });
-      if (activeTab === "library" || activeTab === "saved") {
-        await fetchSavedMedia(savedMediaFilter, libraryQuery, libraryContainer, librarySort);
-      }
-    } catch (err) {
-      console.error("Failed to toggle bookmark:", err);
-    }
-  };
-
   const handleSaveCurrentScanAsSource = async () => {
     if (!window.api?.saveSource || !scanResult) return;
     try {
@@ -441,6 +362,10 @@ export const App: React.FC = () => {
         scanResult.classified_url.platform ||
         scanResult.classified_url.domain ||
         undefined;
+      const thumbnail_url =
+        scanResult.media_item?.thumbnail_url ||
+        scanResult.media_items?.find((m) => m.thumbnail_url)?.thumbnail_url ||
+        undefined;
 
       const tags = [platform, "bookmarked"].filter(Boolean) as string[];
 
@@ -449,6 +374,7 @@ export const App: React.FC = () => {
         title,
         author,
         platform,
+        thumbnail_url,
         tags,
       });
       setSavedSourceStatus({ message: `Source "${title}" saved to Saved Sources!` });
@@ -810,16 +736,6 @@ export const App: React.FC = () => {
             }
           }
 
-          // Initialize bookmarks
-          if (window.api.getSavedMedia) {
-            try {
-              const saved = await window.api.getSavedMedia();
-              setBookmarkedIds(new Set((saved.items || []).map((i) => i.id)));
-            } catch (err) {
-              console.warn("Could not load initial saved media:", err);
-            }
-          }
-
           // Initialize downloads list
           if (window.api.getDownloadTasks) {
             try {
@@ -1004,26 +920,19 @@ export const App: React.FC = () => {
   ]);
 
   useEffect(() => {
-    if (activeTab === "library" || activeTab === "saved") {
-      fetchSavedMedia(
-        savedMediaFilter,
-        libraryQuery,
-        libraryContainer,
-        librarySort
-      );
-    } else if (activeTab === "history") {
+    if (activeTab === "history") {
       fetchScanHistory();
     } else if (activeTab === "downloads") {
       fetchDownloadTasks();
     }
-  }, [activeTab, savedMediaFilter, libraryContainer, librarySort]);
+  }, [activeTab]);
 
   const navGroups = [
     {
       label: "Workspace",
       items: [
         { id: "scan", label: "Scan Media", icon: Search },
-        { id: "library", label: "Media Library", icon: FolderArchive },
+        { id: "library", label: "Download Library", icon: FolderArchive },
         { id: "downloads", label: "Downloads", icon: Download },
       ],
     },
@@ -1500,29 +1409,6 @@ export const App: React.FC = () => {
                                     type="button"
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      handleToggleBookmark(item);
-                                    }}
-                                    className={`absolute top-1 right-8 p-1 rounded-md transition-all ${
-                                      bookmarkedIds.has(item.id)
-                                        ? "bg-accent text-on-accent shadow-sm shadow-accent/40"
-                                        : "bg-black/60 text-white/80 hover:text-white"
-                                    }`}
-                                    title={
-                                      bookmarkedIds.has(item.id)
-                                        ? "Saved in Library"
-                                        : "Bookmark to Library"
-                                    }
-                                  >
-                                    <Bookmark
-                                      className={`h-3 w-3 ${
-                                        bookmarkedIds.has(item.id) ? "fill-current" : ""
-                                      }`}
-                                    />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
                                       handleOpenPreview(item);
                                     }}
                                     className="absolute top-1 right-1 p-1 rounded-md bg-black/60 hover:bg-black/90 text-white/80 hover:text-white transition-all shadow-sm"
@@ -1656,26 +1542,6 @@ export const App: React.FC = () => {
                       >
                         <Bookmark className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
                         <span>Bookmark Source</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleToggleBookmark(scanResult.media_item!)}
-                        className={`px-2.5 py-1 rounded text-xs font-mono font-medium flex items-center space-x-1.5 transition-all ${
-                          bookmarkedIds.has(scanResult.media_item.id)
-                            ? "bg-accent text-on-accent shadow-sm shadow-accent/30"
-                            : "bg-page hover:bg-hairline/70 text-ink/80 border border-hairline"
-                        }`}
-                      >
-                        <Bookmark
-                          className={`h-3.5 w-3.5 ${
-                            bookmarkedIds.has(scanResult.media_item.id) ? "fill-current" : ""
-                          }`}
-                        />
-                        <span>
-                          {bookmarkedIds.has(scanResult.media_item.id)
-                            ? "Saved in Library"
-                            : "Bookmark to Library"}
-                        </span>
                       </button>
                       <div className="flex items-center space-x-1 text-xs text-emerald-600 dark:text-emerald-400 font-mono">
                         <CheckCircle2 className="h-4 w-4" />
@@ -2063,20 +1929,6 @@ export const App: React.FC = () => {
                                     ) : (
                                       <ImageIcon className="h-5 w-5 text-muted" />
                                     )}
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleToggleBookmark(it);
-                                      }}
-                                      className={`absolute top-1 right-1 p-1 rounded transition-all ${
-                                        bookmarkedIds.has(it.id)
-                                          ? "bg-accent text-on-accent shadow-sm shadow-accent/40"
-                                          : "bg-black/60 text-white/80 hover:text-white"
-                                      }`}
-                                    >
-                                      <Bookmark className={`h-3 w-3 ${bookmarkedIds.has(it.id) ? "fill-current" : ""}`} />
-                                    </button>
                                   </div>
                                   <div className="text-[11px] font-mono truncate text-ink">
                                     {it.title || `Item #${idx + 1}`}
@@ -2094,331 +1946,14 @@ export const App: React.FC = () => {
             </div>
           )}
 
-          {/* Media Library & Bookmark View */}
+          {/* Download Library View (Folder-Structured from download_dir + JSON manifests) */}
           {activeTab === "library" && (
-            <div className="max-w-4xl mx-auto space-y-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h1 className="text-2xl font-bold tracking-tight text-ink">
-                    Media Library &amp; Bookmarks
-                  </h1>
-                  <p className="text-sm text-muted mt-1">
-                    Saved media items stored in your local SQLite library. Search, filter, inspect, and preview.
-                  </p>
-                </div>
-
-                <div className="flex items-center space-x-2">
-                  <button
-                    onClick={() =>
-                      fetchSavedMedia(
-                        savedMediaFilter,
-                        libraryQuery,
-                        libraryContainer,
-                        librarySort
-                      )
-                    }
-                    disabled={savedMediaLoading}
-                    className="px-3 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline rounded-md text-xs font-mono text-ink/80 flex items-center space-x-1.5 transition-colors"
-                  >
-                    <RefreshCw
-                      className={`h-3.5 w-3.5 ${
-                        savedMediaLoading ? "animate-spin" : ""
-                      }`}
-                    />
-                    <span>Refresh</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Search & Filter Toolbar */}
-              <div className="bg-surface border border-hairline p-3.5 rounded-xl space-y-3">
-                <div className="flex flex-col sm:flex-row gap-2.5">
-                  {/* Search Bar */}
-                  <div className="relative flex-1">
-                    <Search className="h-4 w-4 text-muted absolute left-3 top-2.5" />
-                    <input
-                      type="text"
-                      value={libraryQuery}
-                      onChange={(e) => {
-                        setLibraryQuery(e.target.value);
-                        fetchSavedMedia(
-                          savedMediaFilter,
-                          e.target.value,
-                          libraryContainer,
-                          librarySort
-                        );
-                      }}
-                      placeholder="Search title, author, URL in library..."
-                      className="w-full bg-page border border-hairline rounded-lg pl-9 pr-8 py-2 text-xs text-ink placeholder-faint focus:outline-none focus:border-accent font-mono"
-                    />
-                    {libraryQuery && (
-                      <button
-                        onClick={() => {
-                          setLibraryQuery("");
-                          fetchSavedMedia(
-                            savedMediaFilter,
-                            "",
-                            libraryContainer,
-                            librarySort
-                          );
-                        }}
-                        className="absolute right-2.5 top-2.5 text-muted hover:text-ink"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Container Format Filter Dropdown */}
-                  <div className="flex items-center space-x-1.5 bg-page border border-hairline rounded-lg px-2.5 py-1.5 shrink-0">
-                    <Filter className="h-3.5 w-3.5 text-muted" />
-                    <select
-                      value={libraryContainer}
-                      onChange={(e) => setLibraryContainer(e.target.value)}
-                      className="bg-transparent text-xs font-mono text-ink/90 focus:outline-none cursor-pointer"
-                    >
-                      <option value="all" className="bg-page">All Containers</option>
-                      <option value="mp4" className="bg-page">MP4 Video</option>
-                      <option value="webm" className="bg-page">WEBM Video</option>
-                      <option value="mkv" className="bg-page">MKV Video</option>
-                      <option value="jpg" className="bg-page">JPG / JPEG Image</option>
-                      <option value="png" className="bg-page">PNG Image</option>
-                      <option value="webp" className="bg-page">WEBP Image</option>
-                      <option value="gif" className="bg-page">GIF Image</option>
-                      <option value="mp3" className="bg-page">MP3 Audio</option>
-                      <option value="m4a" className="bg-page">M4A Audio</option>
-                    </select>
-                  </div>
-
-                  {/* Sort Order Dropdown */}
-                  <div className="flex items-center space-x-1.5 bg-page border border-hairline rounded-lg px-2.5 py-1.5 shrink-0">
-                    <ArrowUpDown className="h-3.5 w-3.5 text-muted" />
-                    <select
-                      value={librarySort}
-                      onChange={(e) =>
-                        setLibrarySort(
-                          e.target.value as typeof librarySort
-                        )
-                      }
-                      className="bg-transparent text-xs font-mono text-ink/90 focus:outline-none cursor-pointer"
-                    >
-                      <option value="newest" className="bg-page">Newest First</option>
-                      <option value="oldest" className="bg-page">Oldest First</option>
-                      <option value="title" className="bg-page">Title (A-Z)</option>
-                      <option value="size_desc" className="bg-page">Size (Largest)</option>
-                      <option value="size_asc" className="bg-page">Size (Smallest)</option>
-                    </select>
-                  </div>
-                </div>
-
-                {/* Filter Pills */}
-                <div className="flex items-center justify-between pt-1 border-t border-hairline">
-                  <div className="flex items-center space-x-2">
-                    {(["all", "video", "image", "audio"] as const).map((filter) => (
-                      <button
-                        key={filter}
-                        onClick={() => setSavedMediaFilter(filter)}
-                        className={`px-3 py-1 rounded-md text-xs font-mono uppercase tracking-wider transition-all ${
-                          savedMediaFilter === filter
-                            ? "bg-accent text-on-accent font-semibold shadow-sm shadow-accent/30"
-                            : "bg-surface text-muted hover:text-ink hover:bg-raised"
-                        }`}
-                      >
-                        {filter === "all" ? "All Types" : `${filter}s`}
-                      </button>
-                    ))}
-                  </div>
-                  <span className="text-xs font-mono text-muted">
-                    {savedMediaItems.length} {savedMediaItems.length === 1 ? "item" : "items"} found
-                  </span>
-                </div>
-              </div>
-
-              {savedMediaLoading && savedMediaItems.length === 0 ? (
-                <div className="py-20 flex flex-col items-center justify-center space-y-3 text-muted">
-                  <Loader2 className="h-6 w-6 animate-spin text-accent" />
-                  <span className="text-xs font-mono">Loading saved library from SQLite...</span>
-                </div>
-              ) : savedMediaItems.length === 0 ? (
-                <div className="py-20 flex flex-col items-center justify-center space-y-3 bg-surface border border-hairline rounded-xl text-center p-8">
-                  <FolderArchive className="h-10 w-10 text-muted stroke-1" />
-                  <h3 className="text-sm font-semibold text-ink">No Matching Media Items</h3>
-                  <p className="text-xs text-muted max-w-sm">
-                    {libraryQuery || libraryContainer !== "all" || savedMediaFilter !== "all"
-                      ? "No saved media match your current search and filter criteria."
-                      : "Bookmark media items while scanning URLs to save them to your local collection."}
-                  </p>
-                  {(libraryQuery || libraryContainer !== "all" || savedMediaFilter !== "all") ? (
-                    <button
-                      onClick={() => {
-                        setLibraryQuery("");
-                        setLibraryContainer("all");
-                        setSavedMediaFilter("all");
-                        fetchSavedMedia("all", "", "all", librarySort);
-                      }}
-                      className="mt-2 px-4 py-2 bg-raised hover:bg-hairline/70 text-ink rounded-lg text-xs font-mono transition-colors"
-                    >
-                      Reset Filters
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => setActiveTab("scan")}
-                      className="mt-2 px-4 py-2 bg-accent hover:bg-accent-vivid text-on-accent rounded-lg text-xs font-medium transition-colors"
-                    >
-                      Discover Media in Scanner
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                  {savedMediaItems.map((item) => {
-                    const completedDl = completedDownloadsMap.get(item.id);
-                    const isDownloaded = Boolean(completedDl?.destination_path);
-
-                    return (
-                      <div
-                        key={item.id}
-                        className="bg-surface border border-hairline rounded-xl p-3.5 flex flex-col justify-between space-y-3 hover:border-hairline-strong transition-all group"
-                      >
-                        <div className="space-y-2.5">
-                          {/* Card Thumbnail with Overlay */}
-                          <div
-                            onClick={() =>
-                              handleOpenPreview(item, completedDl?.destination_path)
-                            }
-                            className="w-full h-36 rounded-lg bg-band border border-hairline overflow-hidden flex items-center justify-center relative cursor-pointer group/thumb"
-                          >
-                            {item.thumbnail_url ? (
-                              <img
-                                src={item.thumbnail_url}
-                                alt={item.title || "Media preview"}
-                                loading="lazy"
-                                className="w-full h-full object-cover group-hover/thumb:scale-105 transition-transform duration-300"
-                              />
-                            ) : item.media_type === "video" ? (
-                              <Film className="h-8 w-8 text-purple-600 dark:text-purple-400" />
-                            ) : item.media_type === "audio" ? (
-                              <Music className="h-8 w-8 text-pink-600 dark:text-pink-400" />
-                            ) : (
-                              <ImageIcon className="h-8 w-8 text-emerald-600 dark:text-emerald-400" />
-                            )}
-
-                            {/* Hover Preview Overlay */}
-                            <div className="absolute inset-0 bg-black/50 opacity-0 group-hover/thumb:opacity-100 flex items-center justify-center space-x-2 transition-opacity">
-                              <span className="p-2.5 rounded-full bg-accent/90 text-on-accent shadow-lg shadow-accent/40 flex items-center justify-center">
-                                {item.media_type === "image" ? (
-                                  <ZoomIn className="h-4 w-4" />
-                                ) : (
-                                  <Play className="h-4 w-4 fill-current ml-0.5" />
-                                )}
-                              </span>
-                              <span className="text-[11px] font-mono text-white font-semibold">
-                                Preview
-                              </span>
-                            </div>
-
-                            {/* Tags */}
-                            <div className="absolute top-2 left-2 flex items-center space-x-1.5">
-                              <span className="px-2 py-0.5 bg-black/80 rounded text-[11px] font-mono uppercase text-white/90">
-                                {item.media_type}
-                              </span>
-                              {isDownloaded && (
-                                <span className="px-1.5 py-0.5 bg-emerald-500/10 border border-emerald-500/30 rounded text-[9px] font-mono text-emerald-700 dark:text-emerald-300">
-                                  Saved to Disk
-                                </span>
-                              )}
-                            </div>
-
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleToggleBookmark(item);
-                              }}
-                              className="absolute top-2 right-2 p-1.5 rounded bg-accent text-on-accent shadow-md shadow-accent/40 hover:bg-accent-vivid transition-colors"
-                              title="Remove from saved library"
-                            >
-                              <Bookmark className="h-3.5 w-3.5 fill-current" />
-                            </button>
-                          </div>
-
-                          <div className="space-y-1">
-                            <h4
-                              className="text-xs font-bold text-ink truncate font-sans cursor-pointer hover:text-accent transition-colors"
-                              title={item.title || ""}
-                              onClick={() =>
-                                handleOpenPreview(item, completedDl?.destination_path)
-                              }
-                            >
-                              {item.title || "Untitled Item"}
-                            </h4>
-                            <p className="text-[11px] font-mono text-muted truncate">
-                              Author:{" "}
-                              <span className="text-ink/90">
-                                {item.author || "Unknown"}
-                              </span>
-                            </p>
-                            <div className="flex items-center justify-between text-[11px] font-mono text-muted pt-1">
-                              <span>{formatBytes(item.filesize_bytes)}</span>
-                              <span>{new Date(item.created_at).toLocaleDateString()}</span>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Card Actions Bar */}
-                        <div className="border-t border-hairline pt-2 flex items-center justify-between text-xs font-mono">
-                          <div className="flex items-center space-x-2">
-                            <button
-                              onClick={() =>
-                                handleOpenPreview(item, completedDl?.destination_path)
-                              }
-                              className="text-ink/80 hover:text-ink flex items-center space-x-1"
-                              title="Preview media"
-                            >
-                              <Eye className="h-3 w-3" />
-                              <span>Preview</span>
-                            </button>
-
-                            <button
-                              onClick={() => handleStartDownload(item)}
-                              disabled={downloadingIds.has(item.id)}
-                              className="text-emerald-600 dark:text-emerald-400 hover:text-emerald-600 dark:hover:text-emerald-300 flex items-center space-x-1"
-                              title={isDownloaded ? "Redownload media" : "Download media"}
-                            >
-                              {downloadingIds.has(item.id) ? (
-                                <Loader2 className="h-3 w-3 animate-spin" />
-                              ) : (
-                                <Download className="h-3 w-3" />
-                              )}
-                              <span>{isDownloaded ? "Redownload" : "Download"}</span>
-                            </button>
-
-                            <button
-                              onClick={() => handleOpenExportModal(item)}
-                              className="text-purple-600 dark:text-purple-400 hover:text-purple-600 dark:hover:text-purple-300 flex items-center space-x-1"
-                              title="Export metadata JSON"
-                            >
-                              <FileJson className="h-3 w-3" />
-                              <span>JSON</span>
-                            </button>
-                          </div>
-
-                          <button
-                            onClick={() =>
-                              handlePromptDelete(item, completedDl?.destination_path)
-                            }
-                            className="text-red-600 dark:text-red-400 hover:text-red-600 dark:hover:text-red-400 flex items-center space-x-1"
-                            title="Delete item"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+            <DownloadLibraryView
+              onPreviewItem={(item, localPath) => handleOpenPreview(item, localPath)}
+              onDownloadItem={(item) => void handleStartDownload(item)}
+              onOpenScan={() => setActiveTab("scan")}
+              onOpenExternal={openExternal}
+            />
           )}
 
           {/* Download Manager View */}
