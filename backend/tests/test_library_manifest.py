@@ -288,12 +288,26 @@ def test_scan_download_library_and_actions(isolated_download_dir: Path) -> None:
     img_file.write_bytes(b"img-bytes")
     record_download(img_dl, img_file)
 
+    # Unrelated folders without xakumedia-library.json must be ignored.
+    unrelated = isolated_download_dir / "ThirdPartyApp" / "someone" / "Videos"
+    unrelated.mkdir(parents=True)
+    (unrelated / "other-1.mp4").write_bytes(b"ignored")
+
     snapshot = scan_download_library(isolated_download_dir)
     assert snapshot["totals"]["platforms"] == 2
     assert snapshot["totals"]["downloaded"] == 2
     assert snapshot["totals"]["skipped"] == 1
     assert snapshot["totals"]["videos"] == 1
     assert snapshot["totals"]["images"] == 1
+
+    dispatcher = RpcDispatcher()
+    stats_res = dispatcher.dispatch(JsonRpcRequest(id="lib-stats", method="get_library_stats"))
+    assert stats_res.error is None
+    assert stats_res.result["images"] == 1
+    assert stats_res.result["videos"] == 1
+    assert stats_res.result["skipped"] == 1
+    assert stats_res.result["users"] == 2
+    assert stats_res.result["media_total"] == 2
 
     tiktok = next(p for p in snapshot["platforms"] if p["name"] == "Tiktok")
     user = tiktok["users"][0]

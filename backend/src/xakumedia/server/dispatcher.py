@@ -327,8 +327,21 @@ class RpcDispatcher:
 
         def get_library_stats_handler(params: dict[str, Any]) -> dict[str, Any]:
             from ..db import default_repository
+            from ..downloader.library import scan_download_library
 
-            return default_repository.get_library_stats()
+            db_stats = default_repository.get_library_stats()
+            snapshot = scan_download_library()
+            totals = snapshot["totals"]
+            return {
+                **db_stats,
+                "media_total": int(totals["downloaded"]),
+                "images": int(totals["images"]),
+                "videos": int(totals["videos"]),
+                "skipped": int(totals["skipped"]),
+                "users": int(totals["users"]),
+                "platforms": int(totals["platforms"]),
+                "root_dir": snapshot["root_dir"],
+            }
 
         def get_provider_capabilities_handler(params: dict[str, Any]) -> dict[str, Any]:
             url = params.get("url")

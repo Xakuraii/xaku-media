@@ -475,12 +475,26 @@ def _scan_kind_folder(folder: Path, platform_name: str, user_name: str) -> dict[
     }
 
 
+def _classify_manifest_rel(
+    rel_parts: tuple[str, ...], root_name: str
+) -> tuple[str, str, str]:
+    """Map a manifest folder's relative path to ``(platform, user, kind_folder)``."""
+    if len(rel_parts) >= 3:
+        return rel_parts[0], rel_parts[1], "/".join(rel_parts[2:])
+    if len(rel_parts) == 2:
+        return rel_parts[0], rel_parts[1], "Files"
+    if len(rel_parts) == 1:
+        return rel_parts[0], rel_parts[0], "Files"
+    return root_name or "Library", "Root", "Files"
+
+
 def scan_download_library(base_dir: Path | str | None = None) -> dict[str, Any]:
-    """Scan ``download_dir`` and all ``xakumedia-library.json`` manifests.
+    """Scan ``download_dir`` by detecting all ``xakumedia-library.json`` files.
 
     Builds the real folder hierarchy (Platform -> User -> Videos/Images/Audio)
-    including both downloaded media files on disk and skipped items recorded
-    inside each folder's JSON manifest.
+    from every directory containing a ``xakumedia-library.json`` manifest,
+    including both real media files on disk in those folders and skipped items
+    recorded in each manifest. Unrelated folders without a manifest are ignored.
     """
     root = Path(base_dir) if base_dir else default_config.download_dir
     platforms: list[dict[str, Any]] = []
@@ -493,54 +507,55 @@ def scan_download_library(base_dir: Path | str | None = None) -> dict[str, Any]:
 
     if root.exists() and root.is_dir():
         try:
-            platform_dirs = sorted(
-                (p for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")),
-                key=lambda p: p.name.lower(),
+            manifest_files = sorted(
+                root.rglob(MANIFEST_FILENAME),
+                key=lambda p: str(p).lower(),
             )
         except OSError:
-            platform_dirs = []
+            manifest_files = []
 
-        for platform_dir in platform_dirs:
-            users: list[dict[str, Any]] = []
+        # platform_name -> {"path": Path, "users": {user_name -> {"path": Path, "folders": [...]}}}
+        tree: dict[str, dict[str, Any]] = {}
+
+        for mf in manifest_files:
+            folder = mf.parent
             try:
-                user_dirs = sorted(
-                    (
-                        u
-                        for u in platform_dir.iterdir()
-                        if u.is_dir() and not u.name.startswith(".")
-                    ),
-                    key=lambda u: u.name.lower(),
+                rel_parts = folder.relative_to(root).parts
+            except ValueError:
+                continue
+            if any(part.startswith(".") for part in rel_parts):
+                continue
+
+            platform_name, user_name, kind_label = _classify_manifest_rel(rel_parts, root.name)
+            folder_info = _scan_kind_folder(folder, platform_name, user_name)
+            folder_info["name"] = kind_label
+            if folder_info["downloaded_count"] == 0 and folder_info["skipped_count"] == 0:
+                continue
+
+            platform_path = root / platform_name if rel_parts else root
+            user_path = (
+                root / platform_name / user_name
+                if len(rel_parts) >= 2
+                else platform_path
+            )
+
+            p_bucket = tree.setdefault(
+                platform_name, {"path": platform_path, "users": {}}
+            )
+            u_bucket = p_bucket["users"].setdefault(
+                user_name, {"path": user_path, "folders": []}
+            )
+            u_bucket["folders"].append(folder_info)
+
+        for platform_name in sorted(tree.keys(), key=str.lower):
+            p_bucket = tree[platform_name]
+            users: list[dict[str, Any]] = []
+
+            for user_name in sorted(p_bucket["users"].keys(), key=str.lower):
+                u_bucket = p_bucket["users"][user_name]
+                folders = sorted(
+                    u_bucket["folders"], key=lambda f: f["name"].lower()
                 )
-            except OSError:
-                user_dirs = []
-
-            for user_dir in user_dirs:
-                folders: list[dict[str, Any]] = []
-                try:
-                    kind_dirs = sorted(
-                        (
-                            k
-                            for k in user_dir.iterdir()
-                            if k.is_dir() and not k.name.startswith(".")
-                        ),
-                        key=lambda k: k.name.lower(),
-                    )
-                except OSError:
-                    kind_dirs = []
-
-                for kind_dir in kind_dirs:
-                    folder_info = _scan_kind_folder(
-                        kind_dir, platform_dir.name, user_dir.name
-                    )
-                    if folder_info["downloaded_count"] > 0 or folder_info["skipped_count"] > 0:
-                        folders.append(folder_info)
-
-                # Also support a manifest or media file placed directly inside user_dir.
-                direct_info = _scan_kind_folder(user_dir, platform_dir.name, user_dir.name)
-                if direct_info["downloaded_count"] > 0 or direct_info["skipped_count"] > 0:
-                    direct_info["name"] = "Files"
-                    folders.append(direct_info)
-
                 if not folders:
                     continue
 
@@ -562,8 +577,8 @@ def scan_download_library(base_dir: Path | str | None = None) -> dict[str, Any]:
                 )
                 users.append(
                     {
-                        "name": user_dir.name,
-                        "path": str(user_dir),
+                        "name": user_name,
+                        "path": str(u_bucket["path"]),
                         "downloaded_count": u_dl,
                         "skipped_count": u_skip,
                         "video_count": u_vid,
@@ -590,8 +605,8 @@ def scan_download_library(base_dir: Path | str | None = None) -> dict[str, Any]:
             total_size += p_size
             platforms.append(
                 {
-                    "name": platform_dir.name,
-                    "path": str(platform_dir),
+                    "name": platform_name,
+                    "path": str(p_bucket["path"]),
                     "user_count": len(users),
                     "downloaded_count": p_dl,
                     "skipped_count": p_skip,
