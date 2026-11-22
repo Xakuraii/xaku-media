@@ -1,11 +1,17 @@
 """Incremental rescan service and differential media discovery for saved sources."""
 
+import html
+import re
 from datetime import UTC, datetime
+from urllib.parse import urljoin, urlsplit
 
+import httpx
 from gallery_dl import extractor as gdl_extractor
 
+from ..auth.headers import DEFAULT_USER_AGENT
 from ..core.logging import get_logger
 from ..db import default_repository
+from ..db.connection import get_db_session
 from ..db.repository import MediaRepository
 from ..exceptions.base import (
     MediaUnavailableError,
@@ -18,8 +24,169 @@ from ..models.media import MediaItem
 from ..models.source import IncrementalScanResult, RescanAllSummary, SavedSource
 from ..models.url import ClassifiedUrl
 from ..scanners.direct import classify_direct_url
+from ..utils.security import validate_url_security
 
 logger = get_logger("sources.rescan")
+
+_HOST_PLATFORM_LABELS = {
+    "youtube.com": "Youtube",
+    "youtu.be": "Youtube",
+    "tiktok.com": "Tiktok",
+    "instagram.com": "Instagram",
+    "instagr.am": "Instagram",
+    "facebook.com": "Facebook",
+    "fb.com": "Facebook",
+    "fb.watch": "Facebook",
+    "x.com": "X",
+    "twitter.com": "X",
+}
+
+_META_IMAGE_PATTERNS = (
+    re.compile(
+        r'<meta[^>]+(?:property|name)=["\']'
+        r'(?:og:image(?::secure_url)?|twitter:image(?::src)?)["\']'
+        r'[^>]+content=["\']([^"\']+)["\']',
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\']'
+        r'(?:og:image(?::secure_url)?|twitter:image(?::src)?)["\']',
+        re.IGNORECASE,
+    ),
+)
+
+
+def infer_source_identity(url: str) -> tuple[str | None, str | None]:
+    """Infer ``(platform, author)`` from a source URL without network calls."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None, None
+
+    host = (parts.hostname or "").lower()
+    for prefix in ("www.", "m.", "mobile."):
+        if host.startswith(prefix):
+            host = host[len(prefix) :]
+
+    platform: str | None = None
+    for domain, label in _HOST_PLATFORM_LABELS.items():
+        if host == domain or host.endswith(f".{domain}"):
+            platform = label
+            break
+    if platform is None and host:
+        platform = host.split(".", 1)[0].capitalize()
+
+    segments = [seg for seg in parts.path.split("/") if seg]
+    author: str | None = None
+    if segments:
+        first = segments[0]
+        if first.startswith("@"):
+            author = first.lstrip("@")
+        elif first in ("channel", "c", "user") and len(segments) > 1:
+            author = segments[1].lstrip("@")
+        elif first not in (
+            "watch",
+            "playlist",
+            "shorts",
+            "reel",
+            "reels",
+            "p",
+            "explore",
+            "share",
+            "photo",
+            "video",
+        ):
+            author = first.lstrip("@")
+    return platform, author or None
+
+
+def _lookup_cached_avatar(repo: MediaRepository, url: str, author: str | None) -> str | None:
+    """Return a known thumbnail/avatar URL from local SQLite history when available."""
+    try:
+        with get_db_session(repo.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT thumbnail_url FROM media_items
+                WHERE (source_url = ? OR post_url = ?)
+                  AND thumbnail_url IS NOT NULL AND thumbnail_url != ''
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (url, url),
+            ).fetchone()
+            if row and row["thumbnail_url"]:
+                return str(row["thumbnail_url"])
+            if author:
+                row = conn.execute(
+                    """
+                    SELECT thumbnail_url FROM media_items
+                    WHERE LOWER(author) = LOWER(?)
+                      AND thumbnail_url IS NOT NULL AND thumbnail_url != ''
+                    ORDER BY created_at DESC LIMIT 1
+                    """,
+                    (author,),
+                ).fetchone()
+                if row and row["thumbnail_url"]:
+                    return str(row["thumbnail_url"])
+    except Exception:
+        pass
+    return None
+
+
+def _fetch_page_avatar(url: str) -> str | None:
+    """Best-effort SSRF-safe fetch of og:image / profile avatar for a saved URL."""
+    try:
+        safe_url = validate_url_security(url)
+    except Exception:
+        return None
+    try:
+        with httpx.Client(
+            follow_redirects=True,
+            timeout=4.0,
+            headers={"User-Agent": DEFAULT_USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
+        ) as client:
+            resp = client.get(safe_url)
+            if resp.status_code >= 400:
+                return None
+            ctype = (resp.headers.get("content-type") or "").lower()
+            if "text/html" not in ctype and "application/xhtml" not in ctype:
+                return None
+            snippet = resp.text[:120_000]
+            for pattern in _META_IMAGE_PATTERNS:
+                match = pattern.search(snippet)
+                if match:
+                    candidate = html.unescape(match.group(1).strip())
+                    if candidate:
+                        return urljoin(str(resp.url), candidate)
+    except Exception:
+        return None
+    return None
+
+
+def enrich_source_metadata(
+    source: SavedSource,
+    repository: MediaRepository | None = None,
+    *,
+    fetch_remote: bool = True,
+) -> SavedSource:
+    """Fill missing platform, author, and profile picture on a SavedSource."""
+    repo = repository or default_repository
+    inferred_platform, inferred_author = infer_source_identity(source.url)
+    if not source.platform and inferred_platform:
+        source.platform = inferred_platform
+    if not source.author and inferred_author:
+        source.author = inferred_author
+    if (source.title == source.url or not source.title) and source.author:
+        source.title = f"@{source.author}" if not source.author.startswith("@") else source.author
+
+    if not source.thumbnail_url:
+        cached = _lookup_cached_avatar(repo, source.url, source.author)
+        if cached:
+            source.thumbnail_url = cached
+        elif fetch_remote:
+            remote = _fetch_page_avatar(source.url)
+            if remote:
+                source.thumbnail_url = remote
+    return source
 
 
 def scan_source_url(url: str) -> tuple[ClassifiedUrl | None, list[MediaItem]]:
@@ -104,7 +271,31 @@ def incremental_rescan_source(
         except Exception as exc:
             logger.warning(f"Could not persist scan history during rescan: {exc}")
 
-    # Update source statistics
+    # Update source statistics and fill missing profile picture/author metadata.
+    first_thumb = next(
+        (item.thumbnail_url for item in discovered_items if item.thumbnail_url),
+        None,
+    )
+    first_author = next(
+        (item.author for item in discovered_items if item.author and item.author != "media"),
+        None,
+    )
+    if (
+        (not source.thumbnail_url and first_thumb)
+        or (not source.author and first_author)
+        or (not source.platform and classified and classified.platform)
+    ):
+        if not source.thumbnail_url and first_thumb:
+            source.thumbnail_url = first_thumb
+        if not source.author and first_author:
+            source.author = first_author
+        if not source.platform and classified and classified.platform:
+            source.platform = classified.platform
+        try:
+            repo.save_source(source)
+        except Exception:
+            pass
+
     repo.update_source_scan_stats(source.id, len(discovered_items), now)
     updated_source = repo.get_source(source.id) or source
 

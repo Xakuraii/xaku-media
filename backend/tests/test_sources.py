@@ -253,3 +253,34 @@ def test_dispatcher_source_endpoints(repo: MediaRepository) -> None:
     res = dispatcher.dispatch(req)
     assert res.error is None
     assert res.result["deleted"] is True
+
+
+def test_enrich_source_metadata_infers_identity_and_uses_cached_pfp(repo: MediaRepository) -> None:
+    from xakumedia.sources.rescan import enrich_source_metadata
+
+    item = MediaItem(
+        id="pfp-seed",
+        source_url="https://www.tiktok.com/@xakuraii",
+        media_type=MediaType.VIDEO,
+        author="xakuraii",
+        thumbnail_url="https://cdn.example.com/avatar.jpg",
+        original_url="https://cdn.example.com/v.mp4",
+    )
+    classified = ClassifiedUrl(
+        raw_url="https://www.tiktok.com/@xakuraii",
+        normalized_url="https://www.tiktok.com/@xakuraii",
+        category=UrlCategory.CHANNEL,
+    )
+    repo.save_scan_result(classified, [item])
+
+    src = SavedSource(
+        id="src-pfp",
+        url="https://www.tiktok.com/@xakuraii",
+        title="https://www.tiktok.com/@xakuraii",
+    )
+    enriched = enrich_source_metadata(src, repository=repo, fetch_remote=False)
+
+    assert enriched.platform == "Tiktok"
+    assert enriched.author == "xakuraii"
+    assert enriched.title == "@xakuraii"
+    assert enriched.thumbnail_url == "https://cdn.example.com/avatar.jpg"
