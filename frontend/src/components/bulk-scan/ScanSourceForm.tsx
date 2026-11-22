@@ -72,11 +72,9 @@ export function ScanSourceForm({
               onStart();
             }
           }}
-          rows={input.split("\n").length > 2 ? 4 : 3}
-          placeholder={
-            "https://www.youtube.com/@channel/videos\nhttps://www.youtube.com/playlist?list=...\nhttps://site.example/profile\n\nOne URL per line. Drag and drop links here."
-          }
-          className="w-full resize-y bg-transparent px-4 py-3 font-mono text-sm text-ink placeholder-faint focus:outline-none"
+          rows={input ? Math.min(6, Math.max(1, input.split("\n").length)) : 1}
+          placeholder="Paste URL(s) here..."
+          className="w-full resize-none overflow-y-auto bg-transparent px-4 py-3 font-mono text-sm text-ink placeholder-faint focus:outline-none"
         />
       </div>
 

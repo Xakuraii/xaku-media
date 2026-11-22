@@ -5,15 +5,14 @@ import { JobStatusList } from "./JobStatusList";
 import { PostBrowser } from "./PostBrowser";
 import { ScanErrorPanel } from "./ScanErrorPanel";
 import { ScanSourceForm } from "./ScanSourceForm";
-import { explainBookmarkFailure, explainDownloadFailure, explainStartFailure } from "./errors";
+import { explainDownloadFailure, explainStartFailure } from "./errors";
 import type {
   BulkScanViewProps,
   JobEntry,
   MediaFilter,
-  PostWithScan,
   ScanErrorInfo,
 } from "./types";
-import { itemKeys } from "./types";
+import { isItemSkipped, itemKeys } from "./types";
 import { useScanJobs } from "./useScanJobs";
 import { useScanSelection } from "./useScanSelection";
 import { chooseFormat, countPosts, filterPosts, hostOf, parseUrls } from "./utils";
@@ -57,8 +56,6 @@ export function BulkScanView({
   const [downloaded, setDownloaded] = useState<Set<string>>(new Set());
   const [skipped, setSkipped] = useState<Set<string>>(new Set());
   const [skipping, setSkipping] = useState<boolean>(false);
-  const [bookmarked, setBookmarked] = useState<Set<string>>(new Set());
-  const [bookmarkBusy, setBookmarkBusy] = useState<Set<string>>(new Set());
   const [bookmarking, setBookmarking] = useState<boolean>(false);
   const [savedLinks, setSavedLinks] = useState<Set<string>>(new Set());
   const [preferredResolution, setPreferredResolution] = useState<string>("1080p");
@@ -110,19 +107,6 @@ export function BulkScanView({
     return () => off?.();
   }, []);
 
-  const refreshBookmarks = useCallback(async () => {
-    try {
-      const result = await window.api?.querySavedMedia?.({ limit: 5000 });
-      if (result) setBookmarked(new Set((result.items || []).map((item) => item.id)));
-    } catch {
-      // Non-fatal; bookmark icons simply start unset.
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshBookmarks();
-  }, [refreshBookmarks]);
-
   const refreshSavedLinks = useCallback(async () => {
     try {
       const result = await window.api?.getSavedSources?.();
@@ -163,7 +147,11 @@ export function BulkScanView({
     }
   }, [allPosts]);
 
-  const saveScanLink = async (url: string, title: string) => {
+  const saveScanLink = async (
+    url: string,
+    title: string,
+    extra?: { author?: string | null; thumbnail_url?: string | null }
+  ) => {
     if (!window.api?.saveSource) {
       setError({
         title: "Save link unavailable",
@@ -175,9 +163,14 @@ export function BulkScanView({
     }
     setError(null);
     try {
-      await window.api.saveSource({ url, title: title || url });
+      await window.api.saveSource({
+        url,
+        title: title || url,
+        author: extra?.author || undefined,
+        thumbnail_url: extra?.thumbnail_url || undefined,
+      });
       setSavedLinks((prev) => new Set(prev).add(url));
-      setNotice(`Saved link: ${url}`);
+      setNotice(`Saved source link: ${url}`);
     } catch (err) {
       setError(explainStartFailure(err));
     }
@@ -206,72 +199,6 @@ export function BulkScanView({
     selectByType,
     invertSelection,
   } = useScanSelection(allPosts, filteredPosts, filter, downloaded, skipped);
-
-  const clearBusy = (key: string) =>
-    setBookmarkBusy((prev) => {
-      const next = new Set(prev);
-      next.delete(key);
-      return next;
-    });
-
-  const toggleItemBookmark = async (item: DiscoveredMediaItem) => {
-    if (!window.api?.toggleSaveMedia) {
-      setError({
-        title: "Bookmark unavailable",
-        summary: "The desktop bridge is not available.",
-        steps: [],
-        actions: [],
-      });
-      return;
-    }
-    setBookmarkBusy((prev) => new Set(prev).add(item.id));
-    try {
-      const result = await window.api.toggleSaveMedia(item.id);
-      setBookmarked((prev) => {
-        const next = new Set(prev);
-        const keys = [item.id, result.id].filter(Boolean);
-        for (const key of keys) {
-          if (result.is_saved) next.add(key);
-          else next.delete(key);
-        }
-        return next;
-      });
-    } catch (err) {
-      setError(explainBookmarkFailure(err));
-    } finally {
-      clearBusy(item.id);
-    }
-  };
-
-  const togglePostBookmark = async (post: PostWithScan) => {
-    if (!window.api?.toggleSavePost) {
-      setError({
-        title: "Bookmark unavailable",
-        summary: "The desktop bridge is not available.",
-        steps: [],
-        actions: [],
-      });
-      return;
-    }
-    const ids = post.media_items.map((item) => item.id);
-    if (ids.length === 0) return;
-    setBookmarkBusy((prev) => new Set(prev).add(post.id));
-    try {
-      const result = await window.api.toggleSavePost(post.id);
-      setBookmarked((prev) => {
-        const next = new Set(prev);
-        for (const id of ids) {
-          if (result.is_saved) next.add(id);
-          else next.delete(id);
-        }
-        return next;
-      });
-    } catch (err) {
-      setError(explainBookmarkFailure(err));
-    } finally {
-      clearBusy(post.id);
-    }
-  };
 
   const bookmarkInput = async () => {
     const urls = parseUrls(input);
@@ -304,7 +231,15 @@ export function BulkScanView({
         } catch {
           // keep raw url
         }
-        await window.api.saveSource({ url, title: host });
+        const matchingPost = allPosts.find((p) => p.source_url === url || p.post_url === url);
+        const thumb = matchingPost?.media_items.find((m) => m.thumbnail_url)?.thumbnail_url;
+        await window.api.saveSource({
+          url,
+          title: matchingPost?.author ? `@${matchingPost.author}` : host,
+          author: matchingPost?.author || undefined,
+          thumbnail_url: thumb || undefined,
+        });
+        setSavedLinks((prev) => new Set(prev).add(url));
         saved += 1;
       }
       setNotice(`Bookmarked ${saved} link${saved === 1 ? "" : "s"}.`);
@@ -410,23 +345,29 @@ export function BulkScanView({
       return false;
     }
 
+    const activeItems = downloadable.filter((item) => !isItemSkipped(item, skipped));
+    const skippedExcluded = downloadable.length - activeItems.length;
+    if (activeItems.length === 0) {
+      setNotice(
+        "Skipped items were excluded from download and remain recorded in the folder manifest. Unskip them first if you want to download them."
+      );
+      return false;
+    }
+
     setDownloading(true);
     setError(null);
     setNotice(null);
     try {
-      const payload = downloadable.map((item) => ({
+      const payload = activeItems.map((item) => ({
         media_item: item,
         selected_format: chooseFormat(item, preferredResolution),
       }));
       const result = await window.api.startBatchDownload(payload);
-      setNotice(`Queued ${result.tasks.length} download${result.tasks.length === 1 ? "" : "s"}.`);
-      // An explicit download overrides an earlier skip; the manifest flips to
-      // "downloaded" when the task completes.
-      setSkipped((prev) => {
-        const next = new Set(prev);
-        for (const item of downloadable) itemKeys(item).forEach((key) => next.delete(key));
-        return next;
-      });
+      setNotice(
+        `Queued ${result.tasks.length} download${result.tasks.length === 1 ? "" : "s"}${
+          skippedExcluded > 0 ? ` (${skippedExcluded} skipped excluded)` : ""
+        }.`
+      );
       onDownloadStarted?.();
       void refreshDownloaded();
       return true;
@@ -588,8 +529,6 @@ export function BulkScanView({
           selected={selected}
           downloaded={downloaded}
           skipped={skipped}
-          bookmarked={bookmarked}
-          bookmarkBusy={bookmarkBusy}
           savedLinks={savedLinks}
           runningCount={runningJobs.length}
           totalProgress={totalProgress}
@@ -602,9 +541,7 @@ export function BulkScanView({
           onSearchChange={setSearch}
           onToggleMedia={toggleMedia}
           onTogglePost={(post) => togglePost(post, filter)}
-          onToggleBookmark={(item) => void toggleItemBookmark(item)}
-          onTogglePostBookmark={(post) => void togglePostBookmark(post)}
-          onSaveLink={(url, title) => void saveScanLink(url, title)}
+          onSaveLink={(url, title, extra) => void saveScanLink(url, title, extra)}
           onDownloadItems={(items) => void queueDownloadItems(items)}
           onSelectAllVisible={selectAllVisible}
           onSelectOnlyNew={selectOnlyNew}

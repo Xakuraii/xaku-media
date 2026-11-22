@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import type { DiscoveredMediaItem } from "../../../../desktop/shared/types";
-import { isItemHandled, type PostWithScan } from "./types";
+import { isItemHandled, isItemSkipped, type PostWithScan } from "./types";
 import { visibleMedia } from "./utils";
 
 /** Selection is independent from filtering. */
@@ -51,8 +51,15 @@ export function useScanSelection(
   );
 
   const selectAllVisible = useCallback(
-    () => setSelected(new Set(visibleItems.map((item) => item.id))),
-    [visibleItems]
+    () =>
+      setSelected(
+        new Set(
+          visibleItems
+            .filter((item) => !isItemSkipped(item, skipped))
+            .map((item) => item.id)
+        )
+      ),
+    [visibleItems, skipped]
   );
 
   const selectOnlyNew = useCallback(
@@ -72,9 +79,13 @@ export function useScanSelection(
   const selectByType = useCallback(
     (type: "image" | "video") =>
       setSelected(
-        new Set(visibleItems.filter((item) => item.media_type === type).map((item) => item.id))
+        new Set(
+          visibleItems
+            .filter((item) => item.media_type === type && !isItemSkipped(item, skipped))
+            .map((item) => item.id)
+        )
       ),
-    [visibleItems]
+    [visibleItems, skipped]
   );
 
   const selectAlbums = useCallback(
@@ -84,18 +95,23 @@ export function useScanSelection(
           visiblePosts
             .filter((post) => post.media_items.length > 1)
             .flatMap((post) => visibleMedia(post, filter))
+            .filter((item) => !isItemSkipped(item, skipped))
             .map((item) => item.id)
         )
       ),
-    [visiblePosts, filter]
+    [visiblePosts, filter, skipped]
   );
 
   const invertSelection = useCallback(
     () =>
       setSelected(
-        new Set(visibleItems.filter((item) => !selected.has(item.id)).map((item) => item.id))
+        new Set(
+          visibleItems
+            .filter((item) => !selected.has(item.id) && !isItemSkipped(item, skipped))
+            .map((item) => item.id)
+        )
       ),
-    [selected, visibleItems]
+    [selected, visibleItems, skipped]
   );
 
   return {

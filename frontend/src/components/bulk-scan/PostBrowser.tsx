@@ -7,7 +7,6 @@ import {
   Film,
   Image as ImageIcon,
   Layers,
-  Link2,
   Loader2,
   Search,
   Square,
@@ -28,8 +27,6 @@ interface PostBrowserProps {
   selected: Set<string>;
   downloaded: Set<string>;
   skipped: Set<string>;
-  bookmarked: Set<string>;
-  bookmarkBusy: Set<string>;
   savedLinks: Set<string>;
   runningCount: number;
   totalProgress: { posts: number; media: number };
@@ -42,9 +39,11 @@ interface PostBrowserProps {
   onSearchChange: (value: string) => void;
   onToggleMedia: (itemId: string) => void;
   onTogglePost: (post: PostWithScan) => void;
-  onToggleBookmark: (item: DiscoveredMediaItem) => void;
-  onTogglePostBookmark: (post: PostWithScan) => void;
-  onSaveLink: (url: string, title: string) => void;
+  onSaveLink: (
+    url: string,
+    title: string,
+    extra?: { author?: string | null; thumbnail_url?: string | null }
+  ) => void;
   onDownloadItems: (items: DiscoveredMediaItem[]) => void;
   onSelectAllVisible: () => void;
   onSelectOnlyNew: () => void;
@@ -70,8 +69,6 @@ export function PostBrowser({
   selected,
   downloaded,
   skipped,
-  bookmarked,
-  bookmarkBusy,
   savedLinks,
   runningCount,
   totalProgress,
@@ -84,8 +81,6 @@ export function PostBrowser({
   onSearchChange,
   onToggleMedia,
   onTogglePost,
-  onToggleBookmark,
-  onTogglePostBookmark,
   onSaveLink,
   onDownloadItems,
   onSelectAllVisible,
@@ -330,13 +325,10 @@ export function PostBrowser({
               selected={selected}
               downloaded={downloaded}
               skipped={skipped}
-              bookmarked={bookmarked}
-              bookmarkBusy={bookmarkBusy}
               savedLinks={savedLinks}
               preferredResolution={preferredResolution}
               downloading={downloading}
               onToggleMedia={onToggleMedia}
-              onToggleBookmark={onToggleBookmark}
               onSaveLink={onSaveLink}
               onSelectVideos={() => onSelectByType("video")}
             />
@@ -350,15 +342,11 @@ export function PostBrowser({
               selected={selected}
               downloaded={downloaded}
               skipped={skipped}
-              bookmarked={bookmarked}
-              bookmarkBusy={bookmarkBusy}
               savedLinks={savedLinks}
               preferredResolution={preferredResolution}
               downloading={downloading}
               onToggleMedia={onToggleMedia}
               onTogglePost={onTogglePost}
-              onToggleBookmark={onToggleBookmark}
-              onTogglePostBookmark={onTogglePostBookmark}
               onSaveLink={onSaveLink}
               onDownloadItems={onDownloadItems}
             />
@@ -390,13 +378,10 @@ function VideoShelf({
   selected,
   downloaded,
   skipped,
-  bookmarked,
-  bookmarkBusy,
   savedLinks,
   preferredResolution,
   downloading,
   onToggleMedia,
-  onToggleBookmark,
   onSaveLink,
   onSelectVideos,
 }: {
@@ -407,14 +392,15 @@ function VideoShelf({
   selected: Set<string>;
   downloaded: Set<string>;
   skipped: Set<string>;
-  bookmarked: Set<string>;
-  bookmarkBusy: Set<string>;
   savedLinks: Set<string>;
   preferredResolution?: string;
   downloading: boolean;
   onToggleMedia: (itemId: string) => void;
-  onToggleBookmark: (item: DiscoveredMediaItem) => void;
-  onSaveLink: (url: string, title: string) => void;
+  onSaveLink: (
+    url: string,
+    title: string,
+    extra?: { author?: string | null; thumbnail_url?: string | null }
+  ) => void;
   onSelectVideos: () => void;
 }) {
   return (
@@ -448,16 +434,17 @@ function VideoShelf({
               variant="video"
               caption={post.author || post.title}
               isSelected={selected.has(item.id)}
-              isBookmarked={bookmarked.has(item.id)}
-              bookmarkBusy={bookmarkBusy.has(post.id) || bookmarkBusy.has(item.id)}
               wasDownloaded={isItemDownloaded(item, downloaded)}
               isSkipped={isItemSkipped(item, skipped)}
               chosenFormat={chosen}
               isLinkSaved={Boolean(linkUrl && savedLinks.has(linkUrl))}
               onToggle={() => onToggleMedia(item.id)}
-              onToggleBookmark={() => onToggleBookmark(item)}
               onSaveLink={() =>
-                linkUrl && onSaveLink(linkUrl, item.title || `${post.author} video`)
+                linkUrl &&
+                onSaveLink(linkUrl, item.title || `${post.author} video`, {
+                  author: item.author || post.author,
+                  thumbnail_url: item.thumbnail_url,
+                })
               }
             />
           );
@@ -490,15 +477,11 @@ function PostGroup({
   selected,
   downloaded,
   skipped,
-  bookmarked,
-  bookmarkBusy,
   savedLinks,
   preferredResolution,
   downloading,
   onToggleMedia,
   onTogglePost,
-  onToggleBookmark,
-  onTogglePostBookmark,
   onSaveLink,
   onDownloadItems,
 }: {
@@ -507,16 +490,16 @@ function PostGroup({
   selected: Set<string>;
   downloaded: Set<string>;
   skipped: Set<string>;
-  bookmarked: Set<string>;
-  bookmarkBusy: Set<string>;
   savedLinks: Set<string>;
   preferredResolution?: string;
   downloading: boolean;
   onToggleMedia: (itemId: string) => void;
   onTogglePost: (post: PostWithScan) => void;
-  onToggleBookmark: (item: DiscoveredMediaItem) => void;
-  onTogglePostBookmark: (post: PostWithScan) => void;
-  onSaveLink: (url: string, title: string) => void;
+  onSaveLink: (
+    url: string,
+    title: string,
+    extra?: { author?: string | null; thumbnail_url?: string | null }
+  ) => void;
   onDownloadItems: (items: DiscoveredMediaItem[]) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -526,15 +509,14 @@ function PostGroup({
   const shownItems = expanded ? items : items.slice(0, GROUP_MEDIA_PAGE_SIZE);
   const hiddenCount = Math.max(0, items.length - shownItems.length);
   const allSelected = items.every((item) => selected.has(item.id));
-  const savedCount = items.filter((item) => bookmarked.has(item.id)).length;
-  const allSaved = savedCount === items.length;
-  const postBusy = bookmarkBusy.has(post.id);
+  const downloadableItems = items.filter((item) => !isItemSkipped(item, skipped));
   const images = items.filter((item) => item.media_type === "image").length;
   const videos = items.filter((item) => item.media_type === "video").length;
   const label = items.length > 1 ? "album" : "post";
   const heading = post.title || post.provider_post_id || `Untitled ${label}`;
   const linkUrl = post.post_url || post.source_url;
   const linkSaved = Boolean(linkUrl && savedLinks.has(linkUrl));
+  const groupThumb = items.find((item) => item.thumbnail_url)?.thumbnail_url ?? null;
 
   return (
     <section className="overflow-hidden rounded-xl border border-hairline bg-surface">
@@ -567,41 +549,35 @@ function PostGroup({
         {linkUrl && (
           <button
             type="button"
-            onClick={() => onSaveLink(linkUrl, heading)}
-            title={linkSaved ? "This source link is already saved" : "Save this source link"}
+            onClick={() =>
+              onSaveLink(linkUrl, heading, {
+                author: post.author,
+                thumbnail_url: groupThumb,
+              })
+            }
+            title={linkSaved ? "This source link is already saved" : "Save source link"}
             className={`inline-flex items-center gap-1 rounded border px-2 py-1 font-mono text-[10px] transition-colors ${
               linkSaved
-                ? "border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300"
+                ? "border-accent/40 bg-accent/10 text-accent"
                 : "border-hairline text-muted hover:bg-raised hover:text-ink"
             }`}
           >
-            <Link2 className="h-3 w-3" />
-            {linkSaved ? "Link saved" : "Save link"}
+            <Bookmark className={`h-3 w-3 ${linkSaved ? "fill-current" : ""}`} />
+            {linkSaved ? "Saved source" : "Save source"}
           </button>
         )}
         <button
           type="button"
-          onClick={() => onTogglePostBookmark(post)}
-          disabled={postBusy}
-          title={allSaved ? "Remove this post from favorites" : "Save this post to favorites"}
-          aria-pressed={allSaved}
-          className={`inline-flex items-center gap-1 rounded border px-2 py-1 font-mono text-[10px] transition-colors ${
-            allSaved
-              ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
-              : "border-hairline text-muted hover:bg-raised hover:text-ink"
-          } ${postBusy ? "opacity-60" : ""}`}
-        >
-          <Bookmark className={`h-3 w-3 ${allSaved ? "fill-current" : ""}`} />
-          {allSaved ? `Saved ${savedCount}/${items.length}` : "Save post"}
-        </button>
-        <button
-          type="button"
-          onClick={() => onDownloadItems(items)}
-          disabled={downloading || items.length === 0}
+          onClick={() => onDownloadItems(downloadableItems)}
+          disabled={downloading || downloadableItems.length === 0}
           className="inline-flex items-center gap-1 rounded border border-accent/30 bg-accent/10 px-2 py-1 font-mono text-[10px] text-accent transition-colors hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Download className="h-3 w-3" />
-          {items.length > 1 ? `Download ${label} (${items.length})` : "Download"}
+          {downloadableItems.length > 1
+            ? `Download ${label} (${downloadableItems.length})`
+            : downloadableItems.length === 1
+            ? "Download"
+            : "All skipped"}
         </button>
       </header>
 
@@ -614,13 +590,10 @@ function PostGroup({
               item={item}
               index={index}
               isSelected={selected.has(item.id)}
-              isBookmarked={bookmarked.has(item.id)}
-              bookmarkBusy={postBusy || bookmarkBusy.has(item.id)}
               wasDownloaded={isItemDownloaded(item, downloaded)}
               isSkipped={isItemSkipped(item, skipped)}
               chosenFormat={chosen}
               onToggle={() => onToggleMedia(item.id)}
-              onToggleBookmark={() => onToggleBookmark(item)}
             />
           );
         })}
@@ -666,14 +639,11 @@ function MediaCard({
   variant = "image",
   caption,
   isSelected,
-  isBookmarked,
-  bookmarkBusy,
   wasDownloaded,
   isSkipped,
   chosenFormat,
   isLinkSaved = false,
   onToggle,
-  onToggleBookmark,
   onSaveLink,
 }: {
   item: DiscoveredMediaItem;
@@ -681,14 +651,11 @@ function MediaCard({
   variant?: "video" | "image";
   caption?: string | null;
   isSelected: boolean;
-  isBookmarked: boolean;
-  bookmarkBusy: boolean;
   wasDownloaded: boolean;
   isSkipped: boolean;
   chosenFormat: ReturnType<typeof chooseFormat>;
   isLinkSaved?: boolean;
   onToggle: () => void;
-  onToggleBookmark: () => void;
   onSaveLink?: () => void;
 }) {
   const displaySize = chosenFormat?.filesize_bytes ?? item.filesize_bytes;
@@ -731,33 +698,19 @@ function MediaCard({
         >
           {isSelected ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
         </button>
-        <button
-          type="button"
-          onClick={onToggleBookmark}
-          disabled={bookmarkBusy}
-          className={`absolute right-1.5 top-1.5 rounded p-1 backdrop-blur transition-colors ${
-            isBookmarked
-              ? "bg-amber-500/90 text-white"
-              : "bg-black/60 text-white/75 hover:bg-amber-500/80 hover:text-white"
-          } ${bookmarkBusy ? "opacity-60" : ""}`}
-          aria-label={isBookmarked ? "Remove from favorites" : "Save to favorites"}
-          aria-pressed={isBookmarked}
-        >
-          <Bookmark className={`h-3.5 w-3.5 ${isBookmarked ? "fill-current" : ""}`} />
-        </button>
         {onSaveLink && (
           <button
             type="button"
             onClick={onSaveLink}
-            className={`absolute right-1.5 top-9 rounded p-1 backdrop-blur transition-colors ${
+            className={`absolute right-1.5 top-1.5 rounded p-1 backdrop-blur transition-colors ${
               isLinkSaved
-                ? "bg-sky-600/90 text-white"
-                : "bg-black/60 text-white/75 hover:bg-sky-600/85 hover:text-white"
+                ? "bg-accent text-on-accent"
+                : "bg-black/60 text-white/75 hover:bg-accent hover:text-on-accent"
             }`}
             aria-label={isLinkSaved ? "Source link saved" : "Save source link"}
             title={isLinkSaved ? "Source link saved" : "Save source link"}
           >
-            <Link2 className="h-3.5 w-3.5" />
+            <Bookmark className={`h-3.5 w-3.5 ${isLinkSaved ? "fill-current" : ""}`} />
           </button>
         )}
         <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 font-mono text-[9px] uppercase text-white/85">
