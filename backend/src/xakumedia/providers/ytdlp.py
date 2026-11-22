@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlsplit, urlunsplit
 import yt_dlp
 from yt_dlp.utils import DownloadError, ExtractorError
 
+from ..core.config import default_config
 from ..core.logging import get_logger
 from ..exceptions.base import (
     ExtractionError,
@@ -295,8 +296,8 @@ class YtDlpProvider(BaseProvider):
             "no_warnings": True,
             "skip_download": True,
             "simulate": True,
-            "socket_timeout": 20,
-            "retries": 1,
+            "socket_timeout": float(default_config.request_timeout_seconds),
+            "retries": int(default_config.max_retries),
             "noplaylist": False,
         }
         return opts

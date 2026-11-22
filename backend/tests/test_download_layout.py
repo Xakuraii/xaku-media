@@ -187,3 +187,23 @@ def test_missing_author_falls_back_to_media_folder(tmp_path: Path) -> None:
     assert destination_directory(item, tmp_path) == (
         tmp_path / "Others" / "media" / "Videos"
     )
+
+
+def test_short_host_aliases_map_to_canonical_platform_folders(tmp_path: Path) -> None:
+    fb_watch = _item(
+        provider="gallerydl",
+        media_type=MediaType.VIDEO,
+        extractor="",
+        source_url="https://fb.watch/abc123/",
+        author="xakuraii",
+    )
+    ig_short = _item(
+        provider="gallerydl",
+        media_type=MediaType.IMAGE,
+        extractor="",
+        source_url="https://instagr.am/p/xyz/",
+        author="xakuraii",
+    )
+
+    assert platform_folder(fb_watch) == "Facebook"
+    assert platform_folder(ig_short) == "Instagram"

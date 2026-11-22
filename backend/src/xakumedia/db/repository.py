@@ -1134,10 +1134,12 @@ class MediaRepository:
         default_config.log_level = "INFO"
 
         try:
+            from ..core.logging import set_log_level
             from ..downloader import default_download_manager, default_throttler
 
             default_download_manager.set_concurrency(default_config.max_concurrent_downloads)
             default_throttler.set_speed_limit(0)
+            set_log_level(default_config.log_level)
         except Exception:
             pass
 

@@ -224,3 +224,147 @@ def test_sequence_compaction_renames_files_and_db_rows(
         if task.destination_path
     }
     assert stored_paths == {"artist-vdo-1.mp4", "artist-vdo-2.mp4"}
+
+
+def test_portrait_1080p_video_selected_under_1080p_ceiling(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, "portrait")
+    default_config.default_video_resolution = VideoResolution.RES_1080P
+    portrait_item = MediaItem(
+        id="portrait-1",
+        source_url="https://www.tiktok.com/@xakuraii/video/123",
+        original_url="https://cdn.example.com/123.mp4",
+        media_type=MediaType.VIDEO,
+        author="xakuraii",
+        available_formats=[
+            MediaFormatInfo(
+                format_id="2160p",
+                container="mp4",
+                video_codec="h264",
+                audio_codec="aac",
+                width=2160,
+                height=3840,
+                url="https://cdn.example.com/2160.mp4",
+            ),
+            MediaFormatInfo(
+                format_id="1080p",
+                container="mp4",
+                video_codec="h264",
+                audio_codec="aac",
+                width=1080,
+                height=1920,
+                url="https://cdn.example.com/1080.mp4",
+            ),
+            MediaFormatInfo(
+                format_id="540p",
+                container="mp4",
+                video_codec="h264",
+                audio_codec="aac",
+                width=540,
+                height=960,
+                url="https://cdn.example.com/540.mp4",
+            ),
+        ],
+    )
+
+    try:
+        selected, _, _ = manager._plan_streams(portrait_item, None)
+    finally:
+        manager._executor.shutdown(wait=True)
+
+    assert selected is not None
+    assert selected.format_id == "1080p"
+
+
+def test_find_best_format_skips_audio_only_when_video_exceeds_ceiling() -> None:
+    item = MediaItem(
+        id="video-audio-only",
+        source_url="https://www.youtube.com/watch?v=xyz",
+        original_url="https://cdn.example.com/xyz.mp4",
+        media_type=MediaType.VIDEO,
+        author="xakuraii",
+        available_formats=[
+            MediaFormatInfo(
+                format_id="1440p",
+                container="mp4",
+                video_codec="avc1",
+                audio_codec="mp4a",
+                width=2560,
+                height=1440,
+                url="https://cdn.example.com/1440.mp4",
+            ),
+            MediaFormatInfo(
+                format_id="audio",
+                container="m4a",
+                audio_codec="mp4a",
+                url="https://cdn.example.com/audio.m4a",
+            ),
+        ],
+    )
+
+    selected = item.find_best_format(VideoResolution.RES_1080P)
+    assert selected is not None
+    assert selected.format_id == "1440p"
+
+
+def test_timeout_and_retry_preferences_apply_to_providers() -> None:
+    from xakumedia.providers.ytdlp import YtDlpProvider
+
+    default_config.request_timeout_seconds = 75.0
+    default_config.max_retries = 6
+
+    opts = YtDlpProvider()._base_opts()
+    assert opts["socket_timeout"] == 75.0
+    assert opts["retries"] == 6
+
+
+def test_sequence_reservation_avoids_collisions_across_rapid_batches(
+    temp_download_dir: Path, tmp_path: Path
+) -> None:
+    repo = MediaRepository(tmp_path / "rapid.db")
+    manager = DownloadManager(max_concurrent=1, repository=repo)
+    gate = threading.Event()
+
+    def slow_stream(url: str, destination_path: Path, **kwargs: object) -> Path:
+        gate.wait(timeout=2.0)
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        destination_path.write_bytes(b"ok")
+        return destination_path
+
+    def make_items(prefix: str) -> list[dict[str, object]]:
+        return [
+            {
+                "media_item": MediaItem(
+                    id=f"{prefix}-{i}",
+                    source_url=f"https://www.tiktok.com/@xakuraii/video/{prefix}{i}",
+                    original_url=f"https://cdn.example.com/{prefix}{i}.mp4",
+                    media_type=MediaType.VIDEO,
+                    author="xakuraii",
+                    metadata_extra={"extractor": "TikTok"},
+                )
+            }
+            for i in range(2)
+        ]
+
+    import xakumedia.downloader.manager as dm_mod
+
+    try:
+        with patch.object(dm_mod, "download_stream", side_effect=slow_stream):
+            batch_one = manager.start_batch_download(make_items("a"))
+            batch_two = manager.start_batch_download(make_items("b"))
+            gate.set()
+            manager._executor.shutdown(wait=True)
+    finally:
+        gate.set()
+        manager._executor.shutdown(wait=True)
+
+    names = sorted(
+        t.destination_path.name
+        for t in (batch_one + batch_two)
+        if t.destination_path is not None
+    )
+    assert names == [
+        "xakuraii-vdo-1.mp4",
+        "xakuraii-vdo-2.mp4",
+        "xakuraii-vdo-3.mp4",
+        "xakuraii-vdo-4.mp4",
+    ]

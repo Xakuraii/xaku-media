@@ -26,6 +26,7 @@ from ..server.loop import send_notification
 from ..server.protocol import JsonRpcNotification
 from ..utils.naming import (
     compact_sequence_numbers,
+    extract_sequence_number,
     format_sequential_filename,
     get_next_sequence_number,
 )
@@ -133,6 +134,27 @@ class DownloadManager:
                     self._run_task, task, url, cancel_event, pause_event
                 )
 
+    def _in_flight_sequence_numbers(
+        self,
+        directory: Path,
+        username: str,
+        media_type: MediaType,
+    ) -> list[int]:
+        """Return sequence numbers reserved by active or queued tasks in ``directory``."""
+        numbers: list[int] = []
+        with self._lock:
+            tasks = list(self._active_tasks.values()) + [
+                task for task, _ in self._pending_queue
+            ]
+        for task in tasks:
+            dest = task.destination_path
+            if dest is None or dest.parent != directory:
+                continue
+            num = extract_sequence_number(dest.name, username, media_type)
+            if num is not None:
+                numbers.append(num)
+        return numbers
+
     def _prepare_sequence_folder(
         self,
         directory: Path,
@@ -146,6 +168,8 @@ class DownloadManager:
         Renamed files keep their download-task rows in sync.
         """
         with self._sequence_lock:
+            if self._in_flight_sequence_numbers(directory, username, media_type):
+                return
             renamed = compact_sequence_numbers(directory, username, media_type)
             if not renamed:
                 return
@@ -159,6 +183,19 @@ class DownloadManager:
                 self.repository.remap_download_paths(mapping)
             except Exception as exc:  # never block a download on a path remap
                 logger.warning(f"Could not remap download paths after renumbering: {exc}")
+
+    def _next_available_sequence(
+        self,
+        directory: Path,
+        username: str,
+        media_type: MediaType,
+    ) -> int:
+        """Return the next unused sequence number across disk and queued tasks."""
+        disk_next = get_next_sequence_number(directory, username, media_type)
+        in_flight = self._in_flight_sequence_numbers(directory, username, media_type)
+        if not in_flight:
+            return disk_next
+        return max(disk_next, max(in_flight) + 1)
 
     def start_download(
         self,
@@ -194,7 +231,7 @@ class DownloadManager:
             target_dir = destination_directory(media_item)
             target_dir.mkdir(parents=True, exist_ok=True)
             self._prepare_sequence_folder(target_dir, username, media_item.media_type)
-            seq = get_next_sequence_number(target_dir, username, media_item.media_type)
+            seq = self._next_available_sequence(target_dir, username, media_item.media_type)
             filename = format_sequential_filename(username, media_item.media_type, seq, ext)
             dest = target_dir / filename
 
@@ -304,7 +341,9 @@ class DownloadManager:
 
                 key = (item_dir, username, media_item.media_type)
                 if key not in seq_tracker:
-                    seq = get_next_sequence_number(item_dir, username, media_item.media_type)
+                    seq = self._next_available_sequence(
+                        item_dir, username, media_item.media_type
+                    )
                     seq_tracker[key] = seq
                 else:
                     seq_tracker[key] += 1
