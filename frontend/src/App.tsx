@@ -86,6 +86,7 @@ export const App: React.FC = () => {
   const [pythonPing, setPythonPing] = useState<PythonPingResult | null>(null);
   const [pythonLatency, setPythonLatency] = useState<number | null>(null);
   const [ffmpegInfo, setFfmpegInfo] = useState<FFmpegInfoResult | null>(null);
+  const [preferredResolution, setPreferredResolution] = useState<string>("1080p");
   const [isPinging, setIsPinging] = useState<boolean>(false);
   const [urlInput, setUrlInput] = useState<string>("");
   const [isScanning, setIsScanning] = useState<boolean>(false);
@@ -482,6 +483,19 @@ export const App: React.FC = () => {
     }
   };
 
+  useEffect(() => {
+    void (async () => {
+      try {
+        const prefs = await window.api?.getPreferences?.();
+        if (prefs && typeof prefs.default_video_resolution === "string") {
+          setPreferredResolution(prefs.default_video_resolution);
+        }
+      } catch {
+        // Keep the 1080p default.
+      }
+    })();
+  }, []);
+
   const handleScanUrlWith = async (urlToScan: string) => {
     if (!urlToScan.trim() || isScanning) return;
 
@@ -500,7 +514,7 @@ export const App: React.FC = () => {
       setScanResult(res);
       setGalleryPage(1);
       if (res.media_item) {
-        setSelectedFormat(chooseFormat(res.media_item));
+        setSelectedFormat(chooseFormat(res.media_item, preferredResolution));
       } else {
         setSelectedFormat(null);
       }
@@ -618,7 +632,7 @@ export const App: React.FC = () => {
     try {
       const payload = items.map((item) => ({
         media_item: item,
-        selected_format: chooseFormat(item),
+        selected_format: chooseFormat(item, preferredResolution),
       }));
       const res = await window.api.startBatchDownload(payload, targetDir);
       setDownloadTasks((prev) => {
@@ -1035,22 +1049,24 @@ export const App: React.FC = () => {
       <aside className="d-sidebar flex w-60 shrink-0 flex-col justify-between p-3">
         <div>
           {/* Brand */}
-          <div className="mb-5 flex items-center gap-3 px-2 py-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-hairline bg-surface shadow-sm">
-              <img
-                src="./XakuMedia.svg"
-                alt="XakuMedia logo"
-                className="h-6 w-6"
-                draggable={false}
-              />
-            </div>
-            <div className="min-w-0">
-              <span className="block truncate text-[13px] font-semibold tracking-tight text-ink">
-                XakuMedia
-              </span>
-              <span className="block truncate font-mono text-[10px] uppercase tracking-[0.16em] text-faint">
-                Local media toolkit
-              </span>
+          <div className="-mx-1 mb-5 overflow-hidden rounded-2xl border border-accent/25 bg-gradient-to-br from-accent/15 via-accent/5 to-transparent px-3 py-3.5">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent shadow-lg shadow-accent/30 ring-1 ring-white/15">
+                <img
+                  src="./XakuMedia.svg"
+                  alt="XakuMedia logo"
+                  className="h-8 w-8 rounded-md"
+                  draggable={false}
+                />
+              </div>
+              <div className="min-w-0">
+                <span className="block truncate text-[15px] font-bold tracking-tight text-accent">
+                  XakuMedia
+                </span>
+                <span className="block truncate font-mono text-[10px] uppercase tracking-[0.16em] text-faint">
+                  Local media toolkit
+                </span>
+              </div>
             </div>
           </div>
 
@@ -1092,37 +1108,6 @@ export const App: React.FC = () => {
               </div>
             ))}
           </nav>
-        </div>
-
-        {/* Runtime status */}
-        <div className="mt-4 space-y-2 border-t border-hairline px-3 pt-3">
-          <div className="flex items-center gap-2 font-mono text-[10px] text-muted">
-            <span
-              className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                window.api ? "bg-emerald-500" : "bg-amber-500"
-              }`}
-            />
-            <span className="truncate" title={ipcStatus}>
-              {ipcStatus}
-            </span>
-          </div>
-          <div className="flex items-center gap-2 font-mono text-[10px] text-muted">
-            <span
-              className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                pythonStatus?.connected ? "bg-emerald-500" : "bg-amber-500"
-              }`}
-            />
-            <span className="truncate">
-              {pythonStatus?.connected
-                ? `Python engine · PID ${pythonStatus.pid}`
-                : "Python engine starting…"}
-            </span>
-          </div>
-          {systemInfo && (
-            <p className="truncate font-mono text-[10px] text-faint">
-              {systemInfo.platform} · v{systemInfo.version}
-            </p>
-          )}
         </div>
       </aside>
 
@@ -1170,25 +1155,6 @@ export const App: React.FC = () => {
                   {activeTaskCount} active
                 </span>
               </button>
-            )}
-            {pythonStatus?.connected && (
-              <div className="hidden items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-[11px] text-emerald-700 lg:flex dark:text-emerald-300">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                <span className="font-mono">Python IPC</span>
-              </div>
-            )}
-            {ffmpegInfo?.installed ? (
-              <div className="hidden items-center gap-1.5 rounded-full border border-purple-500/30 bg-purple-500/10 px-3 py-1 text-[11px] text-purple-700 lg:flex dark:text-purple-300">
-                <Sparkles className="h-3 w-3 text-purple-600 dark:text-purple-400" />
-                <span className="font-mono">
-                  FFmpeg {ffmpegInfo.version?.split("-")[0] || "Active"}
-                </span>
-              </div>
-            ) : (
-              <div className="hidden items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-[11px] text-amber-700 lg:flex dark:text-amber-300">
-                <AlertCircle className="h-3 w-3 text-amber-600 dark:text-amber-400" />
-                <span className="font-mono">No FFmpeg</span>
-              </div>
             )}
           </div>
         </header>
