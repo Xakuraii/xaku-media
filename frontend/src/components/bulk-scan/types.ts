@@ -35,6 +35,13 @@ export interface BulkScanViewProps {
   onDownloadStarted?: () => void;
   onOpenSettings?: (section?: "cookies") => void;
   onOpenExternal?: (url: string) => void;
+  onPreviewItem?: (
+    item: DiscoveredMediaItem,
+    options?: {
+      isSkipped?: boolean;
+      onToggleSkip?: () => Promise<boolean>;
+    }
+  ) => void;
 }
 
 export function isItemDownloaded(
