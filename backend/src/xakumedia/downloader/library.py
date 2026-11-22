@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ..core.config import default_config
 from ..core.logging import get_logger
 from ..models.media import MediaItem
 from ..utils.stable_ids import url_fingerprint
@@ -215,6 +216,51 @@ def unskip_items(items: Iterable[MediaItem]) -> list[str]:
     return removed
 
 
+def _resolve_existing_manifest_dir(directory: Path) -> Path:
+    """Resolve ``directory`` case-insensitively when its manifest already exists."""
+    if manifest_path(directory).exists() or directory.exists():
+        return directory
+    try:
+        user_dir = directory.parent
+        platform_dir = user_dir.parent
+        if platform_dir.is_dir():
+            target_user = user_dir.name.lower()
+            target_kind = directory.name.lower()
+            for child in platform_dir.iterdir():
+                if child.is_dir() and child.name.lower() == target_user:
+                    for sub in child.iterdir():
+                        if sub.is_dir() and sub.name.lower() == target_kind:
+                            return sub
+    except OSError:
+        pass
+    return directory
+
+
+def _find_manifest_entry(data: dict[str, Any], item: MediaItem) -> dict[str, Any] | None:
+    """Match an item against a manifest by primary identity or fallback metadata."""
+    items = data.get("items") or {}
+    entry = items.get(media_identity(item))
+    if isinstance(entry, dict):
+        return entry
+
+    target_pid = item.provider_media_id
+    target_kind = str(item.media_type)
+    target_url = item.original_url or ""
+    for candidate in items.values():
+        if not isinstance(candidate, dict):
+            continue
+        if (
+            target_pid
+            and candidate.get("provider_media_id") == target_pid
+            and candidate.get("media_type") == target_kind
+            and (candidate.get("attachment_index") or 0) == (item.attachment_index or 0)
+        ):
+            return candidate
+        if target_url and candidate.get("original_url") == target_url:
+            return candidate
+    return None
+
+
 def annotate_items(items: Iterable[MediaItem]) -> None:
     """Attach ``downloaded``/``skipped`` status from the folder manifests."""
     from .layout import destination_directory
@@ -222,12 +268,12 @@ def annotate_items(items: Iterable[MediaItem]) -> None:
     cache: dict[Path, dict[str, Any]] = {}
     for item in items:
         try:
-            directory = destination_directory(item)
+            directory = _resolve_existing_manifest_dir(destination_directory(item))
             data = cache.get(directory)
             if data is None:
                 data = load_manifest(directory)
                 cache[directory] = data
-            entry = data["items"].get(media_identity(item))
+            entry = _find_manifest_entry(data, item)
             if isinstance(entry, dict):
                 status = entry.get("status")
                 if status in {"downloaded", "skipped"}:
@@ -282,12 +328,293 @@ def status_for(item: MediaItem) -> str | None:
     """Return the manifest status for one item without mutating it."""
     from .layout import destination_directory
 
-    entry = load_manifest(destination_directory(item))["items"].get(media_identity(item))
+    directory = _resolve_existing_manifest_dir(destination_directory(item))
+    entry = _find_manifest_entry(load_manifest(directory), item)
     if isinstance(entry, dict):
         status = entry.get("status")
         if status in {"downloaded", "skipped"}:
             return status
     return None
+
+
+def unskip_entry_by_id(directory: Path | str, identity: str) -> bool:
+    """Remove a single ``skipped`` entry from a folder manifest by identity."""
+    folder = Path(directory)
+    with _LOCK:
+        data = load_manifest(folder)
+        entry = data["items"].get(identity)
+        if isinstance(entry, dict) and entry.get("status") == "skipped":
+            data["items"].pop(identity, None)
+            _write_manifest(folder, data)
+            return True
+    return False
+
+
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif", ".svg"}
+_VIDEO_EXTS = {".mp4", ".webm", ".mkv", ".mov", ".avi", ".flv", ".ts", ".m4v"}
+_AUDIO_EXTS = {".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg", ".opus"}
+_MEDIA_EXTS = _IMAGE_EXTS | _VIDEO_EXTS | _AUDIO_EXTS
+
+
+def _infer_media_type(folder_name: str, suffix: str) -> str:
+    ext = suffix.lower()
+    if ext in _VIDEO_EXTS:
+        return "video"
+    if ext in _AUDIO_EXTS:
+        return "audio"
+    if ext in _IMAGE_EXTS:
+        return "image"
+    lowered = folder_name.lower()
+    if lowered == "videos":
+        return "video"
+    if lowered == "audio":
+        return "audio"
+    return "image"
+
+
+def _scan_kind_folder(folder: Path, platform_name: str, user_name: str) -> dict[str, Any]:
+    """Read one media-kind leaf folder (disk files + xakumedia-library.json)."""
+    manifest = load_manifest(folder)
+    manifest_items = manifest.get("items") or {}
+
+    by_filename: dict[str, dict[str, Any]] = {}
+    skipped_entries: list[dict[str, Any]] = []
+
+    for identity, entry in manifest_items.items():
+        if not isinstance(entry, dict):
+            continue
+        status = entry.get("status")
+        filename = entry.get("filename")
+        if status == "skipped":
+            skipped_entries.append(
+                {
+                    "identity": entry.get("identity") or identity,
+                    "status": "skipped",
+                    "media_type": entry.get("media_type")
+                    or _infer_media_type(folder.name, ""),
+                    "filename": None,
+                    "file_path": None,
+                    "size_bytes": None,
+                    "extension": None,
+                    "title": entry.get("title") or entry.get("provider_media_id") or "Skipped item",
+                    "author": entry.get("author") or user_name,
+                    "platform": platform_name,
+                    "provider": entry.get("provider"),
+                    "provider_media_id": entry.get("provider_media_id"),
+                    "attachment_index": entry.get("attachment_index") or 0,
+                    "source_url": entry.get("source_url"),
+                    "original_url": entry.get("original_url"),
+                    "post_url": entry.get("post_url"),
+                    "updated_at": entry.get("updated_at") or entry.get("first_seen_at"),
+                }
+            )
+        elif status == "downloaded" and isinstance(filename, str) and filename:
+            by_filename[filename] = entry
+
+    disk_entries: list[dict[str, Any]] = []
+    size_bytes = 0
+    if folder.is_dir():
+        try:
+            children = sorted(folder.iterdir(), key=lambda p: p.name.lower())
+        except OSError:
+            children = []
+        for child in children:
+            if not child.is_file():
+                continue
+            name = child.name
+            if name == MANIFEST_FILENAME or name.startswith(".xakumedia-"):
+                continue
+            suffix = child.suffix.lower()
+            if suffix in (".part", ".tmp") or suffix not in _MEDIA_EXTS:
+                continue
+            try:
+                stat = child.stat()
+                file_size = stat.st_size
+                mtime_iso = datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat()
+            except OSError:
+                file_size = 0
+                mtime_iso = None
+            size_bytes += file_size
+            entry = by_filename.get(name, {})
+            disk_entries.append(
+                {
+                    "identity": entry.get("identity") or f"file:{name}",
+                    "status": "downloaded",
+                    "media_type": entry.get("media_type")
+                    or _infer_media_type(folder.name, suffix),
+                    "filename": name,
+                    "file_path": str(child),
+                    "size_bytes": file_size,
+                    "extension": suffix.lstrip("."),
+                    "title": entry.get("title") or child.stem,
+                    "author": entry.get("author") or user_name,
+                    "platform": platform_name,
+                    "provider": entry.get("provider"),
+                    "provider_media_id": entry.get("provider_media_id"),
+                    "attachment_index": entry.get("attachment_index") or 0,
+                    "source_url": entry.get("source_url"),
+                    "original_url": entry.get("original_url"),
+                    "post_url": entry.get("post_url"),
+                    "updated_at": entry.get("updated_at") or mtime_iso,
+                }
+            )
+
+    all_items = disk_entries + skipped_entries
+    videos = sum(1 for item in disk_entries if item["media_type"] == "video")
+    images = sum(1 for item in disk_entries if item["media_type"] == "image")
+    return {
+        "name": folder.name,
+        "media_type": _infer_media_type(folder.name, ""),
+        "path": str(folder),
+        "downloaded_count": len(disk_entries),
+        "skipped_count": len(skipped_entries),
+        "video_count": videos,
+        "image_count": images,
+        "size_bytes": size_bytes,
+        "items": all_items,
+    }
+
+
+def scan_download_library(base_dir: Path | str | None = None) -> dict[str, Any]:
+    """Scan ``download_dir`` and all ``xakumedia-library.json`` manifests.
+
+    Builds the real folder hierarchy (Platform -> User -> Videos/Images/Audio)
+    including both downloaded media files on disk and skipped items recorded
+    inside each folder's JSON manifest.
+    """
+    root = Path(base_dir) if base_dir else default_config.download_dir
+    platforms: list[dict[str, Any]] = []
+    total_users = 0
+    total_downloaded = 0
+    total_skipped = 0
+    total_videos = 0
+    total_images = 0
+    total_size = 0
+
+    if root.exists() and root.is_dir():
+        try:
+            platform_dirs = sorted(
+                (p for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")),
+                key=lambda p: p.name.lower(),
+            )
+        except OSError:
+            platform_dirs = []
+
+        for platform_dir in platform_dirs:
+            users: list[dict[str, Any]] = []
+            try:
+                user_dirs = sorted(
+                    (
+                        u
+                        for u in platform_dir.iterdir()
+                        if u.is_dir() and not u.name.startswith(".")
+                    ),
+                    key=lambda u: u.name.lower(),
+                )
+            except OSError:
+                user_dirs = []
+
+            for user_dir in user_dirs:
+                folders: list[dict[str, Any]] = []
+                try:
+                    kind_dirs = sorted(
+                        (
+                            k
+                            for k in user_dir.iterdir()
+                            if k.is_dir() and not k.name.startswith(".")
+                        ),
+                        key=lambda k: k.name.lower(),
+                    )
+                except OSError:
+                    kind_dirs = []
+
+                for kind_dir in kind_dirs:
+                    folder_info = _scan_kind_folder(
+                        kind_dir, platform_dir.name, user_dir.name
+                    )
+                    if folder_info["downloaded_count"] > 0 or folder_info["skipped_count"] > 0:
+                        folders.append(folder_info)
+
+                # Also support a manifest or media file placed directly inside user_dir.
+                direct_info = _scan_kind_folder(user_dir, platform_dir.name, user_dir.name)
+                if direct_info["downloaded_count"] > 0 or direct_info["skipped_count"] > 0:
+                    direct_info["name"] = "Files"
+                    folders.append(direct_info)
+
+                if not folders:
+                    continue
+
+                u_dl = sum(f["downloaded_count"] for f in folders)
+                u_skip = sum(f["skipped_count"] for f in folders)
+                u_vid = sum(f["video_count"] for f in folders)
+                u_img = sum(f["image_count"] for f in folders)
+                u_size = sum(f["size_bytes"] for f in folders)
+                preview_path = next(
+                    (
+                        item["file_path"]
+                        for f in folders
+                        for item in f["items"]
+                        if item["status"] == "downloaded"
+                        and item["media_type"] == "image"
+                        and item.get("file_path")
+                    ),
+                    None,
+                )
+                users.append(
+                    {
+                        "name": user_dir.name,
+                        "path": str(user_dir),
+                        "downloaded_count": u_dl,
+                        "skipped_count": u_skip,
+                        "video_count": u_vid,
+                        "image_count": u_img,
+                        "size_bytes": u_size,
+                        "preview_path": preview_path,
+                        "folders": folders,
+                    }
+                )
+
+            if not users:
+                continue
+
+            p_dl = sum(u["downloaded_count"] for u in users)
+            p_skip = sum(u["skipped_count"] for u in users)
+            p_vid = sum(u["video_count"] for u in users)
+            p_img = sum(u["image_count"] for u in users)
+            p_size = sum(u["size_bytes"] for u in users)
+            total_users += len(users)
+            total_downloaded += p_dl
+            total_skipped += p_skip
+            total_videos += p_vid
+            total_images += p_img
+            total_size += p_size
+            platforms.append(
+                {
+                    "name": platform_dir.name,
+                    "path": str(platform_dir),
+                    "user_count": len(users),
+                    "downloaded_count": p_dl,
+                    "skipped_count": p_skip,
+                    "video_count": p_vid,
+                    "image_count": p_img,
+                    "size_bytes": p_size,
+                    "users": users,
+                }
+            )
+
+    return {
+        "root_dir": str(root),
+        "totals": {
+            "platforms": len(platforms),
+            "users": total_users,
+            "downloaded": total_downloaded,
+            "skipped": total_skipped,
+            "videos": total_videos,
+            "images": total_images,
+            "size_bytes": total_size,
+        },
+        "platforms": platforms,
+    }
 
 
 __all__ = [
@@ -300,6 +627,8 @@ __all__ = [
     "record_download",
     "record_skipped",
     "remove_file",
+    "scan_download_library",
     "status_for",
+    "unskip_entry_by_id",
     "unskip_items",
 ]

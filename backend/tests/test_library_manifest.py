@@ -244,3 +244,93 @@ def test_incremental_rescan_respects_folder_manifest_without_db_history(
     assert result.total_found == 3
     assert [i.provider_media_id for i in result.new_items] == ["img-3"]
     assert {i.provider_media_id for i in result.existing_items} == {"img-1", "img-2"}
+
+
+def test_cross_device_detection_matches_provider_id_or_url(
+    isolated_download_dir: Path,
+) -> None:
+    saved = _item(MediaType.VIDEO, provider="ytdlp", provider_media_id="vid-99", extractor="tiktok")
+    record_skipped([saved])
+
+    # Different provider wrapper / missing provider name on another scan still matches
+    # by provider_media_id or original_url inside the creator's manifest.
+    rescanned = MediaItem(
+        id="new-uuid",
+        source_url="https://www.tiktok.com/@xakuraii",
+        original_url=saved.original_url,
+        media_type=MediaType.VIDEO,
+        author="xakuraii",
+        provider="gallerydl",
+        provider_media_id="vid-99",
+        metadata_extra={"extractor": "TikTok"},
+    )
+    annotate_items([rescanned])
+    assert rescanned.library_status == "skipped"
+
+
+def test_scan_download_library_and_actions(isolated_download_dir: Path) -> None:
+    from xakumedia.downloader.library import scan_download_library
+
+    vid_dl = _item(MediaType.VIDEO, provider_media_id="v-1", extractor="tiktok")
+    vid_skip = _item(MediaType.VIDEO, provider_media_id="v-2", extractor="tiktok")
+    img_dl = _item(MediaType.IMAGE, provider_media_id="i-1", extractor="instagram")
+
+    vid_dir = destination_directory(vid_dl)
+    vid_dir.mkdir(parents=True)
+    vid_file = vid_dir / "xakuraii-vdo-1.mp4"
+    vid_file.write_bytes(b"video-bytes")
+    record_download(vid_dl, vid_file)
+    record_skipped([vid_skip])
+
+    img_dir = destination_directory(img_dl)
+    img_dir.mkdir(parents=True)
+    img_file = img_dir / "xakuraii-img-1.jpg"
+    img_file.write_bytes(b"img-bytes")
+    record_download(img_dl, img_file)
+
+    snapshot = scan_download_library(isolated_download_dir)
+    assert snapshot["totals"]["platforms"] == 2
+    assert snapshot["totals"]["downloaded"] == 2
+    assert snapshot["totals"]["skipped"] == 1
+    assert snapshot["totals"]["videos"] == 1
+    assert snapshot["totals"]["images"] == 1
+
+    tiktok = next(p for p in snapshot["platforms"] if p["name"] == "Tiktok")
+    user = tiktok["users"][0]
+    assert user["name"] == "xakuraii"
+    assert user["downloaded_count"] == 1
+    assert user["skipped_count"] == 1
+    assert [entry["status"] for entry in user["folders"][0]["items"]] == ["downloaded", "skipped"]
+
+    # RPC unskip_library_entry + delete_library_file
+    dispatcher = RpcDispatcher()
+    unskip_res = dispatcher.dispatch(
+        JsonRpcRequest(
+            id="lib-unskip",
+            method="unskip_library_entry",
+            params={"folder_path": str(vid_dir), "identity": media_identity(vid_skip)},
+        )
+    )
+    assert unskip_res.error is None
+    assert unskip_res.result["removed"] is True
+
+    del_res = dispatcher.dispatch(
+        JsonRpcRequest(
+            id="lib-del",
+            method="delete_library_file",
+            params={"file_path": str(vid_file)},
+        )
+    )
+    assert del_res.error is None
+    assert del_res.result["deleted"] is True
+    assert not vid_file.exists()
+
+    # Path traversal must be rejected
+    bad_del = dispatcher.dispatch(
+        JsonRpcRequest(
+            id="lib-bad",
+            method="delete_library_file",
+            params={"file_path": str(isolated_download_dir.parent / "outside.mp4")},
+        )
+    )
+    assert bad_del.error is not None
