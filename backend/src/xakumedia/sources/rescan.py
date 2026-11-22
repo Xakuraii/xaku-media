@@ -2,6 +2,7 @@
 
 import html
 import re
+import threading
 from datetime import UTC, datetime
 from urllib.parse import urljoin, urlsplit
 
@@ -21,8 +22,10 @@ from ..exceptions.base import (
 from ..extractors.gallery import extract_gallery_info
 from ..extractors.video import extract_video_info
 from ..models.media import MediaItem
+from ..models.post import ScanOptions
 from ..models.source import IncrementalScanResult, RescanAllSummary, SavedSource
 from ..models.url import ClassifiedUrl
+from ..providers.registry import resolve_provider
 from ..scanners.direct import classify_direct_url
 from ..utils.security import validate_url_security
 
@@ -263,13 +266,30 @@ def enrich_source_metadata(
 
 
 def scan_source_url(url: str) -> tuple[ClassifiedUrl | None, list[MediaItem]]:
-    """Scan and extract media items from a URL using direct, gallery, or video adapters."""
+    """Scan and extract media items from a URL via unified providers or fallbacks."""
     classified: ClassifiedUrl | None = None
     media_items: list[MediaItem] = []
 
-    # 1. Probe for direct media URL. A failed probe must not abort the rescan:
-    # gallery/video sites often reject HEAD probes while gallery-dl or yt-dlp
-    # can still extract their media.
+    # 1. Unified provider registry (routes TikTok, YouTube, Instagram, Facebook, X, direct, etc.)
+    try:
+        provider = resolve_provider(url)
+        classified = provider.classify(url)
+        posts = list(
+            provider.iter_posts(
+                url,
+                ScanOptions(max_posts=60, include_images=True, include_videos=True),
+                threading.Event(),
+            )
+        )
+        media_items = [item for post in posts for item in post.media_items]
+        if media_items:
+            return classified, media_items
+    except UnsupportedSourceError:
+        pass
+    except Exception as exc:
+        logger.warning(f"Provider rescan failed for {url}: {exc}")
+
+    # 2. Probe for direct media URL fallback
     try:
         classified, direct_item = classify_direct_url(url)
         if direct_item is not None:
@@ -277,15 +297,15 @@ def scan_source_url(url: str) -> tuple[ClassifiedUrl | None, list[MediaItem]]:
     except (UnsupportedSourceError, MediaUnavailableError, NetworkTimeoutError):
         pass
 
-    # 2. Check gallery-dl extractor
-    if not media_items:
+    # 3. Check legacy gallery-dl extractor (skip TikTok profiles handled by yt-dlp)
+    if not media_items and "tiktok.com" not in url.lower():
         try:
             if gdl_extractor.find(url):
                 classified, media_items = extract_gallery_info(url)
-        except UnsupportedSourceError:
+        except Exception:
             pass
 
-    # 3. Check yt-dlp platform video extractor
+    # 4. Check legacy single-video yt-dlp fallback
     if not media_items:
         try:
             classified, video_item = extract_video_info(url)
@@ -326,10 +346,14 @@ def incremental_rescan_source(
     new_items: list[MediaItem] = []
     existing_items: list[MediaItem] = []
 
+    source_root = source.url.rstrip("/")
     for item in discovered_items:
+        item_source = (item.source_url or "").rstrip("/")
+        item_post = (item.post_url or "").rstrip("/")
         is_known = (
             item.original_url in known_urls
-            or item.source_url in known_urls
+            or (bool(item_source) and item_source != source_root and item.source_url in known_urls)
+            or (bool(item_post) and item_post != source_root and item.post_url in known_urls)
             or item.library_status in ("downloaded", "skipped")
         )
         if is_known:

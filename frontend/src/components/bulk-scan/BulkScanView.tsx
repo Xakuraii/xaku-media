@@ -30,6 +30,7 @@ export function BulkScanView({
   onDownloadStarted,
   onOpenSettings,
   onOpenExternal,
+  onPreviewItem,
 }: BulkScanViewProps) {
   const {
     allPosts,
@@ -576,6 +577,30 @@ export function BulkScanView({
     }
   };
 
+  const toggleSingleSkip = async (item: DiscoveredMediaItem): Promise<boolean> => {
+    const currentlySkipped = isItemSkipped(item, skipped);
+    if (currentlySkipped) {
+      if (!window.api?.unskipMediaItems) return false;
+      await window.api.unskipMediaItems([item]);
+      setSkipped((prev) => {
+        const next = new Set(prev);
+        itemKeys(item).forEach((key) => next.delete(key));
+        return next;
+      });
+      setNotice("Restored item as new.");
+      return false;
+    }
+    if (!window.api?.skipMediaItems) return false;
+    await window.api.skipMediaItems([item]);
+    setSkipped((prev) => {
+      const next = new Set(prev);
+      itemKeys(item).forEach((key) => next.add(key));
+      return next;
+    });
+    setNotice("Marked item as skipped; it will not show as new again.");
+    return true;
+  };
+
   const handleRefreshScanView = async () => {
     setRefreshingStats(true);
     try {
@@ -717,6 +742,12 @@ export function BulkScanView({
           skipping={skipping}
           hideSkipped={hideSkipped}
           onToggleHideSkipped={() => setHideSkipped((value) => !value)}
+          onPreviewItem={(item) =>
+            onPreviewItem?.(item, {
+              isSkipped: isItemSkipped(item, skipped),
+              onToggleSkip: () => toggleSingleSkip(item),
+            })
+          }
         />
       )}
 

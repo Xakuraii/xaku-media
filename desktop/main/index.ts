@@ -1,6 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell } from "electron";
+import crypto from "crypto";
 import fs from "fs";
+import http from "http";
+import https from "https";
+import netModule from "net";
 import path from "path";
+import { Readable } from "stream";
 import { pathToFileURL } from "url";
 import type {
   AppPreferences,
@@ -32,6 +37,173 @@ let isQuitting = false;
 let libraryWatcher: fs.FSWatcher | null = null;
 let watchedDownloadDir: string | null = null;
 let libraryNotifyTimer: NodeJS.Timeout | null = null;
+
+interface PreviewStreamEntry {
+  url: string;
+  headers: Record<string, string>;
+  cookieHeader?: string | null;
+}
+
+const previewStreamRegistry = new Map<string, PreviewStreamEntry>();
+
+function sameRegistrableSite(hostA: string, hostB: string): boolean {
+  const a = hostA.toLowerCase();
+  const b = hostB.toLowerCase();
+  if (a === b) return true;
+  const root = (h: string) => {
+    const parts = h.split(".").filter(Boolean);
+    return parts.length >= 2 ? parts.slice(-2).join(".") : h;
+  };
+  return root(a) === root(b);
+}
+
+async function fetchRemoteStreamViaNode(
+  entry: PreviewStreamEntry,
+  method: string,
+  rangeHeader: string | null,
+  signal?: AbortSignal
+): Promise<Response> {
+  const MAX_REDIRECTS = 5;
+  const initialHost = new URL(entry.url).hostname;
+  let currentUrl = entry.url;
+  let currentMethod = method.toUpperCase() === "HEAD" ? "HEAD" : "GET";
+
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const targetUrl = isSafeRemotePreviewUrl(currentUrl);
+    if (!targetUrl) {
+      return new Response("Blocked unsafe remote preview URL", { status: 403 });
+    }
+    const parsedTarget = new URL(targetUrl);
+    const outHeaders: Record<string, string> = { ...entry.headers };
+    if (
+      entry.cookieHeader &&
+      sameRegistrableSite(initialHost, parsedTarget.hostname) &&
+      !Object.keys(outHeaders).some((k) => k.toLowerCase() === "cookie")
+    ) {
+      outHeaders["Cookie"] = entry.cookieHeader;
+    }
+    if (rangeHeader) {
+      outHeaders["Range"] = rangeHeader;
+    }
+
+    const result = await new Promise<
+      | { kind: "redirect"; location: string }
+      | { kind: "response"; response: Response }
+    >((resolve, reject) => {
+      const client = parsedTarget.protocol === "https:" ? https : http;
+      const req = client.request(
+        parsedTarget,
+        {
+          method: currentMethod,
+          headers: outHeaders,
+          timeout: 15000,
+        },
+        (incoming) => {
+          const status = incoming.statusCode || 502;
+          const location = incoming.headers.location;
+          if (location && [301, 302, 303, 307, 308].includes(status)) {
+            incoming.resume();
+            resolve({ kind: "redirect", location: Array.isArray(location) ? location[0] : location });
+            return;
+          }
+
+          const respHeaders = new Headers();
+          const forwardKeys = [
+            "content-type",
+            "content-length",
+            "content-range",
+            "accept-ranges",
+            "cache-control",
+            "etag",
+            "last-modified",
+          ];
+          for (const key of forwardKeys) {
+            const val = incoming.headers[key];
+            if (typeof val === "string" && val) {
+              respHeaders.set(key, val);
+            } else if (Array.isArray(val) && val.length > 0) {
+              respHeaders.set(key, val.join(", "));
+            }
+          }
+
+          if (currentMethod === "HEAD") {
+            incoming.resume();
+            resolve({ kind: "response", response: new Response(null, { status, headers: respHeaders }) });
+            return;
+          }
+
+          const webStream = Readable.toWeb(incoming) as unknown as ReadableStream<Uint8Array>;
+          resolve({
+            kind: "response",
+            response: new Response(webStream, { status, headers: respHeaders }),
+          });
+        }
+      );
+
+      const onAbort = () => {
+        req.destroy(new Error("Preview request aborted"));
+      };
+      if (signal) {
+        if (signal.aborted) {
+          onAbort();
+          reject(new Error("Preview request aborted"));
+          return;
+        }
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+
+      req.on("timeout", () => {
+        req.destroy(new Error("Preview request timed out"));
+      });
+      req.on("error", (err) => {
+        if (signal) signal.removeEventListener("abort", onAbort);
+        reject(err);
+      });
+      req.on("close", () => {
+        if (signal) signal.removeEventListener("abort", onAbort);
+      });
+      req.end();
+    });
+
+    if (result.kind === "response") {
+      return result.response;
+    }
+
+    currentUrl = new URL(result.location, parsedTarget).toString();
+    if (currentMethod !== "HEAD") {
+      currentMethod = "GET";
+    }
+  }
+
+  return new Response("Too many redirects for preview stream", { status: 502 });
+}
+
+function isSafeRemotePreviewUrl(rawUrl: string): string | null {
+  try {
+    const parsed = new URL(rawUrl.trim());
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
+    const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    if (!host || host === "localhost" || host.endsWith(".local")) return null;
+    if (netModule.isIP(host)) {
+      if (
+        host === "::1" ||
+        host.startsWith("127.") ||
+        host.startsWith("10.") ||
+        host.startsWith("192.168.") ||
+        host.startsWith("169.254.") ||
+        host.startsWith("fc") ||
+        host.startsWith("fd") ||
+        host.startsWith("fe80")
+      ) {
+        return null;
+      }
+      if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
 
 function notifyLibraryChanged(): void {
   if (libraryNotifyTimer) clearTimeout(libraryNotifyTimer);
@@ -532,6 +704,58 @@ function safeHttpsUrl(raw: unknown): string | null {
       return false;
     }
   });
+
+  ipcMain.handle(
+    "app:registerPreviewStream",
+    async (
+      _event,
+      url: string,
+      headers?: Record<string, string>,
+      sourceUrl?: string | null
+    ): Promise<string | null> => {
+      if (!url || typeof url !== "string") return null;
+      const safeUrl = isSafeRemotePreviewUrl(url);
+      if (!safeUrl) return null;
+
+      const sanitizedHeaders: Record<string, string> = {};
+      if (headers && typeof headers === "object") {
+        for (const [key, value] of Object.entries(headers)) {
+          if (typeof value !== "string" || !key.trim()) continue;
+          const lower = key.toLowerCase();
+          if (lower === "host" || lower === "content-length" || lower === "connection") continue;
+          sanitizedHeaders[key] = value;
+        }
+      }
+
+      let cookieHeader: string | null = null;
+      try {
+        const cookieResp = await pythonBridge.sendRequest<{ cookie_header?: string | null }>(
+          "get_cookie_header",
+          {
+            url: safeUrl,
+            source_url: typeof sourceUrl === "string" && sourceUrl.trim() ? sourceUrl.trim() : null,
+          }
+        );
+        if (cookieResp && typeof cookieResp.cookie_header === "string" && cookieResp.cookie_header.trim()) {
+          cookieHeader = cookieResp.cookie_header.trim();
+        }
+      } catch {
+        // Preview still attempts unauthenticated streaming if cookie lookup fails
+      }
+
+      const token = crypto.randomUUID();
+      if (previewStreamRegistry.size >= 40) {
+        const oldestKey = previewStreamRegistry.keys().next().value;
+        if (oldestKey) previewStreamRegistry.delete(oldestKey);
+      }
+      previewStreamRegistry.set(token, {
+        url: safeUrl,
+        headers: sanitizedHeaders,
+        cookieHeader,
+      });
+      return `media-loader://remote/${token}`;
+    }
+  );
 
   ipcMain.handle("app:checkForUpdates", async (): Promise<AppUpdateCheckResult> => {
     const currentVersion = app.getVersion();
@@ -1045,10 +1269,24 @@ app.whenReady().then(async () => {
     ".tmp",
   ]);
 
-  // Register protocol handler for streaming local video, audio, and images to renderer
-  protocol.handle("media-loader", (request) => {
+  // Register protocol handler for streaming local & header-authenticated remote media
+  protocol.handle("media-loader", async (request) => {
     try {
       const parsed = new URL(request.url);
+      if (parsed.hostname === "remote") {
+        const token = parsed.pathname.replace(/^\/+/, "");
+        const entry = previewStreamRegistry.get(token);
+        if (!entry) {
+          return new Response("Preview stream expired", { status: 404 });
+        }
+        return await fetchRemoteStreamViaNode(
+          entry,
+          request.method,
+          request.headers.get("range"),
+          request.signal
+        );
+      }
+
       let filePath = "";
       if (parsed.searchParams.has("path")) {
         filePath = decodeURIComponent(parsed.searchParams.get("path") || "");

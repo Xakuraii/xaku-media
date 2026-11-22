@@ -3,11 +3,13 @@ import {
   Bookmark,
   CheckSquare,
   Download,
+  Eye,
   EyeOff,
   Film,
   Image as ImageIcon,
   Layers,
   Loader2,
+  Play,
   Search,
   Square,
   Sparkles,
@@ -86,6 +88,7 @@ interface PostBrowserProps {
   skipping: boolean;
   hideSkipped: boolean;
   onToggleHideSkipped: () => void;
+  onPreviewItem?: (item: DiscoveredMediaItem) => void;
 }
 
 interface VideoEntry {
@@ -125,6 +128,7 @@ export function PostBrowser({
   skipping,
   hideSkipped,
   onToggleHideSkipped,
+  onPreviewItem,
 }: PostBrowserProps) {
   const visibleItems = useMemo(
     () =>
@@ -363,6 +367,7 @@ export function PostBrowser({
               onToggleMedia={onToggleMedia}
               onSaveLink={onSaveLink}
               onSelectVideos={() => onSelectByType("video")}
+              onPreviewItem={onPreviewItem}
             />
           )}
 
@@ -382,6 +387,7 @@ export function PostBrowser({
               onTogglePost={onTogglePost}
               onSaveLink={onSaveLink}
               onDownloadItems={onDownloadItems}
+              onPreviewItem={onPreviewItem}
             />
           ))}
         </div>
@@ -418,6 +424,7 @@ function VideoShelf({
   onToggleMedia,
   onSaveLink,
   onSelectVideos,
+  onPreviewItem,
 }: {
   entries: VideoEntry[];
   totalCount: number;
@@ -437,6 +444,7 @@ function VideoShelf({
     extra?: { author?: string | null; thumbnail_url?: string | null }
   ) => void;
   onSelectVideos: () => void;
+  onPreviewItem?: (item: DiscoveredMediaItem) => void;
 }) {
   return (
     <section className="overflow-hidden rounded-xl border border-hairline bg-surface">
@@ -481,6 +489,7 @@ function VideoShelf({
               chosenFormat={chosen}
               isLinkSaved={isAvatarMatch}
               onToggle={() => onToggleMedia(item.id)}
+              onPreview={onPreviewItem ? () => onPreviewItem(item) : undefined}
               onSaveLink={() =>
                 source.url &&
                 onSaveLink(source.url, source.title, {
@@ -527,6 +536,7 @@ function PostGroup({
   onTogglePost,
   onSaveLink,
   onDownloadItems,
+  onPreviewItem,
 }: {
   post: PostWithScan;
   filter: MediaFilter;
@@ -545,6 +555,7 @@ function PostGroup({
     extra?: { author?: string | null; thumbnail_url?: string | null }
   ) => void;
   onDownloadItems: (items: DiscoveredMediaItem[]) => void;
+  onPreviewItem?: (item: DiscoveredMediaItem) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const items = useMemo(() => visibleMedia(post, filter), [post, filter]);
@@ -655,6 +666,7 @@ function PostGroup({
               chosenFormat={chosen}
               isLinkSaved={isAvatarMatch}
               onToggle={() => onToggleMedia(item.id)}
+              onPreview={onPreviewItem ? () => onPreviewItem(item) : undefined}
               onSaveLink={() =>
                 itemSource.url &&
                 itemThumb &&
@@ -713,6 +725,7 @@ function MediaCard({
   chosenFormat,
   isLinkSaved = false,
   onToggle,
+  onPreview,
   onSaveLink,
 }: {
   item: DiscoveredMediaItem;
@@ -725,6 +738,7 @@ function MediaCard({
   chosenFormat: ReturnType<typeof chooseFormat>;
   isLinkSaved?: boolean;
   onToggle: () => void;
+  onPreview?: () => void;
   onSaveLink?: () => void;
 }) {
   const displaySize = chosenFormat?.filesize_bytes ?? item.filesize_bytes;
@@ -737,7 +751,10 @@ function MediaCard({
       }`}
     >
       <div
-        className={`relative bg-raised ${variant === "video" ? "aspect-video" : "aspect-square"}`}
+        onClick={onPreview}
+        className={`relative bg-raised ${variant === "video" ? "aspect-video" : "aspect-square"} ${
+          onPreview ? "cursor-pointer" : ""
+        }`}
       >
         {item.thumbnail_url ? (
           <img
@@ -758,10 +775,24 @@ function MediaCard({
             )}
           </div>
         )}
+        {onPreview && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/35 opacity-0 transition-opacity group-hover:opacity-100">
+            <span className="flex h-9 w-9 items-center justify-center rounded-full bg-accent text-on-accent shadow-lg">
+              {item.media_type === "video" ? (
+                <Play className="ml-0.5 h-4 w-4 fill-current" />
+              ) : (
+                <Eye className="h-4 w-4" />
+              )}
+            </span>
+          </div>
+        )}
         <button
           type="button"
-          onClick={onToggle}
-          className="absolute left-1.5 top-1.5 rounded bg-black/65 p-1 text-white/90 backdrop-blur transition-colors hover:bg-accent hover:text-on-accent"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggle();
+          }}
+          className="absolute left-1.5 top-1.5 z-10 rounded bg-black/65 p-1 text-white/90 backdrop-blur transition-colors hover:bg-accent hover:text-on-accent"
           aria-label={isSelected ? "Deselect item" : "Select item"}
           aria-pressed={isSelected}
         >
@@ -770,8 +801,11 @@ function MediaCard({
         {onSaveLink && (
           <button
             type="button"
-            onClick={onSaveLink}
-            className={`absolute right-1.5 top-1.5 rounded p-1 backdrop-blur transition-colors ${
+            onClick={(e) => {
+              e.stopPropagation();
+              onSaveLink();
+            }}
+            className={`absolute right-1.5 top-1.5 z-10 rounded p-1 backdrop-blur transition-colors ${
               isLinkSaved
                 ? "bg-accent text-on-accent"
                 : "bg-black/60 text-white/75 hover:bg-accent hover:text-on-accent"

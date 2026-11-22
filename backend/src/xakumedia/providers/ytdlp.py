@@ -24,8 +24,13 @@ from ..core.logging import get_logger
 from ..exceptions.base import (
     ExtractionError,
     MediaUnavailableError,
+    PrivateMediaError,
 )
-from ..extractors.video import normalize_formats, parse_yt_dlp_error
+from ..extractors.video import (
+    normalize_formats,
+    parse_yt_dlp_error,
+    strip_stale_waf_cookies,
+)
 from ..models.media import MediaFormatInfo, MediaType
 from ..models.post import Post, ProviderCapabilities, ScanOptions
 from ..models.url import ClassifiedUrl, UrlCategory
@@ -35,7 +40,13 @@ from .base import BaseProvider, PageCallback, TotalCallback, host_of, make_media
 logger = get_logger("providers.ytdlp")
 
 YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "music.youtube.com"}
-TIKTOK_HOSTS = {"tiktok.com", "www.tiktok.com", "m.tiktok.com"}
+TIKTOK_HOSTS = {
+    "tiktok.com",
+    "www.tiktok.com",
+    "m.tiktok.com",
+    "vm.tiktok.com",
+    "vt.tiktok.com",
+}
 VIDEO_HOSTS = {
     "vimeo.com",
     "www.vimeo.com",
@@ -53,7 +64,7 @@ HYDRATE_WORKERS = 6
 
 _CHANNEL_PATH = re.compile(r"^/(@[^/]+|channel/[^/]+|c/[^/]+|user/[^/]+)/?$")
 _CHANNEL_TABS = ("videos", "shorts", "streams")
-_TIKTOK_PROFILE_PATH = re.compile(r"^/@[^/]+/?$")
+_TIKTOK_PROFILE_PATH = re.compile(r"^/@([^/]+)(?:/videos)?/?$")
 _TIKTOK_PHOTO_PATH = re.compile(r"^/(@[^/]+)/photo/(\d+)")
 
 
@@ -129,9 +140,14 @@ def is_collection_url(url: str) -> bool:
 
 
 def enumerate_url(url: str) -> str:
-    """Normalize a YouTube channel root to its Videos tab for enumeration."""
+    """Normalize a channel/profile URL to the canonical form for enumeration."""
     parts = urlsplit(url)
     host = (parts.hostname or "").lower()
+    if host in TIKTOK_HOSTS:
+        match = _TIKTOK_PROFILE_PATH.match(parts.path)
+        if match:
+            return f"https://www.tiktok.com/@{match.group(1)}"
+        return url
     if host not in YOUTUBE_HOSTS:
         return url
     match = _CHANNEL_PATH.match(parts.path)
@@ -189,6 +205,7 @@ class _EntryHydrator:
         ydl = getattr(self._local, "ydl", None)
         if ydl is None:
             ydl = yt_dlp.YoutubeDL(self._opts)
+            strip_stale_waf_cookies(ydl)
             self._local.ydl = ydl
             with self._lock:
                 self._instances.append(ydl)
@@ -439,12 +456,137 @@ class YtDlpProvider(BaseProvider):
         opts = self._base_opts() | {"noplaylist": True, "extract_flat": False}
         self._apply_auth(page_url, opts)
         with yt_dlp.YoutubeDL(opts) as ydl:
+            strip_stale_waf_cookies(ydl, page_url)
             extractor = ydl.get_info_extractor("TikTok")
             fetch = getattr(extractor, "_extract_web_data_and_status", None)
             if not callable(fetch):
                 return {}
             data, _status = fetch(page_url, video_id, fatal=False)
         return data if isinstance(data, dict) else {}
+
+    def _resolve_tiktok_profile_via_waf(
+        self,
+        ydl: yt_dlp.YoutubeDL,
+        profile_url: str,
+    ) -> dict[str, Any] | None:
+        """Resolve a TikTok @user profile by solving SlardarWAF when embed fallback fails.
+
+        yt-dlp's single-video extractor solves SlardarWAF challenges automatically, but
+        TikTokUserIE._real_extract only tries /embed/@user when the initial webpage is
+        challenged. Creators with embeds disabled fail even with valid cookies unless we
+        solve the WAF challenge on the profile page and extract via ``tiktokuser:<secUid>``.
+        """
+        parts = urlsplit(profile_url)
+        match = re.match(r"^/@([^/?#]+)/?$", parts.path)
+        if not match or not is_tiktok(profile_url):
+            return None
+        username = match.group(1)
+
+        try:
+            extractor = ydl.get_info_extractor("TikTokUser")
+        except Exception:
+            return None
+        if not extractor:
+            return None
+
+        headers_fn = getattr(extractor, "_generate_blockbuster_headers", None)
+        headers = headers_fn() if callable(headers_fn) else {}
+        download_webpage = getattr(extractor, "_download_webpage", None)
+        get_universal = getattr(extractor, "_get_universal_data", None)
+        solve_waf = getattr(extractor, "_solve_challenge_and_set_cookies", None)
+        if not callable(download_webpage) or not callable(get_universal):
+            return None
+
+        user_url = f"https://www.tiktok.com/@{username}"
+        webpage = (
+            download_webpage(
+                user_url,
+                username,
+                note=False,
+                errnote=False,
+                fatal=False,
+                impersonate=True,
+                headers=headers,
+            )
+            or ""
+        )
+        universal_data = get_universal(webpage, username) if webpage else None
+        if not universal_data and webpage and callable(solve_waf):
+            cookie_names: tuple[str | None, ...] = ()
+            try:
+                cookie_names = solve_waf(webpage)
+                webpage = (
+                    download_webpage(
+                        user_url,
+                        username,
+                        note=False,
+                        errnote=False,
+                        fatal=False,
+                        impersonate=True,
+                        headers=headers,
+                    )
+                    or ""
+                )
+            except ExtractorError as exc:
+                logger.debug(f"TikTok WAF challenge solve skipped for @{username}: {exc}")
+                return None
+            finally:
+                cookiejar = getattr(extractor, "cookiejar", None)
+                if cookiejar is not None:
+                    for cn in filter(None, cookie_names):
+                        try:
+                            cookiejar.clear(domain=".tiktok.com", path="/", name=cn)
+                        except Exception:
+                            pass
+            universal_data = get_universal(webpage, username) if webpage else None
+
+        detail = (
+            universal_data.get("webapp.user-detail")
+            if isinstance(universal_data, dict)
+            else None
+        )
+        if not isinstance(detail, dict):
+            return None
+
+        status_code = detail.get("statusCode")
+        user_info = detail.get("userInfo") if isinstance(detail.get("userInfo"), dict) else {}
+        user = user_info.get("user") if isinstance(user_info.get("user"), dict) else {}
+        stats = user_info.get("stats") or user_info.get("statsV2") or {}
+
+        if status_code == 10222 or user.get("privateAccount") is True:
+            raise PrivateMediaError(
+                f"TikTok account '@{username}' is private. Log into a TikTok "
+                "account that has access and import fresh cookies.",
+                details={
+                    "url": profile_url,
+                    "site": "tiktok",
+                    "requires_cookies": True,
+                },
+            )
+
+        sec_uid = user.get("secUid")
+        if not sec_uid or not isinstance(sec_uid, str):
+            if status_code == 209002:
+                raise PrivateMediaError(
+                    f"TikTok restricted profile '@{username}' behind session "
+                    "verification. Import fresh logged-in TikTok cookies in "
+                    "Settings and retry.",
+                    details={
+                        "url": profile_url,
+                        "site": "tiktok",
+                        "requires_cookies": True,
+                    },
+                )
+            return None
+
+        video_count = stats.get("videoCount") if isinstance(stats, dict) else None
+        if video_count == 0:
+            raise MediaUnavailableError(
+                f"TikTok account '@{username}' does not have any public videos posted.",
+                details={"url": profile_url, "site": "tiktok"},
+            )
+
+        return ydl.extract_info(f"tiktokuser:{sec_uid}", download=False)
 
     @staticmethod
     def _tiktok_slideshow_items(
@@ -744,6 +886,7 @@ class YtDlpProvider(BaseProvider):
             self._apply_auth(safe_url, opts)
             try:
                 with yt_dlp.YoutubeDL(opts) as ydl:
+                    strip_stale_waf_cookies(ydl, safe_url)
                     info = ydl.extract_info(safe_url, download=False)
             except (DownloadError, ExtractorError) as exc:
                 if is_tiktok(safe_url) and options.include_images:
@@ -789,12 +932,27 @@ class YtDlpProvider(BaseProvider):
                     return
                 try:
                     with yt_dlp.YoutubeDL(enum_opts) as enum_ydl:
+                        strip_stale_waf_cookies(enum_ydl, enum_url)
                         info = enum_ydl.extract_info(enum_url, download=False)
+                        if not info and is_tiktok(enum_url):
+                            info = self._resolve_tiktok_profile_via_waf(enum_ydl, enum_url)
                 except (DownloadError, ExtractorError) as exc:
-                    failed_tabs.append(str(exc))
-                    if first_error is None:
-                        first_error = exc
-                    continue
+                    if is_tiktok(enum_url):
+                        try:
+                            with yt_dlp.YoutubeDL(enum_opts) as waf_ydl:
+                                strip_stale_waf_cookies(waf_ydl, enum_url)
+                                info = self._resolve_tiktok_profile_via_waf(waf_ydl, enum_url)
+                        except ExtractionError:
+                            raise
+                        except (DownloadError, ExtractorError):
+                            info = None
+                    else:
+                        info = None
+                    if not info:
+                        failed_tabs.append(str(exc))
+                        if first_error is None:
+                            first_error = exc
+                        continue
                 if not info:
                     failed_tabs.append(f"No metadata returned for {enum_url}")
                     continue

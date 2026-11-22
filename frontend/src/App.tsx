@@ -17,6 +17,7 @@ import {
   Trash2,
   RefreshCw,
   Eye,
+  EyeOff,
   FolderOpen,
   XCircle,
   RotateCcw,
@@ -84,6 +85,8 @@ export const App: React.FC = () => {
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
   const [updateInfo, setUpdateInfo] = useState<AppUpdateCheckResult | null>(null);
   const [checkingUpdates, setCheckingUpdates] = useState<boolean>(false);
+  const [updateModalOpen, setUpdateModalOpen] = useState<boolean>(false);
+  const [dismissedUpdateVersion, setDismissedUpdateVersion] = useState<string | null>(null);
   const [pythonStatus, setPythonStatus] = useState<PythonBridgeStatus | null>(null);
   const [pythonPing, setPythonPing] = useState<PythonPingResult | null>(null);
   const [pythonLatency, setPythonLatency] = useState<number | null>(null);
@@ -104,6 +107,11 @@ export const App: React.FC = () => {
     isOpen: boolean;
     mediaItem: DiscoveredMediaItem | null;
     localPath?: string | null;
+    streamUrl: string | null;
+    previewError: string | null;
+    isSkipped?: boolean;
+    skipBusy?: boolean;
+    onToggleSkip?: () => Promise<boolean>;
     mode: "player" | "lightbox";
     zoom: number;
     rotation: number;
@@ -111,6 +119,8 @@ export const App: React.FC = () => {
     isOpen: false,
     mediaItem: null,
     localPath: null,
+    streamUrl: null,
+    previewError: null,
     mode: "lightbox",
     zoom: 1,
     rotation: 0,
@@ -199,9 +209,74 @@ export const App: React.FC = () => {
     return `${mins}m ${secs}s`;
   };
 
-  const handleOpenPreview = (
+  const pickPlayableRemoteStream = (
+    item: DiscoveredMediaItem
+  ): { url: string; headers?: Record<string, string> } => {
+    const formats = item.available_formats || [];
+    if (item.media_type === "image") {
+      const url = item.original_url || formats.find((f) => f.url)?.url || item.thumbnail_url || "";
+      const headers = formats.find((f) => f.http_headers)?.http_headers;
+      return { url, headers };
+    }
+
+    const withUrls = formats.filter((f) => Boolean(f.url));
+    const chosen = chooseFormat(item, preferredResolution);
+
+    if (withUrls.length > 0) {
+      const videoCandidates = withUrls.filter(
+        (f) => f.video_codec?.toLowerCase() !== "none" && !/audio/i.test(f.format_id || "")
+      );
+      const pool = videoCandidates.length > 0 ? videoCandidates : withUrls;
+
+      const parseHeight = (res?: string | null): number => {
+        if (!res) return 0;
+        const pMatch = res.match(/(\d+)p/i);
+        if (pMatch) return Number.parseInt(pMatch[1], 10) || 0;
+        const xMatch = res.match(/\d+\s*[xX×]\s*(\d+)/);
+        return xMatch ? Number.parseInt(xMatch[1], 10) || 0 : 0;
+      };
+      const targetHeight = preferredResolution === "best" ? 2160 : parseHeight(preferredResolution) || 1080;
+
+      const scoreFormat = (f: typeof withUrls[number]): number => {
+        const codecText = `${f.video_codec || ""} ${f.format_id || ""}`;
+        const isHevc = /h265|hevc|bytevc|hvc1|hev1/i.test(codecText);
+        const isWebVideo = /h264|avc|vp8|vp9|av1/i.test(codecText);
+        const container = (f.container || "").toLowerCase();
+        const isWebContainer = container === "mp4" || container === "webm";
+        const height = parseHeight(f.resolution);
+        const cappedHeight = height > 0 ? Math.min(height, targetHeight) : 0;
+
+        let score = 0;
+        if (!f.requires_merge) score += 500;
+        if (isHevc) score -= 1000;
+        else if (isWebVideo) score += 200;
+        if (isWebContainer) score += 50;
+        if (chosen && chosen.format_id === f.format_id) score += 25;
+        score += cappedHeight * 0.1;
+        return score;
+      };
+
+      const ranked = [...pool].sort((a, b) => scoreFormat(b) - scoreFormat(a));
+      const best = ranked[0];
+      return {
+        url: best.url || item.original_url || "",
+        headers: best.http_headers || formats.find((f) => f.http_headers)?.http_headers,
+      };
+    }
+
+    return {
+      url: chosen?.url || item.original_url || "",
+      headers: chosen?.http_headers || formats.find((f) => f.http_headers)?.http_headers,
+    };
+  };
+
+  const handleOpenPreview = async (
     item: DiscoveredMediaItem,
-    localPath?: string | null
+    localPath?: string | null,
+    options?: {
+      isSkipped?: boolean;
+      onToggleSkip?: () => Promise<boolean>;
+    }
   ) => {
     // If no localPath passed, check completed download tasks
     const matchingTask = downloadTasks.find(
@@ -209,15 +284,62 @@ export const App: React.FC = () => {
     );
     const resolvedPath = localPath || matchingTask?.destination_path || null;
     const isImage = item.media_type === "image";
+
+    let streamUrl: string | null = null;
+    if (resolvedPath && window.api?.toMediaLoaderUrl) {
+      streamUrl = window.api.toMediaLoaderUrl(resolvedPath);
+    } else {
+      const picked = pickPlayableRemoteStream(item);
+      streamUrl = picked.url || null;
+      if (streamUrl && /^https?:\/\//i.test(streamUrl) && window.api?.registerPreviewStream) {
+        try {
+          const proxied = await window.api.registerPreviewStream(
+            streamUrl,
+            picked.headers,
+            item.source_url
+          );
+          if (proxied) streamUrl = proxied;
+        } catch {
+          // Fall back to direct URL if proxy registration fails
+        }
+      }
+    }
+
     setPreviewModal({
       isOpen: true,
       mediaItem: item,
       localPath: resolvedPath,
+      streamUrl,
+      previewError: null,
+      isSkipped: options?.isSkipped ?? item.library_status === "skipped",
+      skipBusy: false,
+      onToggleSkip: options?.onToggleSkip,
       mode: isImage ? "lightbox" : "player",
       zoom: 1,
       rotation: 0,
     });
     setPlaybackSpeed(1.0);
+  };
+
+  const handleToggleSkipInPreview = async () => {
+    if (!previewModal.mediaItem || previewModal.skipBusy) return;
+    setPreviewModal((prev) => ({ ...prev, skipBusy: true }));
+    try {
+      let nextSkipped = !previewModal.isSkipped;
+      if (previewModal.onToggleSkip) {
+        nextSkipped = await previewModal.onToggleSkip();
+      } else if (previewModal.isSkipped && window.api?.unskipMediaItems) {
+        await window.api.unskipMediaItems([previewModal.mediaItem]);
+        nextSkipped = false;
+      } else if (!previewModal.isSkipped && window.api?.skipMediaItems) {
+        await window.api.skipMediaItems([previewModal.mediaItem]);
+        nextSkipped = true;
+      }
+      setPreviewModal((prev) => ({ ...prev, isSkipped: nextSkipped, skipBusy: false }));
+    } catch (err) {
+      console.error("Failed to toggle skip in preview:", err);
+      setPreviewModal((prev) => ({ ...prev, skipBusy: false }));
+    }
   };
 
   const handleSetPlaybackRate = (rate: number) => {
@@ -716,12 +838,20 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleCheckUpdates = async () => {
+  const handleCheckUpdates = async (autoPopup = false) => {
     if (!window.api?.checkForUpdates) return;
     setCheckingUpdates(true);
     try {
       const res = await window.api.checkForUpdates();
       setUpdateInfo(res);
+      if (
+        autoPopup &&
+        res.hasUpdate &&
+        res.latestVersion &&
+        res.latestVersion !== dismissedUpdateVersion
+      ) {
+        setUpdateModalOpen(true);
+      }
     } catch (err) {
       console.warn("Update check failed:", err);
     } finally {
@@ -737,7 +867,7 @@ export const App: React.FC = () => {
           const info = await window.api.getSystemInfo();
           setIpcStatus(`IPC Connected (${pong})`);
           setSystemInfo(info);
-          void handleCheckUpdates();
+          void handleCheckUpdates(true);
 
           if (window.api.getPythonStatus) {
             const pyStatus = await window.api.getPythonStatus();
@@ -1049,17 +1179,6 @@ export const App: React.FC = () => {
             <span className="truncate text-[13px] font-semibold text-ink">{currentTabLabel}</span>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            {updateInfo?.hasUpdate && (
-              <button
-                type="button"
-                onClick={() => openExternal(updateInfo.downloadUrl || updateInfo.releaseUrl)}
-                title={`Download XakuMedia ${updateInfo.latestVersion} update`}
-                className="flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent/10 px-3 py-1 font-mono text-[11px] font-semibold text-accent transition-colors hover:bg-accent/20"
-              >
-                <Download className="h-3 w-3" />
-                <span>Update {updateInfo.latestVersion}</span>
-              </button>
-            )}
             <button
               type="button"
               onClick={(e) =>
@@ -1093,6 +1212,39 @@ export const App: React.FC = () => {
                 </span>
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => {
+                setUpdateModalOpen(true);
+                if (!updateInfo || !updateInfo.hasUpdate) {
+                  void handleCheckUpdates(false);
+                }
+              }}
+              disabled={checkingUpdates}
+              title={
+                updateInfo?.hasUpdate
+                  ? `Update available: ${updateInfo.latestVersion}`
+                  : "Check for XakuMedia updates"
+              }
+              className={`flex items-center gap-1.5 rounded-full border px-3 py-1 font-mono text-[11px] font-semibold transition-colors disabled:opacity-60 ${
+                updateInfo?.hasUpdate
+                  ? "border-accent/45 bg-accent text-on-accent shadow-sm shadow-accent/25 hover:bg-accent-vivid"
+                  : "border-hairline bg-surface text-muted hover:bg-raised hover:text-ink"
+              }`}
+            >
+              {checkingUpdates ? (
+                <RefreshCw className="h-3 w-3 animate-spin" />
+              ) : (
+                <Download className="h-3 w-3" />
+              )}
+              <span>
+                {updateInfo?.hasUpdate
+                  ? `Update ${updateInfo.latestVersion}`
+                  : checkingUpdates
+                  ? "Checking..."
+                  : "Update"}
+              </span>
+            </button>
           </div>
         </header>
 
@@ -1108,6 +1260,7 @@ export const App: React.FC = () => {
                 setActiveTab("settings");
               }}
               onOpenExternal={openExternal}
+              onPreviewItem={(item, opts) => void handleOpenPreview(item, null, opts)}
             />
           ) : (
             <div className="max-w-4xl mx-auto space-y-6">
@@ -2715,7 +2868,7 @@ export const App: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setPreviewModal((prev) => ({ ...prev, isOpen: false }))}
-                    className="p-1.5 text-white/70 hover:text-red-400 rounded hover:bg-white/10 transition-colors"
+                    className="p-1.5 text-ink/80 hover:text-red-500 rounded hover:bg-raised transition-colors"
                     title="Close (Escape)"
                   >
                     <X className="h-4 w-4" />
@@ -2730,13 +2883,26 @@ export const App: React.FC = () => {
               >
                 <img
                   src={
-                    previewModal.localPath && window.api?.toMediaLoaderUrl
+                    previewModal.streamUrl ||
+                    (previewModal.localPath && window.api?.toMediaLoaderUrl
                       ? window.api.toMediaLoaderUrl(previewModal.localPath)
                       : previewModal.mediaItem.original_url ||
                         previewModal.mediaItem.thumbnail_url ||
-                        ""
+                        "")
                   }
                   alt={previewModal.mediaItem.title || "Preview"}
+                  referrerPolicy="no-referrer"
+                  onError={() => {
+                    if (
+                      previewModal.mediaItem?.thumbnail_url &&
+                      previewModal.streamUrl !== previewModal.mediaItem.thumbnail_url
+                    ) {
+                      setPreviewModal((prev) => ({
+                        ...prev,
+                        streamUrl: prev.mediaItem?.thumbnail_url || null,
+                      }));
+                    }
+                  }}
                   style={{
                     transform: `scale(${previewModal.zoom}) rotate(${previewModal.rotation}deg)`,
                     transition: "transform 0.15s ease-out",
@@ -2765,6 +2931,21 @@ export const App: React.FC = () => {
                 </div>
 
                 <div className="flex items-center space-x-2">
+                  {!previewModal.localPath && (
+                    <button
+                      type="button"
+                      onClick={() => void handleToggleSkipInPreview()}
+                      disabled={Boolean(previewModal.skipBusy)}
+                      className={`px-3 py-1.5 rounded-md border flex items-center space-x-1.5 transition-colors disabled:opacity-50 ${
+                        previewModal.isSkipped
+                          ? "bg-amber-500/20 border-amber-500/40 text-amber-300 hover:bg-amber-500/30"
+                          : "bg-raised border-hairline text-ink hover:border-amber-500/40"
+                      }`}
+                    >
+                      <EyeOff className="h-3.5 w-3.5" />
+                      <span>{previewModal.isSkipped ? "Skipped (Unskip)" : "Skip"}</span>
+                    </button>
+                  )}
                   {previewModal.localPath ? (
                     <button
                       type="button"
@@ -2859,13 +3040,28 @@ export const App: React.FC = () => {
                         controls
                         autoPlay
                         src={
-                          previewModal.localPath && window.api?.toMediaLoaderUrl
+                          previewModal.streamUrl ||
+                          (previewModal.localPath && window.api?.toMediaLoaderUrl
                             ? window.api.toMediaLoaderUrl(previewModal.localPath)
                             : previewModal.mediaItem.available_formats.find((f) => f.url)?.url ||
-                              previewModal.mediaItem.original_url
+                              previewModal.mediaItem.original_url)
                         }
                         className="w-full"
                       />
+                    </div>
+                  ) : previewModal.previewError ? (
+                    <div className="py-12 px-6 max-w-md text-center space-y-3">
+                      {previewModal.mediaItem.thumbnail_url && (
+                        <img
+                          src={previewModal.mediaItem.thumbnail_url}
+                          alt={previewModal.mediaItem.title || "Video thumbnail"}
+                          referrerPolicy="no-referrer"
+                          className="mx-auto max-h-48 rounded-lg object-contain border border-white/10"
+                        />
+                      )}
+                      <p className="text-xs font-mono text-amber-300">
+                        {previewModal.previewError}
+                      </p>
                     </div>
                   ) : (
                     /* Video Player Layout */
@@ -2873,11 +3069,21 @@ export const App: React.FC = () => {
                       ref={mediaPlayerRef as React.RefObject<HTMLVideoElement>}
                       controls
                       autoPlay
+                      playsInline
+                      poster={previewModal.mediaItem.thumbnail_url || undefined}
                       src={
-                        previewModal.localPath && window.api?.toMediaLoaderUrl
+                        previewModal.streamUrl ||
+                        (previewModal.localPath && window.api?.toMediaLoaderUrl
                           ? window.api.toMediaLoaderUrl(previewModal.localPath)
                           : previewModal.mediaItem.available_formats?.find((f) => f.url)?.url ||
-                            previewModal.mediaItem.original_url
+                            previewModal.mediaItem.original_url)
+                      }
+                      onError={() =>
+                        setPreviewModal((prev) => ({
+                          ...prev,
+                          previewError:
+                            "Direct stream preview could not play in the player (site CDN or codec restriction). You can still download or skip it.",
+                        }))
                       }
                       className="w-full max-h-[62vh] rounded-xl bg-black object-contain shadow-2xl"
                     />
@@ -2885,7 +3091,7 @@ export const App: React.FC = () => {
                 </div>
 
                 {/* Player Controls & Diagnostics Bar */}
-                <div className="flex items-center justify-between text-xs font-mono text-muted pt-1">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono text-muted pt-1">
                   <div className="flex items-center space-x-2">
                     <span className="text-[11px] text-muted">Speed:</span>
                     {[0.5, 0.75, 1.0, 1.25, 1.5, 2.0].map((rate) => (
@@ -2905,6 +3111,21 @@ export const App: React.FC = () => {
                   </div>
 
                   <div className="flex items-center space-x-2">
+                    {!previewModal.localPath && (
+                      <button
+                        type="button"
+                        onClick={() => void handleToggleSkipInPreview()}
+                        disabled={Boolean(previewModal.skipBusy)}
+                        className={`px-3 py-1.5 rounded-md border flex items-center space-x-1.5 transition-colors disabled:opacity-50 ${
+                          previewModal.isSkipped
+                            ? "bg-amber-500/15 border-amber-500/40 text-amber-700 dark:text-amber-300"
+                            : "bg-raised border-hairline text-ink hover:border-amber-500/40"
+                        }`}
+                      >
+                        <EyeOff className="h-3.5 w-3.5" />
+                        <span>{previewModal.isSkipped ? "Skipped (Unskip)" : "Skip"}</span>
+                      </button>
+                    )}
                     {previewModal.localPath ? (
                       <button
                         type="button"
@@ -3131,6 +3352,123 @@ export const App: React.FC = () => {
                 )}
                 <span>Delete Permanently</span>
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL 4: SOFTWARE UPDATE POPUP */}
+      {/* ========================================================= */}
+      {updateModalOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={() => {
+            if (updateInfo?.latestVersion) {
+              setDismissedUpdateVersion(updateInfo.latestVersion);
+            }
+            setUpdateModalOpen(false);
+          }}
+        >
+          <div
+            className="bg-page border border-hairline rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-accent/30 bg-accent/10 text-accent">
+                  <Download className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-ink">
+                    {updateInfo?.hasUpdate
+                      ? `New Update Available (${updateInfo.latestVersion})`
+                      : "XakuMedia Updates"}
+                  </h3>
+                  <p className="text-xs font-mono text-muted">
+                    Installed version: v{updateInfo?.currentVersion || systemInfo?.version || "1.1.0"}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (updateInfo?.latestVersion) {
+                    setDismissedUpdateVersion(updateInfo.latestVersion);
+                  }
+                  setUpdateModalOpen(false);
+                }}
+                className="p-1 text-muted hover:text-ink rounded-lg hover:bg-raised"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {checkingUpdates ? (
+              <div className="flex items-center gap-2 rounded-xl border border-hairline bg-surface p-4 text-xs font-mono text-muted">
+                <Loader2 className="h-4 w-4 animate-spin text-accent" />
+                <span>Checking GitHub Releases...</span>
+              </div>
+            ) : updateInfo?.hasUpdate ? (
+              <div className="space-y-3">
+                <p className="text-xs text-muted leading-relaxed">
+                  A newer release (<span className="font-mono font-semibold text-ink">{updateInfo.latestVersion}</span>) is ready. Click Download Update to open the installer — your settings, cookies, and JSON progress will stay intact.
+                </p>
+                {updateInfo.notes && (
+                  <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-xl border border-hairline bg-surface p-3 font-mono text-[11px] text-ink/85">
+                    {updateInfo.notes}
+                  </pre>
+                )}
+              </div>
+            ) : updateInfo?.status === "error" ? (
+              <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs font-mono text-amber-700 dark:text-amber-300">
+                {updateInfo.error || "Could not reach GitHub Releases."}
+              </p>
+            ) : (
+              <p className="rounded-xl border border-hairline bg-surface p-3.5 text-xs font-mono text-emerald-700 dark:text-emerald-300">
+                {updateInfo?.status === "up_to_date"
+                  ? `You are up to date (${updateInfo.latestVersion || `v${updateInfo.currentVersion}`}).`
+                  : "No newer GitHub release found yet."}
+              </p>
+            )}
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-hairline">
+              <button
+                type="button"
+                onClick={() => {
+                  if (updateInfo?.latestVersion) {
+                    setDismissedUpdateVersion(updateInfo.latestVersion);
+                  }
+                  setUpdateModalOpen(false);
+                }}
+                className="px-3.5 py-2 rounded-lg border border-hairline bg-raised text-xs font-mono text-ink/80 hover:text-ink transition-colors"
+              >
+                {updateInfo?.hasUpdate ? "Later" : "Close"}
+              </button>
+              {!updateInfo?.hasUpdate && (
+                <button
+                  type="button"
+                  onClick={() => void handleCheckUpdates(false)}
+                  disabled={checkingUpdates}
+                  className="px-3.5 py-2 rounded-lg border border-hairline bg-surface text-xs font-mono text-ink hover:bg-raised transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${checkingUpdates ? "animate-spin" : ""}`} />
+                  <span>Check Again</span>
+                </button>
+              )}
+              {updateInfo?.hasUpdate && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    openExternal(updateInfo.downloadUrl || updateInfo.releaseUrl);
+                    setUpdateModalOpen(false);
+                  }}
+                  className="px-4 py-2 rounded-lg bg-accent hover:bg-accent-vivid text-on-accent text-xs font-semibold flex items-center gap-1.5 shadow-sm shadow-accent/25 transition-colors"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  <span>Download Update</span>
+                </button>
+              )}
             </div>
           </div>
         </div>
