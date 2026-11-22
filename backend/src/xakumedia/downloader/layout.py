@@ -11,7 +11,8 @@ different accounts never mix:
     <download_dir>/X/<username>/Videos/...
 
 Platform folders use their public display names (``Youtube``, ``Tiktok``,
-``X``); unknown sites still get their own folder so unlike sources never mix.
+``X``). Every other site shares one mixed ``Others`` folder so unnamed sources
+never scatter into one-off directories.
 """
 
 from __future__ import annotations
@@ -127,9 +128,8 @@ def platform_folder(media_item: MediaItem) -> str:
     key = platform_key(media_item)
     if key in _PLATFORM_FOLDERS:
         return _PLATFORM_FOLDERS[key]
-    if key == "other":
-        return "Other"
-    return key.capitalize()
+    # Every unlisted site shares one mixed library instead of a per-site folder.
+    return "Others"
 
 
 def user_folder(media_item: MediaItem) -> str:

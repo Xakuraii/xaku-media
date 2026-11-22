@@ -149,9 +149,7 @@ def test_facebook_and_x_split_videos_from_pictures(tmp_path: Path) -> None:
     )
 
 
-def test_user_folder_is_sanitized_and_unknown_platforms_get_a_shelf(
-    tmp_path: Path,
-) -> None:
+def test_unlisted_platforms_share_one_others_folder(tmp_path: Path) -> None:
     reddit = _item(
         provider="gallerydl",
         media_type=MediaType.IMAGE,
@@ -159,10 +157,21 @@ def test_user_folder_is_sanitized_and_unknown_platforms_get_a_shelf(
         source_url="https://www.reddit.com/r/pics/",
         author="bad:user/name",
     )
+    artstation = _item(
+        provider="gallerydl",
+        media_type=MediaType.IMAGE,
+        extractor="artstation",
+        source_url="https://www.artstation.com/alice",
+        author="bad:user/name",
+    )
 
-    assert platform_folder(reddit) == "Reddit"
+    assert platform_folder(reddit) == "Others"
+    assert platform_folder(artstation) == "Others"
     assert destination_directory(reddit, tmp_path) == (
-        tmp_path / "Reddit" / "bad_user_name" / "Images"
+        tmp_path / "Others" / "bad_user_name" / "Images"
+    )
+    assert destination_directory(artstation, tmp_path) == (
+        tmp_path / "Others" / "bad_user_name" / "Images"
     )
 
 
@@ -176,5 +185,5 @@ def test_missing_author_falls_back_to_media_folder(tmp_path: Path) -> None:
     )
 
     assert destination_directory(item, tmp_path) == (
-        tmp_path / "Example" / "media" / "Videos"
+        tmp_path / "Others" / "media" / "Videos"
     )
