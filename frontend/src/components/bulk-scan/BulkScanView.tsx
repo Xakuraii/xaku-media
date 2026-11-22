@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, CheckSquare, Layers, X } from "lucide-react";
+import { AlertCircle, CheckSquare, Layers, RefreshCw, X } from "lucide-react";
 import type { DiscoveredMediaItem, ScanOptionsPayload } from "../../../../desktop/shared/types";
 import { JobStatusList } from "./JobStatusList";
 import { PostBrowser } from "./PostBrowser";
@@ -60,6 +60,7 @@ export function BulkScanView({
   const [savedLinks, setSavedLinks] = useState<Set<string>>(new Set());
   const [preferredResolution, setPreferredResolution] = useState<string>("1080p");
   const [hideSkipped, setHideSkipped] = useState<boolean>(false);
+  const [refreshingStats, setRefreshingStats] = useState<boolean>(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -444,6 +445,15 @@ export function BulkScanView({
     }
   };
 
+  const handleRefreshScanView = async () => {
+    setRefreshingStats(true);
+    try {
+      await Promise.all([refreshStats(), refreshDownloaded(), refreshSavedLinks()]);
+    } finally {
+      setRefreshingStats(false);
+    }
+  };
+
   return (
     <div className="mx-auto max-w-6xl space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -455,9 +465,12 @@ export function BulkScanView({
           </p>
         </div>
         {stats && (
-          <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-muted">
+          <div
+            className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-muted"
+            title={stats.root_dir ? `Counted from xakumedia-library.json in ${stats.root_dir}` : undefined}
+          >
             <span className="rounded-full border border-hairline bg-surface px-2.5 py-1">
-              {stats.posts} posts
+              {stats.users ?? 0} {(stats.users ?? 0) === 1 ? "folder" : "folders"}
             </span>
             <span className="rounded-full border border-hairline bg-surface px-2.5 py-1">
               {stats.images} images
@@ -465,6 +478,21 @@ export function BulkScanView({
             <span className="rounded-full border border-hairline bg-surface px-2.5 py-1">
               {stats.videos} videos
             </span>
+            {(stats.skipped ?? 0) > 0 && (
+              <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-amber-700 dark:text-amber-300">
+                {stats.skipped} skipped
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => void handleRefreshScanView()}
+              disabled={refreshingStats}
+              title="Refresh image & video counts from Settings download folder"
+              className="inline-flex items-center gap-1 rounded-full border border-hairline bg-surface px-2.5 py-1 text-muted transition-colors hover:bg-raised hover:text-ink disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3 w-3 ${refreshingStats ? "animate-spin" : ""}`} />
+              <span>Refresh</span>
+            </button>
           </div>
         )}
       </div>

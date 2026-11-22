@@ -64,6 +64,7 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
 }) => {
   const [sources, setSources] = useState<SavedSourceRecord[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [selectedTag, setSelectedTag] = useState<string>("all");
   const [activeRescanId, setActiveRescanId] = useState<string | null>(null);
@@ -90,13 +91,14 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
     }, 3500);
   };
 
-  const loadSources = async () => {
+  const loadSources = async (silent = false) => {
     if (!window.api?.getSavedSources) {
       setLoading(false);
       return;
     }
     try {
-      setLoading(true);
+      if (silent) setRefreshing(true);
+      else setLoading(true);
       const res = await window.api.getSavedSources();
       setSources(res.sources || []);
     } catch (err) {
@@ -104,6 +106,7 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
       showFeedback("Failed to load saved sources from database", "error");
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
@@ -256,6 +259,17 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
         </div>
 
         <div className="flex shrink-0 items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => void loadSources(true)}
+            disabled={refreshing}
+            className="whitespace-nowrap px-3.5 py-2 bg-surface hover:bg-raised border border-hairline text-ink/80 rounded-xl text-xs font-mono transition-colors flex items-center space-x-2 disabled:opacity-50"
+            title="Refresh saved sources list and profile pictures"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
+            <span>Refresh</span>
+          </button>
+
           <button
             type="button"
             onClick={handleRescanAll}

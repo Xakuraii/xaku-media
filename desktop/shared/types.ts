@@ -273,6 +273,10 @@ export interface LibraryStats {
   scans: number;
   downloads_completed: number;
   downloads_active: number;
+  skipped?: number;
+  users?: number;
+  platforms?: number;
+  root_dir?: string;
 }
 
 export interface ScanHistoryResult {

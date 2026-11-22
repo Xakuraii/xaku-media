@@ -105,6 +105,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [selectedBrowser, setSelectedBrowser] = useState<string>("chrome");
   const [browserDomainFilter, setBrowserDomainFilter] = useState<string>("");
   const [importingBrowser, setImportingBrowser] = useState<boolean>(false);
+  const [authRefreshing, setAuthRefreshing] = useState<boolean>(false);
   const [authActiveTab, setAuthActiveTab] = useState<"cookies" | "headers">("cookies");
   const [pasteModalOpen, setPasteModalOpen] = useState<boolean>(false);
   const [pasteDomain, setPasteDomain] = useState<string>("");
@@ -148,7 +149,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     loadAuthData();
   }, []);
 
-  const loadAuthData = async () => {
+  const loadAuthData = async (showSpinner = false) => {
+    if (showSpinner) setAuthRefreshing(true);
     try {
       if (window.api?.listCookieProfiles) {
         const res = await window.api.listCookieProfiles();
@@ -169,6 +171,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       }
     } catch (err) {
       console.warn("Failed to load auth credentials data:", err);
+      if (showSpinner) {
+        setAuthFeedback({
+          type: "error",
+          message: err instanceof Error ? err.message : "Failed to refresh credentials.",
+        });
+      }
+    } finally {
+      if (showSpinner) setAuthRefreshing(false);
     }
   };
 
@@ -894,11 +904,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
             <button
               type="button"
-              onClick={loadAuthData}
+              onClick={() => void loadAuthData(true)}
+              disabled={authRefreshing}
               title="Refresh credentials and profiles"
-              className="p-1.5 bg-page border border-hairline text-muted hover:text-ink rounded-lg transition-colors"
+              className="p-1.5 bg-page border border-hairline text-muted hover:text-ink rounded-lg transition-colors disabled:opacity-50"
             >
-              <RefreshCw className="h-3.5 w-3.5" />
+              <RefreshCw className={`h-3.5 w-3.5 ${authRefreshing ? "animate-spin" : ""}`} />
             </button>
           </div>
         </div>

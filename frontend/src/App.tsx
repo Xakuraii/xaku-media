@@ -2078,14 +2078,14 @@ export const App: React.FC = () => {
                   )}
                   <button
                     onClick={() => {
-                      fetchDownloadTasks();
-                      fetchQueueState();
+                      void Promise.all([fetchDownloadTasks(), fetchQueueState()]);
                     }}
                     disabled={downloadTasksLoading}
-                    className="px-3 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline rounded-md text-xs font-mono text-ink/80 flex items-center space-x-1.5 transition-colors"
+                    className="px-3 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline rounded-md text-xs font-mono text-ink/80 flex items-center space-x-1.5 transition-colors disabled:opacity-50"
                     title="Refresh download queue"
                   >
                     <RefreshCw className={`h-3.5 w-3.5 ${downloadTasksLoading ? "animate-spin" : ""}`} />
+                    <span>Refresh</span>
                   </button>
                   <button
                     onClick={() => handleRecoverTasks(true)}

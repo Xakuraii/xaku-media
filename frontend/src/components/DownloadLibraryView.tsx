@@ -270,8 +270,8 @@ export const DownloadLibraryView: React.FC<DownloadLibraryViewProps> = ({
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-ink">Download Library</h1>
             <p className="mt-0.5 font-mono text-xs text-muted">
-              Live folder view synced from your download directory and{" "}
-              <span className="text-ink/90">xakumedia-library.json</span> manifests.
+              Folders detected from <span className="text-ink/90">xakumedia-library.json</span> in{" "}
+              <span className="text-ink/90">{snapshot?.root_dir || "Settings download folder"}</span>.
             </p>
           </div>
         </div>
