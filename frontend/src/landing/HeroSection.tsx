@@ -39,10 +39,9 @@ export const HeroSection: React.FC = () => {
           </h1>
 
           {/* Subtitle */}
-          <p className="mt-6 text-base sm:text-lg text-muted leading-relaxed max-w-xl">
-            A local-first Windows desktop app to scan profiles, channels, galleries, and
-            direct links into one selectable gallery — then batch-download with
-            quality-aware merging. No accounts, no cloud tracking, no subscriptions.
+          <p className="mt-5 text-base sm:text-lg text-muted leading-relaxed max-w-xl">
+            A local-first Windows app to scan profiles, albums, and links — skip what you
+            don&apos;t want, download in full quality, and keep everything organized locally.
           </p>
 
           {/* Download actions */}

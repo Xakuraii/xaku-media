@@ -10,63 +10,46 @@ export const FaqSection: React.FC = () => {
 
   const faqs: Array<{ q: string; a: React.ReactNode }> = [
     {
-      q: "Is XakuMedia completely free?",
-      a: "Yes. XakuMedia is 100% free and open-source. There are no subscriptions, paid upgrades, or advertisements.",
+      q: "Is XakuMedia free?",
+      a: "Yes — 100% free, local-first, and open-source with no subscriptions or ads.",
     },
     {
-      q: "Can I scan an entire profile or channel?",
-      a: "Yes, for supported sources. Paste profile, channel, album, or post URLs into the bulk scan box (one per line) and set optional post/media limits. Jobs page through results and stream new posts into the gallery while the scan is still running. Coverage depends on the provider, and auth-heavy sites may need cookies.",
+      q: "How do Skip and Download Library work across PCs?",
+      a: "Each folder saves a small xakumedia-library.json file recording downloaded and skipped items. Copy your download folder to another PC and XakuMedia picks up right where you left off.",
     },
     {
-      q: "Why does a site say it needs cookies?",
+      q: "Why do some sites need cookies?",
       a: (
         <>
-          Some sources only serve media to a signed-in session. Export a Netscape{" "}
-          <span className="font-mono text-ink">cookies.txt</span> with the{" "}
+          Signed-in platforms require your session cookies. Import Netscape{" "}
+          <span className="font-mono text-ink">cookies.txt</span> in Settings → Session Credentials ({" "}
+          <a href="#cookies" className="text-accent underline underline-offset-4">
+            see guide
+          </a>{" "}
+          or{" "}
           <a
             href={COOKIE_EXTENSION_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-accent underline underline-offset-4 decoration-1 hover:decoration-2"
+            className="text-accent underline underline-offset-4"
           >
-            Get cookies.txt LOCALLY
-          </a>{" "}
-          browser extension, then import it in Settings → Session Credentials (Chrome is
-          the default browser choice). Cookie files stay on your machine. If a scan still
-          fails, the error panel names the cause and the next step.{" "}
-          <a
-            href="#cookies"
-            className="text-accent underline underline-offset-4 decoration-1 hover:decoration-2"
-          >
-            Read the full cookie guide
-          </a>{" "}
-          for export steps, format, and troubleshooting.
+            get extension
+          </a>
+          ).
         </>
       ),
     },
     {
-      q: "What does “Select new” do?",
-      a: "It selects only the media the app has not downloaded before, so rescanning a profile or channel is a one-click incremental download. Already-downloaded cards are marked with a badge, and Select all still picks everything in the current view.",
+      q: "Why does Windows SmartScreen warn on first launch?",
+      a: "The binary is not commercially code-signed yet. Click More info → Run anyway, or build directly from source on GitHub.",
     },
     {
-      q: "Why does Windows SmartScreen show an unrecognized app prompt?",
-      a: "XakuMedia is a community project distributed without a costly commercial Extended Validation (EV) certificate ($500+/year). Windows displays this default warning for any new unsigned binary. Simply click 'More info' and then 'Run anyway'. All code is fully open and auditable on GitHub.",
+      q: "Do I need to install Python or FFmpeg?",
+      a: "No — Python 3.12 and FFmpeg are bundled inside both the installer and portable build.",
     },
     {
-      q: "Do I need to install Python or FFmpeg separately?",
-      a: "No. Python 3.12 embedded runtime and FFmpeg/FFprobe binaries are bundled directly inside the setup and portable executables. No configuration or PATH adjustments are needed.",
-    },
-    {
-      q: "Can I limit the download speed?",
-      a: "Yes. Set a global bandwidth limit (such as 500 KB/s, 2 MB/s, 10 MB/s, or Unlimited) in Settings or from the Downloads toolbar. The limiter is shared across all active workers and applies immediately.",
-    },
-    {
-      q: "Can I download 4K video streams?",
-      a: "Yes. When a source provides 4K or high-framerate streams, XakuMedia detects them and uses bundled FFmpeg to merge high-res video and audio tracks losslessly (-c copy) into MP4, MKV, or WebM. Choose the preferred resolution in Settings; the scan gallery previews the size for that quality.",
-    },
-    {
-      q: "Where can I report bugs or suggest features?",
-      a: "You can open an issue directly in our official GitHub repository. Feedback and community contributions are always welcome.",
+      q: "What are the rules for responsible use?",
+      a: "Use XakuMedia strictly at your own responsibility for personal offline archiving. Respect creators, copyright laws, and site terms — never use it to redistribute content without permission or bypass paywalls.",
     },
   ];
 
