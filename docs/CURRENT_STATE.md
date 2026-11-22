@@ -1,8 +1,8 @@
 # XakuMedia — Current Project State
 
 **Last Updated:** November 23, 2026
-**Active Milestone:** Release v1.0.0 — Per-Folder Library Manifests, Quality Selection & UI Polish
-**Overall Status:** In Progress - v1.0.0 features implemented and unit/build verified; gallery-dl platforms remain subject to site/auth coverage
+**Active Milestone:** Release v1.1.0 — In-App Media Preview, TikTok WAF/Public Profile Support & Auto-Update UX
+**Overall Status:** In Progress - v1.1.0 features implemented and verified; gallery-dl platforms remain subject to site/auth coverage
 
 ---
 
@@ -285,7 +285,8 @@ The system relies on a secure 3-tier desktop architecture:
   - **Chromium Codec Compatibility (`App.tsx` `pickPlayableRemoteStream`):** Scores muxed (`!requires_merge`) Chromium-compatible codecs (`h264`, `avc`, `vp8`, `vp9`, `av1`) above `h265`/`hevc`/`bytevc1` streams for preview playback so sites returning dual HEVC/H.264 streams (e.g., TikTok) play natively in Electron without affecting full-quality download selection.
   - **Top-Right Update Indicator & Auto-Popup (`App.tsx`, `desktop/main/index.ts` `app:checkForUpdates`):** Placed the always-visible **Update** button in the top-right desktop header and added an automatic startup popup modal whenever a newer GitHub Release exists.
   - **TikTok SlardarWAF Profile Recovery & Light-Mode Lightbox Contrast (`providers/ytdlp.py`, `extractors/video.py`, `App.tsx`):** Added `strip_stale_waf_cookies` to clear expired browser `_waftokenid`/`_wafchallengeid` cookies before TikTok requests (fixing HTTP 403 failures with imported cookies) and `_resolve_tiktok_profile_via_waf` to solve SlardarWAF challenges on `@username` profiles when `/embed/` is disabled (`@dorybbi` verified live: 5 posts extracted across videos and slideshows). Expanded `TIKTOK_HOSTS` (`vm.tiktok.com`, `vt.tiktok.com`) and `@user/videos` normalization, routed `sources/rescan.py` (`scan_source_url`) through `resolve_provider` so Saved Sources rescans discover TikTok profiles cleanly while preserving all previously downloaded files/library manifests if posts are later hidden, deleted, or made private, and fixed the image lightbox toolbar close button (`text-ink/80 hover:text-red-500`) for light mode.
-  - **Verification:** `ruff check backend/` clean; `tsc --noEmit` clean; `pytest backend/` **244 passed**; `npm run build:all` clean; live Node HTTPS verification against TikTok `@berrry.18` H.264 stream + cookie header returned `HTTP 206 video/mp4` with valid MP4 header bytes; live `YtDlpProvider` + `download_stream` verified all 5 `@dorybbi` posts (videos + slideshows) and no-cookie scans on `@berrry.18` / `@tiktok`.
+  - **Version 1.1.0 Release Packaging (`package.json`, `pyproject.toml`, `downloadConfig.ts`, `dist-package/`):** Upgraded app, Python backend, frontend, landing config, and test assertions cleanly to `1.1.0` (`v1.1.0`), updated `ReleaseChangelogSection.tsx` highlights, rebuilt Windows distribution installers (`dist-package/XakuMedia-Setup-1.1.0.exe`, 171 MB / `179,286,405` bytes; `dist-package/XakuMedia-Portable-1.1.0.exe`, 151 MB / `158,413,295` bytes; `dist-package/win-unpacked/XakuMedia.exe`), and verified `pip install --no-deps -e backend`.
+  - **Verification:** `ruff check backend/` clean; `tsc --noEmit` clean; `pytest backend/` **244 passed**; `npm run build:all` clean; `npm run package:win` succeeded; live Node HTTPS verification against TikTok `@berrry.18` H.264 stream + cookie header returned `HTTP 206 video/mp4` with valid MP4 header bytes; live `YtDlpProvider` + `download_stream` verified all 5 `@dorybbi` posts (videos + slideshows) and no-cookie scans on `@berrry.18` / `@tiktok`.
 
 ---
 

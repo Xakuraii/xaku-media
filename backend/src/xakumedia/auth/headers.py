@@ -11,7 +11,7 @@ DEFAULT_USER_AGENT = (
 # while others reject unknown ones. The browser UA is tried first, then this
 # honest identifier, so downloads work on both kinds of servers.
 IDENTIFYING_USER_AGENT = (
-    "XakuMedia/1.0.0 (media downloader; +https://github.com/xakuraii/xakumedia)"
+    "XakuMedia/1.1.0 (media downloader; +https://github.com/xakuraii/xakumedia)"
 )
 
 

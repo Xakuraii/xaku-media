@@ -4,11 +4,11 @@ import { RELEASE_CONFIG } from "./downloadConfig";
 
 export const ReleaseChangelogSection: React.FC = () => {
   const highlights = [
-    "Bulk profile and link scans with shared Videos grid, albums, and live scan progress",
+    "In-app video player & zoomable image lightbox directly from Scan Media results with inline Skip",
+    "Full TikTok profile & slideshow scanning/downloading with SlardarWAF challenge recovery",
+    "Non-destructive Saved Sources rescanning that keeps downloaded libraries intact",
+    "Top-right Update checker & automatic new-release modal powered by GitHub Releases",
     "Portable xakumedia-library.json tracking for downloaded & skipped items across devices",
-    "JSON-synced Download Library (Platform / Creator / Videos & Images) with Unskip & Delete",
-    "Saved Sources URL bookmarking with image/video thumbnail PFP avatars",
-    "Gap-free creator file naming (user-vdo-N / user-img-N) and 1080p short-edge matching",
   ];
 
   return (
