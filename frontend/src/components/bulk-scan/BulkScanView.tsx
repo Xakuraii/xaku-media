@@ -61,7 +61,8 @@ export function BulkScanView({
   const [bookmarkBusy, setBookmarkBusy] = useState<Set<string>>(new Set());
   const [bookmarking, setBookmarking] = useState<boolean>(false);
   const [savedLinks, setSavedLinks] = useState<Set<string>>(new Set());
-  const [preferredResolution, setPreferredResolution] = useState<string>("best");
+  const [preferredResolution, setPreferredResolution] = useState<string>("1080p");
+  const [hideSkipped, setHideSkipped] = useState<boolean>(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -475,6 +476,33 @@ export function BulkScanView({
     }
   };
 
+  const unskipSelected = async () => {
+    const toUnskip = selectedItems.filter((item) =>
+      itemKeys(item).some((key) => skipped.has(key))
+    );
+    if (toUnskip.length === 0) return;
+    if (!window.api?.unskipMediaItems) return;
+    setSkipping(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await window.api.unskipMediaItems(toUnskip);
+      setSkipped((prev) => {
+        const next = new Set(prev);
+        for (const item of toUnskip) itemKeys(item).forEach((key) => next.delete(key));
+        return next;
+      });
+      setNotice(
+        `Restored ${result.count} item${result.count === 1 ? "" : "s"} as new.`
+      );
+      clearSelection();
+    } catch (err) {
+      setError(explainDownloadFailure(err));
+    } finally {
+      setSkipping(false);
+    }
+  };
+
   return (
     <div className="mx-auto max-w-6xl space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -585,7 +613,10 @@ export function BulkScanView({
           onClearSelection={clearSelection}
           onDownload={() => void downloadSelected()}
           onSkip={() => void skipSelected()}
+          onUnskip={() => void unskipSelected()}
           skipping={skipping}
+          hideSkipped={hideSkipped}
+          onToggleHideSkipped={() => setHideSkipped((value) => !value)}
         />
       )}
 

@@ -190,6 +190,11 @@ const api: DesktopApi = {
   skipMediaItems: async (items: DiscoveredMediaItem[]): Promise<SkipMediaItemsResult> => {
     return ipcRenderer.invoke("python:skipMediaItems", items);
   },
+  unskipMediaItems: async (
+    items: DiscoveredMediaItem[]
+  ): Promise<{ count: number; identities: string[]; status: string }> => {
+    return ipcRenderer.invoke("python:unskipMediaItems", items);
+  },
   startDownload: async (
     mediaItem: DiscoveredMediaItem,
     selectedFormat?: MediaFormatInfoPayload | null,

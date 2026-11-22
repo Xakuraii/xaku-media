@@ -638,6 +638,13 @@ export interface DesktopApi {
   skipMediaItems?: (items: DiscoveredMediaItem[]) => Promise<SkipMediaItemsResult>;
 
   /**
+   * Remove skipped status from media items in their folder library manifest.
+   */
+  unskipMediaItems?: (
+    items: DiscoveredMediaItem[]
+  ) => Promise<{ count: number; identities: string[]; status: string }>;
+
+  /**
    * Enqueue and begin streaming download for a media item.
    */
   startDownload: (

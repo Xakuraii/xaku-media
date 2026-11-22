@@ -169,3 +169,78 @@ def test_skip_rpc_rejects_empty_payload() -> None:
 
     assert response.error is not None
     assert "non-empty list" in response.error.message
+
+
+def test_manifest_tracks_downloaded_and_skipped_counts(isolated_download_dir: Path) -> None:
+    vid = _item(MediaType.VIDEO, provider_media_id="v1", extractor="youtube")
+    vid_skip = _item(MediaType.VIDEO, provider_media_id="v2", extractor="youtube")
+    folder = destination_directory(vid)
+    folder.mkdir(parents=True)
+    record_download(vid, folder / "xakuraii-vdo-1.mp4")
+    record_skipped([vid_skip])
+
+    data = load_manifest(folder)
+    assert data["counts"] == {"downloaded": 1, "skipped": 1, "total": 2}
+
+
+def test_unskip_rpc_removes_skipped_entries(isolated_download_dir: Path) -> None:
+    item = _item(MediaType.IMAGE, provider_media_id="pic-unskip", extractor="instagram")
+    dispatcher = RpcDispatcher()
+
+    dispatcher.dispatch(
+        JsonRpcRequest(
+            id="s1",
+            method="skip_media_items",
+            params={"items": [item.model_dump(mode="json")]},
+        )
+    )
+    unskip_res = dispatcher.dispatch(
+        JsonRpcRequest(
+            id="u1",
+            method="unskip_media_items",
+            params={"items": [item.model_dump(mode="json")]},
+        )
+    )
+
+    assert unskip_res.error is None
+    assert unskip_res.result == {
+        "count": 1,
+        "identities": [media_identity(item)],
+        "status": "unskipped",
+    }
+    data = load_manifest(destination_directory(item))
+    assert data["items"] == {}
+    assert data["counts"] == {"downloaded": 0, "skipped": 0, "total": 0}
+
+
+def test_incremental_rescan_respects_folder_manifest_without_db_history(
+    isolated_download_dir: Path, tmp_path: Path
+) -> None:
+    from unittest.mock import patch
+
+    from xakumedia.db.repository import MediaRepository
+    from xakumedia.models.source import SavedSource
+    from xakumedia.sources.rescan import incremental_rescan_source
+
+    repo = MediaRepository(tmp_path / "fresh-device.db")
+    downloaded_item = _item(MediaType.IMAGE, provider_media_id="img-1", extractor="instagram")
+    skipped_item = _item(MediaType.IMAGE, provider_media_id="img-2", extractor="instagram")
+    new_item = _item(MediaType.IMAGE, provider_media_id="img-3", extractor="instagram")
+
+    folder = destination_directory(downloaded_item)
+    folder.mkdir(parents=True)
+    record_download(downloaded_item, folder / "xakuraii-img-1.jpg")
+    record_skipped([skipped_item])
+
+    source = SavedSource(id="src-1", url="https://www.instagram.com/xakuraii/", title="xakuraii")
+    repo.save_source(source)
+
+    with patch(
+        "xakumedia.sources.rescan.scan_source_url",
+        return_value=(None, [downloaded_item, skipped_item, new_item]),
+    ):
+        result = incremental_rescan_source(source, repository=repo)
+
+    assert result.total_found == 3
+    assert [i.provider_media_id for i in result.new_items] == ["img-3"]
+    assert {i.provider_media_id for i in result.existing_items} == {"img-1", "img-2"}

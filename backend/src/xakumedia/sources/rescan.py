@@ -78,6 +78,10 @@ def incremental_rescan_source(
     known_urls = repo.get_known_item_urls_for_source(source.url)
     classified, discovered_items = scan_source_url(source.url)
 
+    from ..downloader.library import annotate_items
+
+    annotate_items(discovered_items)
+
     now = datetime.now(UTC).isoformat()
     new_items: list[MediaItem] = []
     existing_items: list[MediaItem] = []
@@ -86,6 +90,7 @@ def incremental_rescan_source(
         is_known = (
             item.original_url in known_urls
             or item.source_url in known_urls
+            or item.library_status in ("downloaded", "skipped")
         )
         if is_known:
             existing_items.append(item)

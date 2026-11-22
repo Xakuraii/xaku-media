@@ -66,12 +66,31 @@ def load_manifest(directory: Path | str) -> dict[str, Any]:
     return data
 
 
+def _summarize_counts(items: dict[str, Any]) -> dict[str, int]:
+    downloaded = 0
+    skipped = 0
+    for entry in items.values():
+        if not isinstance(entry, dict):
+            continue
+        status = entry.get("status")
+        if status == "downloaded":
+            downloaded += 1
+        elif status == "skipped":
+            skipped += 1
+    return {
+        "downloaded": downloaded,
+        "skipped": skipped,
+        "total": downloaded + skipped,
+    }
+
+
 def _write_manifest(directory: Path | str, data: dict[str, Any]) -> None:
     """Atomically replace a folder manifest without leaving a partial file."""
     path = manifest_path(directory)
     path.parent.mkdir(parents=True, exist_ok=True)
     data["version"] = MANIFEST_VERSION
     data["updated_at"] = datetime.now(UTC).isoformat()
+    data["counts"] = _summarize_counts(data.get("items") or {})
     temp = path.with_suffix(path.suffix + ".tmp")
     try:
         temp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -132,17 +151,68 @@ def record_download(item: MediaItem, file_path: Path | str) -> str:
 
 def record_skipped(items: Iterable[MediaItem]) -> list[str]:
     """Record explicitly skipped items and return their identities."""
+    from .layout import destination_directory
+
+    by_directory: dict[Path, list[MediaItem]] = {}
     identities: list[str] = []
     for item in items:
-        # Imported here to avoid a module-level cycle with the layout helpers.
-        from .layout import destination_directory
-
         try:
             directory = destination_directory(item)
-            identities.append(_record(directory, item, "skipped", None))
+            by_directory.setdefault(directory, []).append(item)
+        except Exception as exc:
+            logger.warning(f"Could not resolve destination for skipped media: {exc}")
+
+    for directory, dir_items in by_directory.items():
+        try:
+            with _LOCK:
+                data = load_manifest(directory)
+                for item in dir_items:
+                    identity = media_identity(item)
+                    previous = data["items"].get(identity)
+                    entry = _entry(item, "skipped", None)
+                    if isinstance(previous, dict) and previous.get("updated_at"):
+                        entry["first_seen_at"] = (
+                            previous.get("first_seen_at") or previous["updated_at"]
+                        )
+                    else:
+                        entry["first_seen_at"] = entry["updated_at"]
+                    data["items"][identity] = entry
+                    identities.append(identity)
+                _write_manifest(directory, data)
         except Exception as exc:
             logger.warning(f"Could not record skipped media in library manifest: {exc}")
     return identities
+
+
+def unskip_items(items: Iterable[MediaItem]) -> list[str]:
+    """Remove ``skipped`` manifest entries so items show as new again."""
+    from .layout import destination_directory
+
+    by_directory: dict[Path, list[str]] = {}
+    for item in items:
+        try:
+            directory = destination_directory(item)
+            by_directory.setdefault(directory, []).append(media_identity(item))
+        except Exception as exc:
+            logger.warning(f"Could not resolve destination for unskip media: {exc}")
+
+    removed: list[str] = []
+    for directory, ids in by_directory.items():
+        try:
+            with _LOCK:
+                data = load_manifest(directory)
+                changed = False
+                for identity in ids:
+                    entry = data["items"].get(identity)
+                    if isinstance(entry, dict) and entry.get("status") == "skipped":
+                        data["items"].pop(identity, None)
+                        removed.append(identity)
+                        changed = True
+                if changed:
+                    _write_manifest(directory, data)
+        except Exception as exc:
+            logger.warning(f"Could not unskip media in library manifest: {exc}")
+    return removed
 
 
 def annotate_items(items: Iterable[MediaItem]) -> None:
@@ -231,4 +301,5 @@ __all__ = [
     "record_skipped",
     "remove_file",
     "status_for",
+    "unskip_items",
 ]

@@ -53,7 +53,10 @@ interface PostBrowserProps {
   onClearSelection: () => void;
   onDownload: () => void;
   onSkip: () => void;
+  onUnskip: () => void;
   skipping: boolean;
+  hideSkipped: boolean;
+  onToggleHideSkipped: () => void;
 }
 
 interface VideoEntry {
@@ -92,11 +95,31 @@ export function PostBrowser({
   onClearSelection,
   onDownload,
   onSkip,
+  onUnskip,
   skipping,
+  hideSkipped,
+  onToggleHideSkipped,
 }: PostBrowserProps) {
   const visibleItems = useMemo(
-    () => filteredPosts.flatMap((post) => visibleMedia(post, filter)),
-    [filteredPosts, filter]
+    () =>
+      filteredPosts
+        .flatMap((post) => visibleMedia(post, filter))
+        .filter((item) => !hideSkipped || !isItemSkipped(item, skipped)),
+    [filteredPosts, filter, hideSkipped, skipped]
+  );
+  const skippedCount = useMemo(
+    () =>
+      filteredPosts
+        .flatMap((post) => visibleMedia(post, filter))
+        .filter((item) => isItemSkipped(item, skipped)).length,
+    [filteredPosts, filter, skipped]
+  );
+  const selectedSkippedCount = useMemo(
+    () =>
+      visibleItems.filter(
+        (item) => selected.has(item.id) && isItemSkipped(item, skipped)
+      ).length,
+    [visibleItems, selected, skipped]
   );
   const newCount = visibleItems.filter(
     (item) => !isItemDownloaded(item, downloaded) && !isItemSkipped(item, skipped)
@@ -122,10 +145,14 @@ export function PostBrowser({
     if (filter === "image") return [];
     return filteredPosts.flatMap((post) =>
       post.media_items
-        .filter((item) => item.media_type === "video")
+        .filter(
+          (item) =>
+            item.media_type === "video" &&
+            (!hideSkipped || !isItemSkipped(item, skipped))
+        )
         .map((item) => ({ item, post }))
     );
-  }, [filteredPosts, filter]);
+  }, [filteredPosts, filter, hideSkipped, skipped]);
   const videoEntries = useMemo(
     () => allVideoEntries.slice(0, videoLimit),
     [allVideoEntries, videoLimit]
@@ -138,10 +165,14 @@ export function PostBrowser({
     return displayedPosts
       .map((post) => ({
         post,
-        items: post.media_items.filter((item) => item.media_type === "image"),
+        items: post.media_items.filter(
+          (item) =>
+            item.media_type === "image" &&
+            (!hideSkipped || !isItemSkipped(item, skipped))
+        ),
       }))
       .filter((group) => group.items.length > 0);
-  }, [displayedPosts, filter]);
+  }, [displayedPosts, filter, hideSkipped, skipped]);
 
   const hasResults = allVideoEntries.length > 0 || imageGroups.length > 0;
 
@@ -179,6 +210,21 @@ export function PostBrowser({
               className="w-44 rounded-full border border-hairline bg-page py-1 pl-7 pr-3 font-mono text-[11px] text-ink placeholder-faint focus:border-accent focus:outline-none"
             />
           </div>
+          {skippedCount > 0 && (
+            <button
+              type="button"
+              onClick={onToggleHideSkipped}
+              className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[11px] font-mono transition-colors ${
+                hideSkipped
+                  ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                  : "border-hairline text-muted hover:bg-raised hover:text-ink"
+              }`}
+              title={hideSkipped ? "Show skipped items" : "Hide skipped items"}
+            >
+              <EyeOff className="h-3 w-3" />
+              <span>{hideSkipped ? `Hidden skipped (${skippedCount})` : `Skipped ${skippedCount}`}</span>
+            </button>
+          )}
           {focusedScanLabel && (
             <span className="rounded-full border border-accent/30 bg-accent/10 px-2.5 py-1 font-mono text-[10px] text-accent">
               showing: {focusedScanLabel}
@@ -223,6 +269,17 @@ export function PostBrowser({
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {selectedSkippedCount > 0 && (
+            <button
+              type="button"
+              onClick={onUnskip}
+              disabled={skipping}
+              title="Remove skipped mark from selected items so they count as new again"
+              className="flex cursor-pointer items-center gap-2 rounded-lg border border-hairline bg-surface px-3 py-2 text-sm font-medium text-ink transition-colors hover:bg-raised disabled:opacity-50"
+            >
+              <span>Unskip ({selectedSkippedCount})</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={onSkip}

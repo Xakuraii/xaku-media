@@ -309,6 +309,22 @@ class RpcDispatcher:
                 "status": "skipped",
             }
 
+        def unskip_media_items_handler(params: dict[str, Any]) -> dict[str, Any]:
+            raw_items = params.get("items")
+            if not raw_items or not isinstance(raw_items, list):
+                raise TypeError("Parameter 'items' is required and must be a non-empty list.")
+
+            from ..downloader.library import unskip_items
+            from ..models.media import MediaItem
+
+            items = [MediaItem.model_validate(item) for item in raw_items]
+            identities = unskip_items(items)
+            return {
+                "count": len(identities),
+                "identities": identities,
+                "status": "unskipped",
+            }
+
         def get_library_stats_handler(params: dict[str, Any]) -> dict[str, Any]:
             from ..db import default_repository
 
@@ -859,6 +875,7 @@ class RpcDispatcher:
         self.register("list_scan_jobs", list_scan_jobs_handler)
         self.register("get_scan_posts", get_scan_posts_handler)
         self.register("skip_media_items", skip_media_items_handler)
+        self.register("unskip_media_items", unskip_media_items_handler)
         self.register("get_library_stats", get_library_stats_handler)
         self.register("get_provider_capabilities", get_provider_capabilities_handler)
         self.register("save_media_item", save_media_item_handler)

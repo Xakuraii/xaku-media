@@ -205,6 +205,10 @@ function registerIpcHandlers(): void {
     return pythonBridge.sendRequest("skip_media_items", { items });
   });
 
+  ipcMain.handle("python:unskipMediaItems", async (_event, items: DiscoveredMediaItem[]) => {
+    return pythonBridge.sendRequest("unskip_media_items", { items });
+  });
+
   // Download Manager IPC Handlers
   ipcMain.handle(
     "python:startDownload",
