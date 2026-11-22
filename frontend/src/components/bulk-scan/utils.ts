@@ -125,8 +125,12 @@ export function chooseFormat(
 
   if (item.media_type === "video") {
     const pref = (preferredResolution || "").toLowerCase();
+    // No preference means "best": an empty string must not collapse to a
+    // 0px ceiling that would select the lowest-resolution track.
     const targetHeight =
-      pref === "best" || pref === "original" ? Infinity : resolutionHeight(pref);
+      !pref || pref === "best" || pref === "original"
+        ? Infinity
+        : resolutionHeight(pref) || Infinity;
 
     const videoTracks = pool.filter(hasVideo);
     const hasAudioPartner = pool.some((format) => hasAudio(format) && !hasVideo(format));
