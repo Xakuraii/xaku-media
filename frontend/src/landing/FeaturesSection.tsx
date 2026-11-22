@@ -18,27 +18,27 @@ export const FeaturesSection: React.FC = () => {
     },
     {
       icon: Sparkles,
-      title: "Select all, select only new",
+      title: "Select new & Skip across devices",
       description:
-        "Filter by images, videos, or albums, then pick everything or only the items you have never downloaded. Downloaded badges and per-scan focus keep large rescans quick to review.",
+        "Filter images, videos, and albums, select only new uploads, or mark unwanted items as skipped. Both downloaded and skipped records stay in portable per-folder xakumedia-library.json files.",
     },
     {
       icon: Film,
-      title: "Lossless stream merging",
+      title: "Short-edge 1080p & lossless merge",
       description:
-        "Prefers a muxed stream when one exists; otherwise it downloads the best video track plus the best audio track and merges them with bundled FFmpeg in copy mode — with cancellation and timeout safeguards.",
+        "Matches vertical and horizontal streams to your configured resolution without quality drops, downloading the best audio track and muxing via bundled FFmpeg in copy mode.",
     },
     {
       icon: Gauge,
-      title: "Speed & concurrency control",
+      title: "Creator folders & gap-free naming",
       description:
-        "A global token-bucket limiter (Unlimited to custom KB/s) and configurable download worker slots keep large batches inside your bandwidth budget without throttling unrelated traffic.",
+        "Organizes files cleanly into Platform / Creator / Videos & Images with sequential user-vdo-N and user-img-N naming, automatically closing numbering gaps without overwrites.",
     },
     {
       icon: Database,
-      title: "Local library & scan history",
+      title: "JSON-synced Download Library & PFPs",
       description:
-        "Every scan, post, media item, and task lives in local SQLite. Bookmark links, rescan a history entry with its URL prefilled, and search or sort your collection entirely offline.",
+        "Browse every creator folder directly from your Settings download folder with live filesystem updates, and save user profile links with chosen image/video thumbnail avatars.",
     },
     {
       icon: Cookie,
