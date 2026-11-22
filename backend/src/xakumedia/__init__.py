@@ -34,7 +34,7 @@ from .models import (
 from .scanners import classify_direct_url, probe_direct_url
 from .utils.security import validate_url_security
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 
 __all__ = [
     "__version__",
