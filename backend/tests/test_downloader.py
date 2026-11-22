@@ -184,7 +184,7 @@ def test_download_manager_start_and_complete(
             task = manager.start_download(media_item=test_media_item)
             assert task is not None
             assert task.status in (TaskStatus.QUEUED, TaskStatus.DOWNLOADING, TaskStatus.COMPLETED)
-            assert "artist_neo_img_" in task.destination_path.name
+            assert "artist_neo-img-" in task.destination_path.name
 
             # Wait briefly for worker thread to finish
             manager._executor.shutdown(wait=True)
@@ -236,50 +236,59 @@ def test_dispatcher_download_rpc(
 ) -> None:
     """Verify JSON-RPC endpoints for download task start, query, and cancellation."""
     repo = MediaRepository(tmp_path / "test_rpc_dm.db")
-    dispatcher = RpcDispatcher()
+    dispatcher = RpcDispatcher(repository=repo)
+    isolated_dm = DownloadManager(repository=repo)
 
     import xakumedia.db as db_mod
+    import xakumedia.downloader as dl_pkg
     import xakumedia.downloader.manager as dm_mod
 
-    with (
-        patch.object(db_mod, "default_repository", repo),
-        patch.object(dm_mod, "default_repository", repo),
-    ):
-        with patch.object(dm_mod, "download_stream") as mock_stream:
-            mock_stream.side_effect = lambda url, destination_path, **kwargs: destination_path
+    try:
+        with (
+            patch.object(db_mod, "default_repository", repo),
+            patch.object(dm_mod, "default_repository", repo),
+            patch.object(dl_pkg, "default_download_manager", isolated_dm),
+            patch.object(dm_mod, "default_download_manager", isolated_dm),
+        ):
+            with patch.object(dm_mod, "download_stream") as mock_stream:
+                mock_stream.side_effect = (
+                    lambda url, destination_path, **kwargs: destination_path
+                )
 
-            # 1. start_download RPC
-            req_start = JsonRpcRequest(
-                id="rpc-dl-1",
-                method="start_download",
-                params={"media_item": test_media_item.model_dump()},
-            )
-            res_start = dispatcher.dispatch(req_start)
-            assert res_start.error is None
-            assert res_start.result is not None
-            task_dict = res_start.result["task"]
-            assert task_dict["media_item"]["title"] == "Neo Tokyo Night"
-            task_id = task_dict["id"]
+                # 1. start_download RPC
+                req_start = JsonRpcRequest(
+                    id="rpc-dl-1",
+                    method="start_download",
+                    params={"media_item": test_media_item.model_dump()},
+                )
+                res_start = dispatcher.dispatch(req_start)
+                assert res_start.error is None
+                assert res_start.result is not None
+                task_dict = res_start.result["task"]
+                assert task_dict["media_item"]["title"] == "Neo Tokyo Night"
+                task_id = task_dict["id"]
 
-            # 2. get_download_tasks RPC
-            req_tasks = JsonRpcRequest(
-                id="rpc-dl-2",
-                method="get_download_tasks",
-                params={},
-            )
-            res_tasks = dispatcher.dispatch(req_tasks)
-            assert res_tasks.error is None
-            assert res_tasks.result["count"] >= 1
+                # 2. get_download_tasks RPC
+                req_tasks = JsonRpcRequest(
+                    id="rpc-dl-2",
+                    method="get_download_tasks",
+                    params={},
+                )
+                res_tasks = dispatcher.dispatch(req_tasks)
+                assert res_tasks.error is None
+                assert res_tasks.result["count"] >= 1
 
-            # 3. cancel_download RPC
-            req_cancel = JsonRpcRequest(
-                id="rpc-dl-3",
-                method="cancel_download",
-                params={"task_id": task_id},
-            )
-            res_cancel = dispatcher.dispatch(req_cancel)
-            assert res_cancel.error is None
-            assert "cancelled" in res_cancel.result
+                # 3. cancel_download RPC
+                req_cancel = JsonRpcRequest(
+                    id="rpc-dl-3",
+                    method="cancel_download",
+                    params={"task_id": task_id},
+                )
+                res_cancel = dispatcher.dispatch(req_cancel)
+                assert res_cancel.error is None
+                assert "cancelled" in res_cancel.result
+    finally:
+        isolated_dm._executor.shutdown(wait=True)
 
 
 def _video_item_with(formats: list[MediaFormatInfo]) -> MediaItem:

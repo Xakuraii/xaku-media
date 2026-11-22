@@ -24,8 +24,14 @@ from ..models.post import ScanOptions
 from ..models.queue import DownloadTask, ProgressUpdate, TaskStatus
 from ..server.loop import send_notification
 from ..server.protocol import JsonRpcNotification
-from ..utils.naming import format_sequential_filename, get_next_sequence_number, sanitize_username
-from .layout import destination_directory
+from ..utils.naming import (
+    compact_sequence_numbers,
+    extract_sequence_number,
+    format_sequential_filename,
+    get_next_sequence_number,
+)
+from .layout import destination_directory, user_folder
+from .library import apply_renames, record_download
 from .stream import download_stream
 
 logger = get_logger("downloader.manager")
@@ -58,6 +64,7 @@ class DownloadManager:
         self.throttler = throttler or default_throttler
         self._executor = ThreadPoolExecutor(max_workers=30, thread_name_prefix="xaku-worker")
         self._lock = threading.Lock()
+        self._sequence_lock = threading.Lock()
         self._cancel_events: dict[str, threading.Event] = {}
         self._pause_events: dict[str, threading.Event] = {}
         self._active_tasks: dict[str, DownloadTask] = {}
@@ -127,6 +134,69 @@ class DownloadManager:
                     self._run_task, task, url, cancel_event, pause_event
                 )
 
+    def _in_flight_sequence_numbers(
+        self,
+        directory: Path,
+        username: str,
+        media_type: MediaType,
+    ) -> list[int]:
+        """Return sequence numbers reserved by active or queued tasks in ``directory``."""
+        numbers: list[int] = []
+        with self._lock:
+            tasks = list(self._active_tasks.values()) + [
+                task for task, _ in self._pending_queue
+            ]
+        for task in tasks:
+            dest = task.destination_path
+            if dest is None or dest.parent != directory:
+                continue
+            num = extract_sequence_number(dest.name, username, media_type)
+            if num is not None:
+                numbers.append(num)
+        return numbers
+
+    def _prepare_sequence_folder(
+        self,
+        directory: Path,
+        username: str,
+        media_type: MediaType,
+    ) -> None:
+        """Renumber this user's files to 1..N before a new file is added.
+
+        Gaps appear when the user deletes a downloaded file; the next download
+        closes them so the folder always reads 1, 2, 3, ... with no holes.
+        Renamed files keep their download-task rows in sync.
+        """
+        with self._sequence_lock:
+            if self._in_flight_sequence_numbers(directory, username, media_type):
+                return
+            renamed = compact_sequence_numbers(directory, username, media_type)
+            if not renamed:
+                return
+
+            mapping = {str(old): str(new) for old, new in renamed}
+            try:
+                apply_renames(renamed)
+            except Exception as exc:  # manifest bookkeeping is best effort
+                logger.warning(f"Could not update library manifest after renumbering: {exc}")
+            try:
+                self.repository.remap_download_paths(mapping)
+            except Exception as exc:  # never block a download on a path remap
+                logger.warning(f"Could not remap download paths after renumbering: {exc}")
+
+    def _next_available_sequence(
+        self,
+        directory: Path,
+        username: str,
+        media_type: MediaType,
+    ) -> int:
+        """Return the next unused sequence number across disk and queued tasks."""
+        disk_next = get_next_sequence_number(directory, username, media_type)
+        in_flight = self._in_flight_sequence_numbers(directory, username, media_type)
+        if not in_flight:
+            return disk_next
+        return max(disk_next, max(in_flight) + 1)
+
     def start_download(
         self,
         media_item: MediaItem,
@@ -145,7 +215,7 @@ class DownloadManager:
         if destination_path:
             dest = Path(destination_path)
         else:
-            username = sanitize_username(media_item.author or "media")
+            username = user_folder(media_item)
             is_image = media_item.media_type == MediaType.IMAGE
 
             ext = "jpg" if is_image else "mp4"
@@ -160,7 +230,8 @@ class DownloadManager:
 
             target_dir = destination_directory(media_item)
             target_dir.mkdir(parents=True, exist_ok=True)
-            seq = get_next_sequence_number(target_dir, username, media_item.media_type)
+            self._prepare_sequence_folder(target_dir, username, media_item.media_type)
+            seq = self._next_available_sequence(target_dir, username, media_item.media_type)
             filename = format_sequential_filename(username, media_item.media_type, seq, ext)
             dest = target_dir / filename
 
@@ -194,6 +265,7 @@ class DownloadManager:
         seq_tracker: dict[tuple[Path, str, MediaType], int] = {}
         pending_items: list[tuple[DownloadTask, str]] = []
         created_dirs: set[Path] = set()
+        prepared_dirs: set[tuple[Path, str, MediaType]] = set()
 
         for entry in items:
             media_item: MediaItem
@@ -240,7 +312,7 @@ class DownloadManager:
             if dest_override:
                 dest = Path(dest_override)
             else:
-                username = sanitize_username(media_item.author or "media")
+                username = user_folder(media_item)
                 is_image = media_item.media_type == MediaType.IMAGE
 
                 ext = "jpg" if is_image else "mp4"
@@ -260,9 +332,18 @@ class DownloadManager:
                     item_dir.mkdir(parents=True, exist_ok=True)
                     created_dirs.add(item_dir)
 
+                prep_key = (item_dir, username, media_item.media_type)
+                if prep_key not in prepared_dirs:
+                    self._prepare_sequence_folder(
+                        item_dir, username, media_item.media_type
+                    )
+                    prepared_dirs.add(prep_key)
+
                 key = (item_dir, username, media_item.media_type)
                 if key not in seq_tracker:
-                    seq = get_next_sequence_number(item_dir, username, media_item.media_type)
+                    seq = self._next_available_sequence(
+                        item_dir, username, media_item.media_type
+                    )
                     seq_tracker[key] = seq
                 else:
                     seq_tracker[key] += 1
@@ -558,7 +639,10 @@ class DownloadManager:
         Never returns a video-only plan when a separate audio track exists.
         """
         if selected is None and media_item.available_formats:
-            selected = media_item.find_best_format()
+            # Respect the configured quality ceiling; "best" has no threshold.
+            selected = media_item.find_best_format(
+                default_config.default_video_resolution
+            )
 
         if (
             selected
@@ -716,12 +800,17 @@ class DownloadManager:
         return None
 
     def _align_destination(
-        self, task: DownloadTask, dest: Path, selected: MediaFormatInfo | None
+        self,
+        task: DownloadTask,
+        dest: Path,
+        selected: MediaFormatInfo | None,
+        container: str | None = None,
     ) -> Path:
         """Match the destination suffix to the selected container."""
-        if not selected or not selected.container:
+        target = container or (selected.container if selected else None)
+        if not target:
             return dest
-        aligned = self._destination_for_container(dest, selected.container)
+        aligned = self._destination_for_container(dest, target)
         if aligned == dest:
             return dest
         logger.info(
@@ -732,6 +821,69 @@ class DownloadManager:
         task.temp_path = aligned.with_suffix(aligned.suffix + ".part")
         self.repository.save_download_task(task)
         return aligned
+
+    @staticmethod
+    def _desired_video_container(media_item: MediaItem) -> str | None:
+        """Return the configured output container, or None for "original"."""
+        if media_item.media_type != MediaType.VIDEO:
+            return None
+        container = default_config.default_video_container
+        value = getattr(container, "value", container)
+        value = str(value).lower()
+        if value in ("", "original"):
+            return None
+        return value
+
+    @staticmethod
+    def _convert_container(
+        source: Path,
+        target: Path,
+        cancel_event: threading.Event,
+    ) -> Path:
+        """Remux ``source`` into the configured container.
+
+        A conversion failure keeps the already-downloaded source file instead of
+        failing the whole task; the log records why the preference was skipped.
+        """
+        from ..processor.ffmpeg import convert_container
+
+        try:
+            return convert_container(
+                source,
+                target,
+                is_cancelled=cancel_event.is_set,
+            )
+        except Exception as exc:
+            logger.warning(
+                f"Could not convert {source.name} to {target.suffix}: {exc}. "
+                "Keeping the original container."
+            )
+            return source
+
+    @staticmethod
+    def _apply_output_preferences(
+        media_item: MediaItem,
+        final_path: Path,
+        cancel_event: threading.Event,
+    ) -> Path:
+        """Apply the configured image format to a finished download."""
+        if media_item.media_type != MediaType.IMAGE:
+            return final_path
+
+        target_format = default_config.default_image_format
+        value = str(getattr(target_format, "value", target_format)).lower()
+        if value in ("", "original"):
+            return final_path
+        if cancel_event.is_set():
+            return final_path
+
+        from ..processor.images import ImageConversionError, convert_image_format
+
+        try:
+            return convert_image_format(final_path, value)
+        except ImageConversionError as exc:
+            logger.warning(f"Image format preference skipped: {exc}")
+            return final_path
 
     def _run_task(
         self,
@@ -775,6 +927,20 @@ class DownloadManager:
         audio_part: Path | None = None
         merged_temp: Path | None = None
         video_bytes = 0
+        desired_container = self._desired_video_container(media_item)
+
+        def cleanup_parts() -> None:
+            """Drop partial merge inputs so a retry starts from clean bytes."""
+            nonlocal video_part, audio_part, merged_temp
+            for part in (video_part, audio_part, merged_temp):
+                if part is not None:
+                    try:
+                        part.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+            video_part = None
+            audio_part = None
+            merged_temp = None
 
         try:
             if not dest:
@@ -786,8 +952,13 @@ class DownloadManager:
             task.selected_format = selected
             # Sync the file extension with the actual stream container. A muxed
             # fallback or caller-supplied path can otherwise yield WebM bytes in
-            # a ``.mp4`` file, which players may refuse to open.
-            dest = self._align_destination(task, dest, selected)
+            # a ``.mp4`` file, which players may refuse to open. An explicit
+            # container preference wins and the bytes are remuxed to match.
+            dest = self._align_destination(
+                task, dest, selected, container=desired_container
+            )
+            source_container = (selected.container if selected else "") or ""
+            source_container = source_container.lower().lstrip(".")
 
             def run_plan() -> Path:
                 """Execute the current stream plan once."""
@@ -898,9 +1069,12 @@ class DownloadManager:
                     from ..processor.ffmpeg import merge_video_audio
 
                     container = (
-                        selected.container
-                        if selected and selected.container
-                        else dest.suffix.lstrip(".")
+                        desired_container
+                        or (
+                            selected.container
+                            if selected and selected.container
+                            else dest.suffix.lstrip(".")
+                        )
                     )
                     merge_video_audio(
                         video_path=video_part,
@@ -922,10 +1096,20 @@ class DownloadManager:
                     merged_temp = None
                     return dest
 
-                # Direct single-stream download
-                return download_stream(
+                # Direct single-stream download. When the configured container
+                # differs from the source stream, fetch the source first and
+                # remux afterwards so the extension always matches the bytes.
+                download_target = dest
+                if (
+                    desired_container
+                    and source_container
+                    and source_container != desired_container
+                ):
+                    download_target = dest.with_suffix(f".{source_container}")
+
+                final = download_stream(
                     url=url,
-                    destination_path=dest,
+                    destination_path=download_target,
                     task_id=task.id,
                     progress_callback=progress_callback,
                     cancel_event=cancel_event,
@@ -935,41 +1119,68 @@ class DownloadManager:
                     client=self._stream_client(),
                 )
 
-            try:
-                final_path = run_plan()
-            except (
-                PrivateMediaError,
-                MediaUnavailableError,
-                NetworkTimeoutError,
-                httpx.TransportError,
-            ) as exc:
-                # Signed CDN URLs expire while a task waits in the queue. Ask
-                # the owning provider for a fresh URL and retry exactly once.
-                logger.warning(
-                    f"Task {task.id}: stream request failed ({exc}); "
-                    "refreshing media URLs from the source provider."
+                if download_target != dest:
+                    return self._convert_container(download_target, dest, cancel_event)
+                return final
+
+            attempts = max(1, int(default_config.max_retries) + 1)
+            final_path: Path | None = None
+            for attempt in range(1, attempts + 1):
+                try:
+                    final_path = run_plan()
+                    break
+                except (
+                    PrivateMediaError,
+                    MediaUnavailableError,
+                    NetworkTimeoutError,
+                    httpx.TransportError,
+                ) as exc:
+                    if attempt >= attempts:
+                        raise
+                    # Signed CDN URLs expire while a task waits in the queue.
+                    # Ask the owning provider for fresh URLs and try again.
+                    logger.warning(
+                        f"Task {task.id}: attempt {attempt}/{attempts} failed "
+                        f"({exc}); refreshing media URLs from the source provider."
+                    )
+                    cleanup_parts()
+                    refreshed_item = self._refresh_media_item(media_item)
+                    if refreshed_item is not None:
+                        fresh_selected = self._match_format(refreshed_item, selected)
+                        fresh_audio = (
+                            self._match_format(refreshed_item, audio_format)
+                            if audio_format
+                            else None
+                        )
+                        media_item = refreshed_item
+                        task.media_item = media_item
+                        selected = fresh_selected
+                        audio_format = fresh_audio
+                        selected, audio_format, url = self._plan_streams(
+                            media_item, selected
+                        )
+                        task.selected_format = selected
+                        dest = self._align_destination(
+                            task, dest, selected, container=desired_container
+                        )
+                        source_container = (
+                            (selected.container if selected else "") or ""
+                        ).lower().lstrip(".")
+                        self.repository.save_download_task(task)
+                    time.sleep(min(0.5 * attempt, 2.0))
+
+            if final_path is None:
+                raise DownloadError(
+                    "The download did not complete after the configured retries."
                 )
-                refreshed_item = self._refresh_media_item(media_item)
-                if refreshed_item is None:
-                    raise
-                fresh_selected = self._match_format(refreshed_item, selected)
-                fresh_audio = (
-                    self._match_format(refreshed_item, audio_format)
-                    if audio_format
-                    else None
-                )
-                media_item = refreshed_item
-                task.media_item = media_item
-                selected = fresh_selected
-                audio_format = fresh_audio
-                selected, audio_format, url = self._plan_streams(media_item, selected)
-                task.selected_format = selected
-                dest = self._align_destination(task, dest, selected)
-                self.repository.save_download_task(task)
-                final_path = run_plan()
+
+            final_path = self._apply_output_preferences(
+                media_item, final_path, cancel_event
+            )
 
             task.mark_completed(final_path)
             self.repository.save_download_task(task)
+            record_download(media_item, final_path)
             logger.info(f"Task {task.id} completed successfully: {final_path}")
             _broadcast("completed", {"task": task.model_dump(mode="json")})
 

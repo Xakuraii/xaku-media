@@ -26,9 +26,11 @@ import {
   Plus,
   FileText,
   CheckCircle2,
+  Download,
 } from "lucide-react";
 import type {
   AppPreferences,
+  AppUpdateCheckResult,
   CookieProfileRecord,
   FFmpegInfoResult,
   PythonBridgeStatus,
@@ -44,7 +46,12 @@ interface SettingsViewProps {
   onConcurrencyChange?: (val: number) => void;
   onSpeedLimitChange?: (val: number) => void;
   onThemeChange?: (theme: "dark" | "light" | "system", origin?: HTMLElement | null) => void;
+  onPreferencesUpdated?: (prefs: AppPreferences) => void;
   theme?: "dark" | "light" | "system";
+  updateInfo?: AppUpdateCheckResult | null;
+  checkingUpdates?: boolean;
+  onCheckUpdates?: () => void;
+  onOpenExternal?: (url: string) => void;
 }
 
 const COOKIE_EXPORT_EXTENSION_URL =
@@ -84,7 +91,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onConcurrencyChange,
   onSpeedLimitChange,
   onThemeChange,
+  onPreferencesUpdated,
   theme: activeTheme,
+  updateInfo,
+  checkingUpdates = false,
+  onCheckUpdates,
+  onOpenExternal,
 }) => {
   const [prefs, setPrefs] = useState<AppPreferences>(DEFAULT_PREFERENCES);
   const [draft, setDraft] = useState<AppPreferences>(DEFAULT_PREFERENCES);
@@ -103,6 +115,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [selectedBrowser, setSelectedBrowser] = useState<string>("chrome");
   const [browserDomainFilter, setBrowserDomainFilter] = useState<string>("");
   const [importingBrowser, setImportingBrowser] = useState<boolean>(false);
+  const [authRefreshing, setAuthRefreshing] = useState<boolean>(false);
   const [authActiveTab, setAuthActiveTab] = useState<"cookies" | "headers">("cookies");
   const [pasteModalOpen, setPasteModalOpen] = useState<boolean>(false);
   const [pasteDomain, setPasteDomain] = useState<string>("");
@@ -146,7 +159,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     loadAuthData();
   }, []);
 
-  const loadAuthData = async () => {
+  const loadAuthData = async (showSpinner = false) => {
+    if (showSpinner) setAuthRefreshing(true);
     try {
       if (window.api?.listCookieProfiles) {
         const res = await window.api.listCookieProfiles();
@@ -167,6 +181,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       }
     } catch (err) {
       console.warn("Failed to load auth credentials data:", err);
+      if (showSpinner) {
+        setAuthFeedback({
+          type: "error",
+          message: err instanceof Error ? err.message : "Failed to refresh credentials.",
+        });
+      }
+    } finally {
+      if (showSpinner) setAuthRefreshing(false);
     }
   };
 
@@ -361,6 +383,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       if (onThemeChange && updated.theme) {
         onThemeChange(updated.theme);
       }
+      onPreferencesUpdated?.(updated);
       showSaveNotice("Settings saved to local database");
     } catch (err) {
       console.error("Failed to persist preferences:", err);
@@ -408,6 +431,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       if (onThemeChange && defaults.theme) {
         onThemeChange(defaults.theme);
       }
+      onPreferencesUpdated?.(defaults);
       showSaveNotice("Preferences reset to factory defaults");
     } catch (err) {
       console.error("Failed to reset preferences:", err);
@@ -532,18 +556,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <div className="bg-raised border border-hairline rounded-xl p-3 flex items-center justify-between text-xs font-mono">
               <div className="flex items-center space-x-2 text-muted">
                 <Film className="h-4 w-4 text-purple-600 dark:text-purple-400" />
-                <span>Video Subdirectory:</span>
+                <span>Video Path:</span>
               </div>
-              <span className="text-ink/90 font-bold">\videos</span>
+              <span className="text-ink/90 font-bold">&lt;Platform&gt;\&lt;User&gt;\Videos</span>
             </div>
             <div className="bg-raised border border-hairline rounded-xl p-3 flex items-center justify-between text-xs font-mono">
               <div className="flex items-center space-x-2 text-muted">
                 <ImageIcon className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                <span>Image Subdirectory:</span>
+                <span>Image Path:</span>
               </div>
-              <span className="text-ink/90 font-bold">\images</span>
+              <span className="text-ink/90 font-bold">&lt;Platform&gt;\&lt;User&gt;\Images</span>
             </div>
           </div>
+          <p className="text-[11px] text-muted leading-relaxed font-mono">
+            Each platform (Youtube, Facebook, Instagram, Tiktok, X) keeps its own
+            folder, then a folder per creator, so libraries never mix.
+          </p>
         </div>
       </section>
 
@@ -749,7 +777,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 onClick={() => handleDraftChange({ default_video_resolution: res.id })}
                 className={`p-2.5 rounded-xl border text-left flex flex-col transition-all ${
                   draft.default_video_resolution === res.id
-                    ? "bg-purple-500/10 border-purple-500/40 text-ink shadow-sm shadow-purple-900/50"
+                    ? "bg-purple-500/10 border-purple-500/40 text-ink shadow-sm"
                     : "bg-raised border-hairline text-muted hover:text-ink hover:border-hairline-strong"
                 }`}
               >
@@ -776,7 +804,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 onClick={() => handleDraftChange({ default_video_container: fmt.id })}
                 className={`p-2.5 rounded-xl border text-left flex flex-col transition-all ${
                   draft.default_video_container === fmt.id
-                    ? "bg-purple-500/10 border-purple-500/40 text-ink shadow-sm shadow-purple-900/50"
+                    ? "bg-purple-500/10 border-purple-500/40 text-ink shadow-sm"
                     : "bg-raised border-hairline text-muted hover:text-ink hover:border-hairline-strong"
                 }`}
               >
@@ -827,7 +855,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               onClick={() => handleDraftChange({ default_image_format: fmt.id })}
               className={`p-2.5 rounded-xl border text-left flex flex-col transition-all ${
                 draft.default_image_format === fmt.id
-                  ? "bg-emerald-500/10 border-emerald-500/40 text-ink shadow-sm shadow-emerald-900/50"
+                  ? "bg-emerald-500/10 border-emerald-500/40 text-ink shadow-sm"
                   : "bg-raised border-hairline text-muted hover:text-ink hover:border-hairline-strong"
               }`}
             >
@@ -886,11 +914,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
             <button
               type="button"
-              onClick={loadAuthData}
+              onClick={() => void loadAuthData(true)}
+              disabled={authRefreshing}
               title="Refresh credentials and profiles"
-              className="p-1.5 bg-page border border-hairline text-muted hover:text-ink rounded-lg transition-colors"
+              className="p-1.5 bg-page border border-hairline text-muted hover:text-ink rounded-lg transition-colors disabled:opacity-50"
             >
-              <RefreshCw className="h-3.5 w-3.5" />
+              <RefreshCw className={`h-3.5 w-3.5 ${authRefreshing ? "animate-spin" : ""}`} />
             </button>
           </div>
         </div>
@@ -962,7 +991,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     type="button"
                     onClick={handleBrowserImport}
                     disabled={importingBrowser}
-                    className="px-3 py-1.5 bg-cyan-500/15 hover:bg-cyan-800/80 border border-cyan-500/30 text-cyan-700 dark:text-cyan-300 rounded-lg text-xs font-mono transition-colors flex items-center space-x-1.5 shrink-0"
+                    className="px-3 py-1.5 bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-cyan-700 dark:text-cyan-300 rounded-lg text-xs font-mono transition-colors flex items-center space-x-1.5 shrink-0"
                   >
                     {importingBrowser ? (
                       <RefreshCw className="h-3.5 w-3.5 animate-spin" />
@@ -1224,6 +1253,110 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <div className="text-[11px] text-faint">Persistent SQLite Database</div>
           </div>
         </div>
+
+        {/* Engine Log Level */}
+        <div className="flex flex-col gap-2 border-t border-hairline pt-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-0.5">
+            <div className="flex items-center space-x-2">
+              <FileText className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
+              <span className="text-xs font-semibold text-ink/90">Engine Log Level</span>
+            </div>
+            <p className="text-[11px] text-muted font-mono">
+              Verbosity of the Python engine log written to the console and log file.
+            </p>
+          </div>
+          <select
+            value={draft.log_level}
+            onChange={(e) => handleDraftChange({ log_level: e.target.value })}
+            className="w-full sm:w-48 bg-page border border-hairline rounded-xl px-3 py-2 text-xs font-mono text-ink/90 focus:outline-none focus:border-cyan-500"
+          >
+            <option value="DEBUG">DEBUG (Most detail)</option>
+            <option value="INFO">INFO (Recommended)</option>
+            <option value="WARNING">WARNING</option>
+            <option value="ERROR">ERROR (Quietest)</option>
+            <option value="CRITICAL">CRITICAL</option>
+          </select>
+        </div>
+      </section>
+
+      {/* ========================================================================= */}
+      {/* 7. Software Updates */}
+      {/* ========================================================================= */}
+      <section className="bg-surface border border-hairline rounded-2xl p-6 space-y-4 shadow-card">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-hairline pb-3">
+          <div className="flex items-center space-x-2.5">
+            <Download className="h-5 w-5 text-accent" />
+            <div>
+              <h2 className="text-sm font-semibold text-ink">Software Updates</h2>
+              <p className="text-[11px] text-muted font-mono">
+                Check GitHub Releases for newer XakuMedia desktop installers.
+              </p>
+            </div>
+          </div>
+          <span className="px-2.5 py-0.5 rounded text-xs font-mono bg-page border border-hairline text-ink/80">
+            Installed v{updateInfo?.currentVersion || systemInfo?.version || "1.0.0"}
+          </span>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="space-y-1 text-xs font-mono">
+            {updateInfo?.hasUpdate ? (
+              <p className="text-accent font-semibold">
+                Update available: {updateInfo.latestVersion} (installed v{updateInfo.currentVersion})
+              </p>
+            ) : updateInfo?.status === "up_to_date" ? (
+              <p className="text-emerald-700 dark:text-emerald-300">
+                You are running the latest published release ({updateInfo.latestVersion || `v${updateInfo.currentVersion}`}).
+              </p>
+            ) : updateInfo?.status === "unpublished" ? (
+              <p className="text-muted">
+                No GitHub Release has been published yet for this version.
+              </p>
+            ) : updateInfo?.status === "error" ? (
+              <p className="text-amber-700 dark:text-amber-300">
+                Could not check updates: {updateInfo.error || "Network unavailable"}
+              </p>
+            ) : (
+              <p className="text-muted">
+                Click Check for Updates to compare against GitHub Releases.
+              </p>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onCheckUpdates?.()}
+              disabled={checkingUpdates || !onCheckUpdates}
+              className="px-3.5 py-2 bg-raised hover:bg-hairline/70 border border-hairline text-ink rounded-xl text-xs font-mono transition-colors flex items-center space-x-1.5 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${checkingUpdates ? "animate-spin" : ""}`} />
+              <span>{checkingUpdates ? "Checking..." : "Check for Updates"}</span>
+            </button>
+
+            {updateInfo?.hasUpdate && (
+              <button
+                type="button"
+                onClick={() => onOpenExternal?.(updateInfo.downloadUrl || updateInfo.releaseUrl)}
+                className="px-4 py-2 bg-accent hover:bg-accent-vivid text-on-accent font-semibold rounded-xl text-xs transition-colors flex items-center space-x-1.5 shadow-sm shadow-accent/25"
+              >
+                <Download className="h-3.5 w-3.5" />
+                <span>Download {updateInfo.latestVersion}</span>
+              </button>
+            )}
+
+            {updateInfo?.releaseUrl && (
+              <button
+                type="button"
+                onClick={() => onOpenExternal?.(updateInfo.releaseUrl)}
+                className="px-3 py-2 bg-page hover:bg-raised border border-hairline text-muted hover:text-ink rounded-xl text-xs font-mono transition-colors flex items-center space-x-1"
+              >
+                <span>Releases</span>
+                <ExternalLink className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+        </div>
       </section>
 
       {/* Confirmation Modal for Reset Defaults */}
@@ -1335,7 +1468,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <button
                 type="button"
                 onClick={handleSavePasteCookies}
-                className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-black font-bold rounded-xl text-xs transition-colors flex items-center space-x-1.5"
+                className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-xl text-xs transition-colors flex items-center space-x-1.5"
               >
                 <Check className="h-3.5 w-3.5" />
                 <span>Save Cookies</span>
@@ -1415,12 +1548,47 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <button
                 type="button"
                 onClick={handleSaveDomainHeaders}
-                className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-black font-bold rounded-xl text-xs transition-colors flex items-center space-x-1.5"
+                className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-xl text-xs transition-colors flex items-center space-x-1.5"
               >
                 <Check className="h-3.5 w-3.5" />
                 <span>Save Headers</span>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+      {/* Sticky Unsaved Changes Bar */}
+      {hasUnsavedChanges && (
+        <div className="sticky bottom-4 z-30 flex items-center justify-between gap-4 rounded-2xl border border-accent/40 bg-surface/95 px-5 py-3 shadow-pop backdrop-blur">
+          <span className="font-mono text-xs text-ink">
+            You have unsaved setting changes.
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setDraft(prefs);
+                onConcurrencyChange?.(prefs.max_concurrent_downloads);
+                window.api?.setDownloadConcurrency?.(prefs.max_concurrent_downloads).catch(() => undefined);
+                onSpeedLimitChange?.(prefs.max_download_speed_kbps ?? 0);
+                window.api?.setSpeedLimit?.(prefs.max_download_speed_kbps ?? 0).catch(() => undefined);
+                if (prefs.theme && onThemeChange) {
+                  onThemeChange(prefs.theme);
+                }
+              }}
+              className="px-3 py-1.5 rounded-lg border border-hairline bg-raised hover:bg-hairline/70 text-xs font-mono text-muted hover:text-ink transition-colors"
+            >
+              Discard
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleSave()}
+              disabled={saving}
+              className="flex items-center space-x-1.5 px-4 py-1.5 rounded-lg bg-accent hover:bg-accent-vivid text-on-accent text-xs font-semibold transition-colors shadow-sm"
+            >
+              {saving ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+              <span>Save changes</span>
+            </button>
           </div>
         </div>
       )}

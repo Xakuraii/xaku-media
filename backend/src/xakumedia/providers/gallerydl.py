@@ -31,6 +31,7 @@ from gallery_dl.exception import (
 )
 from gallery_dl.extractor.message import Message
 
+from ..core.config import default_config
 from ..core.logging import get_logger
 from ..exceptions.base import (
     ExtractionError,
@@ -337,7 +338,8 @@ class GalleryDlProvider(BaseProvider):
                 f"No gallery extractor supports this URL: {safe_url}",
                 details={"url": safe_url},
             )
-        gdl_config.set(("extractor",), "timeout", 20)
+        gdl_config.set(("extractor",), "timeout", float(default_config.request_timeout_seconds))
+        gdl_config.set(("extractor",), "retries", int(default_config.max_retries))
         try:
             from ..db import default_repository
 

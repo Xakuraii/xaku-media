@@ -343,6 +343,9 @@ class ScanManager:
                 for item in new_items:
                     seen_media.add(item.id)
 
+                from ..downloader.library import annotate_items
+
+                annotate_items(new_items)
                 post.media_items = new_items
                 job.posts.append(post)
                 job.progress.posts_discovered += 1
@@ -393,7 +396,10 @@ class ScanManager:
             job.error_category = (
                 exc.code if isinstance(exc, XakuMediaError) else type(exc).__name__
             )
-            job.error_details = dict(exc.details) if isinstance(exc, XakuMediaError) else {}
+            details = dict(exc.details) if isinstance(exc, XakuMediaError) else {}
+            if "has_cookies" not in details and job.capabilities is not None:
+                details["has_cookies"] = bool(job.capabilities.has_cookies)
+            job.error_details = details
             job.stop_reason = "error"
         else:
             final_status = (

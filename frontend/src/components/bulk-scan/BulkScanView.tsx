@@ -1,18 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, CheckSquare, Layers, X } from "lucide-react";
-import type { DiscoveredMediaItem, ScanOptionsPayload } from "../../../../desktop/shared/types";
+import { AlertCircle, CheckSquare, Layers, RefreshCw, X } from "lucide-react";
+import type {
+  DiscoveredMediaItem,
+  ScanOptionsPayload,
+  ScanPost,
+} from "../../../../desktop/shared/types";
 import { JobStatusList } from "./JobStatusList";
 import { PostBrowser } from "./PostBrowser";
 import { ScanErrorPanel } from "./ScanErrorPanel";
 import { ScanSourceForm } from "./ScanSourceForm";
-import { explainBookmarkFailure, explainDownloadFailure, explainStartFailure } from "./errors";
+import { explainDownloadFailure, explainStartFailure } from "./errors";
 import type {
   BulkScanViewProps,
   JobEntry,
   MediaFilter,
-  PostWithScan,
   ScanErrorInfo,
 } from "./types";
+import { isItemSkipped, itemKeys } from "./types";
 import { useScanJobs } from "./useScanJobs";
 import { useScanSelection } from "./useScanSelection";
 import { chooseFormat, countPosts, filterPosts, hostOf, parseUrls } from "./utils";
@@ -54,11 +58,15 @@ export function BulkScanView({
   const [dragging, setDragging] = useState<boolean>(false);
   const [focusedJobId, setFocusedJobId] = useState<string | null>(null);
   const [downloaded, setDownloaded] = useState<Set<string>>(new Set());
-  const [bookmarked, setBookmarked] = useState<Set<string>>(new Set());
-  const [bookmarkBusy, setBookmarkBusy] = useState<Set<string>>(new Set());
+  const [skipped, setSkipped] = useState<Set<string>>(new Set());
+  const [skipping, setSkipping] = useState<boolean>(false);
   const [bookmarking, setBookmarking] = useState<boolean>(false);
   const [savedLinks, setSavedLinks] = useState<Set<string>>(new Set());
-  const [preferredResolution, setPreferredResolution] = useState<string>("best");
+  const [savedAvatars, setSavedAvatars] = useState<Map<string, string>>(new Map());
+  const [preferredResolution, setPreferredResolution] = useState<string>("1080p");
+  const [hideSkipped, setHideSkipped] = useState<boolean>(false);
+  const [refreshingStats, setRefreshingStats] = useState<boolean>(false);
+  const [savingUrls, setSavingUrls] = useState<Set<string>>(new Set());
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -106,23 +114,19 @@ export function BulkScanView({
     return () => off?.();
   }, []);
 
-  const refreshBookmarks = useCallback(async () => {
-    try {
-      const result = await window.api?.querySavedMedia?.({ limit: 5000 });
-      if (result) setBookmarked(new Set((result.items || []).map((item) => item.id)));
-    } catch {
-      // Non-fatal; bookmark icons simply start unset.
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshBookmarks();
-  }, [refreshBookmarks]);
-
   const refreshSavedLinks = useCallback(async () => {
     try {
       const result = await window.api?.getSavedSources?.();
-      if (result) setSavedLinks(new Set((result.sources || []).map((source) => source.url)));
+      if (result) {
+        const links = new Set<string>();
+        const avatars = new Map<string, string>();
+        for (const source of result.sources || []) {
+          links.add(source.url);
+          if (source.thumbnail_url) avatars.set(source.url, source.thumbnail_url);
+        }
+        setSavedLinks(links);
+        setSavedAvatars(avatars);
+      }
     } catch {
       // Non-fatal; Save buttons simply start unset.
     }
@@ -132,7 +136,38 @@ export function BulkScanView({
     void refreshSavedLinks();
   }, [refreshSavedLinks]);
 
-  const saveScanLink = async (url: string, title: string) => {
+  // Scan payloads carry the folder-manifest status, so a rescan (or a scan from
+  // another device) marks already downloaded/skipped items without a restart.
+  useEffect(() => {
+    const nextDownloaded = new Set<string>();
+    const nextSkipped = new Set<string>();
+    for (const post of allPosts) {
+      for (const item of post.media_items) {
+        if (item.library_status === "downloaded") itemKeys(item).forEach((key) => nextDownloaded.add(key));
+        else if (item.library_status === "skipped") itemKeys(item).forEach((key) => nextSkipped.add(key));
+      }
+    }
+    if (nextDownloaded.size > 0) {
+      setDownloaded((prev) => {
+        const merged = new Set(prev);
+        nextDownloaded.forEach((key) => merged.add(key));
+        return merged;
+      });
+    }
+    if (nextSkipped.size > 0) {
+      setSkipped((prev) => {
+        const merged = new Set(prev);
+        nextSkipped.forEach((key) => merged.add(key));
+        return merged;
+      });
+    }
+  }, [allPosts]);
+
+  const saveScanLink = async (
+    url: string,
+    title: string,
+    extra?: { author?: string | null; thumbnail_url?: string | null }
+  ) => {
     if (!window.api?.saveSource) {
       setError({
         title: "Save link unavailable",
@@ -144,9 +179,22 @@ export function BulkScanView({
     }
     setError(null);
     try {
-      await window.api.saveSource({ url, title: title || url });
+      const alreadySaved = savedLinks.has(url);
+      await window.api.saveSource({
+        url,
+        title: title || url,
+        author: extra?.author || undefined,
+        thumbnail_url: extra?.thumbnail_url || undefined,
+      });
       setSavedLinks((prev) => new Set(prev).add(url));
-      setNotice(`Saved link: ${url}`);
+      if (extra?.thumbnail_url) {
+        setSavedAvatars((prev) => new Map(prev).set(url, extra.thumbnail_url!));
+      }
+      setNotice(
+        alreadySaved && extra?.thumbnail_url
+          ? `Updated profile avatar for ${title || url} in Saved Sources.`
+          : `Saved source link: ${url}`
+      );
     } catch (err) {
       setError(explainStartFailure(err));
     }
@@ -174,71 +222,116 @@ export function BulkScanView({
     clearSelection,
     selectByType,
     invertSelection,
-  } = useScanSelection(allPosts, filteredPosts, filter, downloaded);
+  } = useScanSelection(allPosts, filteredPosts, filter, downloaded, skipped);
 
-  const clearBusy = (key: string) =>
-    setBookmarkBusy((prev) => {
-      const next = new Set(prev);
-      next.delete(key);
-      return next;
-    });
-
-  const toggleItemBookmark = async (item: DiscoveredMediaItem) => {
-    if (!window.api?.toggleSaveMedia) {
-      setError({
-        title: "Bookmark unavailable",
-        summary: "The desktop bridge is not available.",
-        steps: [],
-        actions: [],
-      });
-      return;
-    }
-    setBookmarkBusy((prev) => new Set(prev).add(item.id));
-    try {
-      const result = await window.api.toggleSaveMedia(item.id);
-      setBookmarked((prev) => {
-        const next = new Set(prev);
-        const keys = [item.id, result.id].filter(Boolean);
-        for (const key of keys) {
-          if (result.is_saved) next.add(key);
-          else next.delete(key);
-        }
-        return next;
-      });
-    } catch (err) {
-      setError(explainBookmarkFailure(err));
-    } finally {
-      clearBusy(item.id);
-    }
+  const isUsableAvatarCandidate = (candidate?: string | null): candidate is string => {
+    if (!candidate) return false;
+    const lower = candidate.trim().toLowerCase();
+    if (!lower) return false;
+    if (/\/(?:avatar|posts|photos|videos|reels|likes|reposts)\/?$/.test(lower)) return false;
+    if (/tiktok\.com\/@[^/]+\/?$/.test(lower)) return false;
+    return true;
   };
 
-  const togglePostBookmark = async (post: PostWithScan) => {
-    if (!window.api?.toggleSavePost) {
-      setError({
-        title: "Bookmark unavailable",
-        summary: "The desktop bridge is not available.",
-        steps: [],
-        actions: [],
-      });
-      return;
-    }
-    const ids = post.media_items.map((item) => item.id);
-    if (ids.length === 0) return;
-    setBookmarkBusy((prev) => new Set(prev).add(post.id));
-    try {
-      const result = await window.api.toggleSavePost(post.id);
-      setBookmarked((prev) => {
-        const next = new Set(prev);
-        for (const id of ids) {
-          if (result.is_saved) next.add(id);
-          else next.delete(id);
+  const pickSourceDetailsFromPosts = (url: string, posts: ScanPost[]) => {
+    const cleanAuthor = (raw?: string | null) => {
+      const trimmed = (raw || "").trim().replace(/^@/, "");
+      if (!trimmed || ["gallery", "unknown", "none", "user"].includes(trimmed.toLowerCase())) {
+        return null;
+      }
+      return trimmed;
+    };
+
+    const inferredAuthor = (() => {
+      for (const post of posts) {
+        const a = cleanAuthor(post.author);
+        if (a) return a;
+        for (const item of post.media_items) {
+          const ia = cleanAuthor(item.author);
+          if (ia) return ia;
         }
+      }
+      try {
+        const seg = new URL(url).pathname.split("/").filter(Boolean)[0];
+        if (seg && !["watch", "playlist", "shorts", "reel", "reels", "p", "explore"].includes(seg)) {
+          return seg.replace(/^@/, "");
+        }
+      } catch {
+        // ignore invalid url
+      }
+      return null;
+    })();
+
+    let thumbnailUrl: string | undefined;
+    // 1. Prefer image thumbnail_url
+    for (const post of posts) {
+      for (const item of post.media_items) {
+        if (isUsableAvatarCandidate(item.thumbnail_url)) {
+          thumbnailUrl = item.thumbnail_url;
+          break;
+        }
+      }
+      if (thumbnailUrl) break;
+    }
+    // 2. Fallback to image original_url (gallery-dl albums often omit thumbnail_url)
+    if (!thumbnailUrl) {
+      for (const post of posts) {
+        for (const item of post.media_items) {
+          if (item.media_type === "image" && isUsableAvatarCandidate(item.original_url)) {
+            thumbnailUrl = item.original_url;
+            break;
+          }
+        }
+        if (thumbnailUrl) break;
+      }
+    }
+    // 3. Fallback to first video's stream URL (SourceAvatar renders a <video> poster)
+    if (!thumbnailUrl) {
+      for (const post of posts) {
+        for (const item of post.media_items) {
+          if (item.media_type === "video" && isUsableAvatarCandidate(item.original_url)) {
+            thumbnailUrl = item.original_url;
+            break;
+          }
+        }
+        if (thumbnailUrl) break;
+      }
+    }
+
+    let host = url;
+    try {
+      host = new URL(url).hostname.replace(/^www\./, "");
+    } catch {
+      // keep raw url
+    }
+    const title = inferredAuthor ? `@${inferredAuthor}` : host;
+    return {
+      title,
+      author: inferredAuthor || undefined,
+      thumbnail_url: thumbnailUrl,
+    };
+  };
+
+  const saveScanJobSource = async (entry: JobEntry) => {
+    const url = entry.snapshot.url;
+    if (!window.api?.saveSource) return;
+    setSavingUrls((prev) => new Set(prev).add(url));
+    try {
+      const jobPosts =
+        entry.posts.length > 0
+          ? entry.posts
+          : allPosts.filter((p) => p._job_id === entry.snapshot.job_id || p.source_url === url);
+      const details = pickSourceDetailsFromPosts(url, jobPosts);
+      await saveScanLink(url, details.title, {
+        author: details.author,
+        thumbnail_url: details.thumbnail_url,
+      });
+    } finally {
+      setSavingUrls((prev) => {
+        const next = new Set(prev);
+        next.delete(url);
         return next;
       });
-    } catch (err) {
-      setError(explainBookmarkFailure(err));
-    } finally {
-      clearBusy(post.id);
     }
   };
 
@@ -267,13 +360,18 @@ export function BulkScanView({
     try {
       let saved = 0;
       for (const url of urls) {
-        let host = url;
-        try {
-          host = new URL(url).hostname.replace(/^www\./, "");
-        } catch {
-          // keep raw url
-        }
-        await window.api.saveSource({ url, title: host });
+        const matchingJob = activeJobs.find((j) => j.snapshot.url === url);
+        const relatedPosts = matchingJob?.posts?.length
+          ? matchingJob.posts
+          : allPosts.filter((p) => p.source_url === url || p.post_url === url);
+        const details = pickSourceDetailsFromPosts(url, relatedPosts);
+        await window.api.saveSource({
+          url,
+          title: details.title,
+          author: details.author,
+          thumbnail_url: details.thumbnail_url,
+        });
+        setSavedLinks((prev) => new Set(prev).add(url));
         saved += 1;
       }
       setNotice(`Bookmarked ${saved} link${saved === 1 ? "" : "s"}.`);
@@ -379,16 +477,29 @@ export function BulkScanView({
       return false;
     }
 
+    const activeItems = downloadable.filter((item) => !isItemSkipped(item, skipped));
+    const skippedExcluded = downloadable.length - activeItems.length;
+    if (activeItems.length === 0) {
+      setNotice(
+        "Skipped items were excluded from download and remain recorded in the folder manifest. Unskip them first if you want to download them."
+      );
+      return false;
+    }
+
     setDownloading(true);
     setError(null);
     setNotice(null);
     try {
-      const payload = downloadable.map((item) => ({
+      const payload = activeItems.map((item) => ({
         media_item: item,
         selected_format: chooseFormat(item, preferredResolution),
       }));
       const result = await window.api.startBatchDownload(payload);
-      setNotice(`Queued ${result.tasks.length} download${result.tasks.length === 1 ? "" : "s"}.`);
+      setNotice(
+        `Queued ${result.tasks.length} download${result.tasks.length === 1 ? "" : "s"}${
+          skippedExcluded > 0 ? ` (${skippedExcluded} skipped excluded)` : ""
+        }.`
+      );
       onDownloadStarted?.();
       void refreshDownloaded();
       return true;
@@ -406,6 +517,74 @@ export function BulkScanView({
     if (queued) clearSelection();
   };
 
+  const skipSelected = async () => {
+    if (selectedItems.length === 0) return;
+    if (!window.api?.skipMediaItems) {
+      setError({
+        title: "Skip unavailable",
+        summary: "The desktop bridge is not available in this environment.",
+        steps: ["Run the desktop app instead of the browser preview."],
+        actions: [],
+      });
+      return;
+    }
+    setSkipping(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await window.api.skipMediaItems(selectedItems);
+      setSkipped((prev) => {
+        const next = new Set(prev);
+        for (const item of selectedItems) itemKeys(item).forEach((key) => next.add(key));
+        return next;
+      });
+      setNotice(
+        `Skipped ${result.count} item${result.count === 1 ? "" : "s"}; they will not show as new again.`
+      );
+      clearSelection();
+    } catch (err) {
+      setError(explainDownloadFailure(err));
+    } finally {
+      setSkipping(false);
+    }
+  };
+
+  const unskipSelected = async () => {
+    const toUnskip = selectedItems.filter((item) =>
+      itemKeys(item).some((key) => skipped.has(key))
+    );
+    if (toUnskip.length === 0) return;
+    if (!window.api?.unskipMediaItems) return;
+    setSkipping(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await window.api.unskipMediaItems(toUnskip);
+      setSkipped((prev) => {
+        const next = new Set(prev);
+        for (const item of toUnskip) itemKeys(item).forEach((key) => next.delete(key));
+        return next;
+      });
+      setNotice(
+        `Restored ${result.count} item${result.count === 1 ? "" : "s"} as new.`
+      );
+      clearSelection();
+    } catch (err) {
+      setError(explainDownloadFailure(err));
+    } finally {
+      setSkipping(false);
+    }
+  };
+
+  const handleRefreshScanView = async () => {
+    setRefreshingStats(true);
+    try {
+      await Promise.all([refreshStats(), refreshDownloaded(), refreshSavedLinks()]);
+    } finally {
+      setRefreshingStats(false);
+    }
+  };
+
   return (
     <div className="mx-auto max-w-6xl space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -417,9 +596,12 @@ export function BulkScanView({
           </p>
         </div>
         {stats && (
-          <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-muted">
+          <div
+            className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-muted"
+            title={stats.root_dir ? `Counted from xakumedia-library.json in ${stats.root_dir}` : undefined}
+          >
             <span className="rounded-full border border-hairline bg-surface px-2.5 py-1">
-              {stats.posts} posts
+              {stats.users ?? 0} {(stats.users ?? 0) === 1 ? "folder" : "folders"}
             </span>
             <span className="rounded-full border border-hairline bg-surface px-2.5 py-1">
               {stats.images} images
@@ -427,6 +609,21 @@ export function BulkScanView({
             <span className="rounded-full border border-hairline bg-surface px-2.5 py-1">
               {stats.videos} videos
             </span>
+            {(stats.skipped ?? 0) > 0 && (
+              <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-amber-700 dark:text-amber-300">
+                {stats.skipped} skipped
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => void handleRefreshScanView()}
+              disabled={refreshingStats}
+              title="Refresh image & video counts from Settings download folder"
+              className="inline-flex items-center gap-1 rounded-full border border-hairline bg-surface px-2.5 py-1 text-muted transition-colors hover:bg-raised hover:text-ink disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3 w-3 ${refreshingStats ? "animate-spin" : ""}`} />
+              <span>Refresh</span>
+            </button>
           </div>
         )}
       </div>
@@ -476,9 +673,12 @@ export function BulkScanView({
       <JobStatusList
         jobs={activeJobs}
         focusedJobId={focusedJobId}
+        savedLinks={savedLinks}
+        savingUrls={savingUrls}
         onCancel={(jobId) => void cancelJob(jobId)}
         onFocus={(jobId) => setFocusedJobId((prev) => (prev === jobId ? null : jobId))}
         onShowAll={() => setFocusedJobId(null)}
+        onSaveSource={(job) => void saveScanJobSource(job)}
         onDelete={(job) => void deleteScan(job)}
         onOpenSettings={onOpenSettings}
         onOpenExternal={onOpenExternal}
@@ -490,9 +690,9 @@ export function BulkScanView({
           counts={counts}
           selected={selected}
           downloaded={downloaded}
-          bookmarked={bookmarked}
-          bookmarkBusy={bookmarkBusy}
+          skipped={skipped}
           savedLinks={savedLinks}
+          savedAvatars={savedAvatars}
           runningCount={runningJobs.length}
           totalProgress={totalProgress}
           filter={filter}
@@ -504,9 +704,7 @@ export function BulkScanView({
           onSearchChange={setSearch}
           onToggleMedia={toggleMedia}
           onTogglePost={(post) => togglePost(post, filter)}
-          onToggleBookmark={(item) => void toggleItemBookmark(item)}
-          onTogglePostBookmark={(post) => void togglePostBookmark(post)}
-          onSaveLink={(url, title) => void saveScanLink(url, title)}
+          onSaveLink={(url, title, extra) => void saveScanLink(url, title, extra)}
           onDownloadItems={(items) => void queueDownloadItems(items)}
           onSelectAllVisible={selectAllVisible}
           onSelectOnlyNew={selectOnlyNew}
@@ -514,6 +712,11 @@ export function BulkScanView({
           onInvertSelection={invertSelection}
           onClearSelection={clearSelection}
           onDownload={() => void downloadSelected()}
+          onSkip={() => void skipSelected()}
+          onUnskip={() => void unskipSelected()}
+          skipping={skipping}
+          hideSkipped={hideSkipped}
+          onToggleHideSkipped={() => setHideSkipped((value) => !value)}
         />
       )}
 

@@ -6,37 +6,35 @@ export const WorkflowSection: React.FC = () => {
     {
       num: "01",
       icon: Search,
-      title: "Paste your sources",
-      desc: "Drop in one or many profile, channel, album, or media URLs. Bookmark a link in the same step if you want to rescan it later.",
+      title: "Paste your URL",
+      desc: "Add profile, album, or video links and start scanning.",
     },
     {
       num: "02",
       icon: Sparkles,
-      title: "Watch the gallery fill",
-      desc: "Background jobs page through supported sources and stream posts and media into a live gallery, so you can start reviewing before the scan finishes.",
+      title: "Review new items",
+      desc: "See downloaded and skipped badges synced from your folder JSON.",
     },
     {
       num: "03",
       icon: SlidersHorizontal,
-      title: "Select only what's new",
-      desc: "Filter images, videos, or albums, then use Select all or Select new. Preview the quality and expected size chosen by your saved settings.",
+      title: "Select or skip",
+      desc: "Pick new media to download or mark unwanted items as skipped.",
     },
     {
       num: "04",
       icon: Download,
-      title: "Download, merge, done",
-      desc: "Files download with concurrent workers and Range resumption, merged losslessly when needed, and cataloged in your local library and scan history.",
+      title: "Save to creator folders",
+      desc: "Files download cleanly into Platform / Creator / Videos & Images.",
     },
   ];
 
   return (
     <section id="workflow" className="border-t border-hairline bg-page transition-colors duration-300">
-      <div className="lc-container py-16 sm:py-24">
+      <div className="lc-container py-14 sm:py-20">
         <div className="max-w-xl">
           <h2 className="section-title">How it works</h2>
-          <p className="section-lead">
-            From a list of links to a reviewed, downloaded collection — bulk first.
-          </p>
+          <p className="section-lead">Four steps from URL to organized local media.</p>
         </div>
 
         {/* Step rail */}

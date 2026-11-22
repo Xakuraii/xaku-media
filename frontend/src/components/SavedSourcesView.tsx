@@ -29,6 +29,61 @@ interface SavedSourcesViewProps {
   onNavigateToDownloads?: () => void;
 }
 
+function isVideoAvatarUrl(url: string): boolean {
+  const lower = url.toLowerCase();
+  if (/\.(?:jpg|jpeg|png|webp|gif|avif|bmp|svg)(?:$|[?#])/i.test(lower)) {
+    return false;
+  }
+  return (
+    /\.(?:mp4|webm|mov|m4v|mkv)(?:$|[?#])/i.test(lower) ||
+    lower.includes("video.") && lower.includes("fbcdn.net")
+  );
+}
+
+const SourceAvatar: React.FC<{
+  thumbnailUrl?: string | null;
+  author?: string | null;
+  title: string;
+}> = ({ thumbnailUrl, author, title }) => {
+  const [failed, setFailed] = useState(false);
+  const label = (author || title || "?").replace(/^@/, "").trim();
+  const initials = label.slice(0, 2).toUpperCase() || "?";
+
+  useEffect(() => {
+    setFailed(false);
+  }, [thumbnailUrl]);
+
+  if (thumbnailUrl && !failed) {
+    if (isVideoAvatarUrl(thumbnailUrl)) {
+      return (
+        <video
+          src={`${thumbnailUrl}#t=0.5`}
+          muted
+          playsInline
+          preload="metadata"
+          onError={() => setFailed(true)}
+          className="h-11 w-11 shrink-0 rounded-full border border-hairline bg-raised object-cover"
+        />
+      );
+    }
+    return (
+      <img
+        src={thumbnailUrl}
+        alt={label}
+        referrerPolicy="no-referrer"
+        onError={() => setFailed(true)}
+        className="h-11 w-11 shrink-0 rounded-full border border-hairline bg-raised object-cover"
+      />
+    );
+  }
+
+  return (
+    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-accent/30 bg-accent/10 font-mono text-xs font-bold text-accent">
+      {initials}
+    </div>
+  );
+};
+
 export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
   onScanUrl,
   onBatchDownload,
@@ -36,6 +91,7 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
 }) => {
   const [sources, setSources] = useState<SavedSourceRecord[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [selectedTag, setSelectedTag] = useState<string>("all");
   const [activeRescanId, setActiveRescanId] = useState<string | null>(null);
@@ -62,13 +118,14 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
     }, 3500);
   };
 
-  const loadSources = async () => {
+  const loadSources = async (silent = false) => {
     if (!window.api?.getSavedSources) {
       setLoading(false);
       return;
     }
     try {
-      setLoading(true);
+      if (silent) setRefreshing(true);
+      else setLoading(true);
       const res = await window.api.getSavedSources();
       setSources(res.sources || []);
     } catch (err) {
@@ -76,6 +133,7 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
       showFeedback("Failed to load saved sources from database", "error");
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
@@ -228,6 +286,17 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
         </div>
 
         <div className="flex shrink-0 items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => void loadSources(true)}
+            disabled={refreshing}
+            className="whitespace-nowrap px-3.5 py-2 bg-surface hover:bg-raised border border-hairline text-ink/80 rounded-xl text-xs font-mono transition-colors flex items-center space-x-2 disabled:opacity-50"
+            title="Refresh saved sources list and profile pictures"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
+            <span>Refresh</span>
+          </button>
+
           <button
             type="button"
             onClick={handleRescanAll}
@@ -387,16 +456,23 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
                     </span>
                   </div>
 
-                  {/* Title & Author */}
-                  <div>
-                    <h3 className="text-sm font-bold text-ink line-clamp-1" title={source.title}>
-                      {source.title}
-                    </h3>
-                    {source.author && (
-                      <span className="text-xs text-muted font-mono">
-                        by @{source.author}
-                      </span>
-                    )}
+                  {/* PFP, Title & Author */}
+                  <div className="flex items-center gap-3">
+                    <SourceAvatar
+                      thumbnailUrl={source.thumbnail_url}
+                      author={source.author}
+                      title={source.title}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-sm font-bold text-ink line-clamp-1" title={source.title}>
+                        {source.title}
+                      </h3>
+                      {source.author && (
+                        <span className="block truncate text-xs text-muted font-mono">
+                          @{source.author.replace(/^@/, "")}
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   {/* Target URL */}
@@ -626,7 +702,7 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
                 <button
                   type="button"
                   onClick={() => handleDownloadAllNew(rescanResult.new_items)}
-                  className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-black font-bold rounded-lg text-xs font-mono transition-colors flex items-center space-x-1.5 shadow-md shadow-emerald-900/40"
+                  className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-xs font-mono transition-colors flex items-center space-x-1.5 shadow-sm"
                 >
                   <Download className="h-3.5 w-3.5" />
                   <span>Download {rescanResult.new_item_count} New</span>
@@ -680,7 +756,7 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
                           <div className="flex-1 min-w-0 space-y-1">
                             <div className="flex items-center space-x-1.5">
                               {isNew ? (
-                                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-950 border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 uppercase">
+                                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-500/15 border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 uppercase">
                                   NEW
                                 </span>
                               ) : (

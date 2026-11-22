@@ -26,8 +26,13 @@ export function useScanJobs() {
   const [starting, setStarting] = useState<boolean>(false);
   const [stats, setStats] = useState<LibraryStats | null>(null);
 
-  const refreshStats = useCallback(() => {
-    window.api?.getLibraryStats?.().then(setStats).catch(() => undefined);
+  const refreshStats = useCallback(async () => {
+    try {
+      const next = await window.api?.getLibraryStats?.();
+      if (next) setStats(next);
+    } catch {
+      // ignore transient errors
+    }
   }, []);
 
   const mergeSnapshot = useCallback((snapshot: ScanJobSnapshot) => {
@@ -155,9 +160,11 @@ export function useScanJobs() {
             },
           };
         });
-        refreshStats();
+        void refreshStats();
       }) ?? (() => undefined)
     );
+    offs.push(api.onLibraryChanged?.(() => void refreshStats()) ?? (() => undefined));
+    offs.push(api.onDownloadCompleted?.(() => void refreshStats()) ?? (() => undefined));
 
     void api
       .listScanJobs?.(20)
@@ -173,7 +180,7 @@ export function useScanJobs() {
       })
       .catch(() => undefined);
 
-    refreshStats();
+    void refreshStats();
     return () => offs.forEach((off) => off());
   }, [refreshStats, upsertStarted]);
 

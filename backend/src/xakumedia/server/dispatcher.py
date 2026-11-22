@@ -286,14 +286,62 @@ class RpcDispatcher:
             if not scan_id or not isinstance(scan_id, str):
                 raise TypeError("Parameter 'scan_id' is required and must be a string.")
             from ..db import default_repository
+            from ..downloader.library import annotate_items
 
             posts = default_repository.get_scan_posts(scan_id)
+            for post in posts:
+                annotate_items(post.media_items)
             return {"posts": [post.model_dump(mode="json") for post in posts]}
+
+        def skip_media_items_handler(params: dict[str, Any]) -> dict[str, Any]:
+            raw_items = params.get("items")
+            if not raw_items or not isinstance(raw_items, list):
+                raise TypeError("Parameter 'items' is required and must be a non-empty list.")
+
+            from ..downloader.library import record_skipped
+            from ..models.media import MediaItem
+
+            items = [MediaItem.model_validate(item) for item in raw_items]
+            identities = record_skipped(items)
+            return {
+                "count": len(items),
+                "identities": identities,
+                "status": "skipped",
+            }
+
+        def unskip_media_items_handler(params: dict[str, Any]) -> dict[str, Any]:
+            raw_items = params.get("items")
+            if not raw_items or not isinstance(raw_items, list):
+                raise TypeError("Parameter 'items' is required and must be a non-empty list.")
+
+            from ..downloader.library import unskip_items
+            from ..models.media import MediaItem
+
+            items = [MediaItem.model_validate(item) for item in raw_items]
+            identities = unskip_items(items)
+            return {
+                "count": len(identities),
+                "identities": identities,
+                "status": "unskipped",
+            }
 
         def get_library_stats_handler(params: dict[str, Any]) -> dict[str, Any]:
             from ..db import default_repository
+            from ..downloader.library import scan_download_library
 
-            return default_repository.get_library_stats()
+            db_stats = default_repository.get_library_stats()
+            snapshot = scan_download_library()
+            totals = snapshot["totals"]
+            return {
+                **db_stats,
+                "media_total": int(totals["downloaded"]),
+                "images": int(totals["images"]),
+                "videos": int(totals["videos"]),
+                "skipped": int(totals["skipped"]),
+                "users": int(totals["users"]),
+                "platforms": int(totals["platforms"]),
+                "root_dir": snapshot["root_dir"],
+            }
 
         def get_provider_capabilities_handler(params: dict[str, Any]) -> dict[str, Any]:
             url = params.get("url")
@@ -744,6 +792,7 @@ class RpcDispatcher:
 
             from ..db import default_repository
             from ..models.source import SavedSource
+            from ..sources.rescan import enrich_source_metadata
 
             repo = self.repository or default_repository
             url = params.get("url")
@@ -768,16 +817,34 @@ class RpcDispatcher:
                 last_scanned_at=params.get("last_scanned_at"),
                 last_item_count=params.get("last_item_count", 0),
             )
+            source = enrich_source_metadata(source, repository=repo, fetch_remote=True)
             saved = repo.save_source(source)
             return {"source": saved.model_dump()}
 
         def get_saved_sources_handler(params: dict[str, Any]) -> dict[str, Any]:
             from ..db import default_repository
+            from ..sources.rescan import _is_usable_avatar_url, enrich_source_metadata
 
             repo = self.repository or default_repository
             tag = params.get("tag")
             sources = repo.list_saved_sources(tag=tag)
-            return {"sources": [s.model_dump() for s in sources], "count": len(sources)}
+            repaired: list[Any] = []
+            for s in sources:
+                needs_repair = (
+                    not _is_usable_avatar_url(s.thumbnail_url)
+                    or not s.author
+                    or s.author.strip().lower() in ("gallery", "unknown")
+                )
+                if needs_repair:
+                    before = (s.thumbnail_url, s.author, s.title, s.platform)
+                    enrich_source_metadata(s, repository=repo, fetch_remote=False)
+                    if (s.thumbnail_url, s.author, s.title, s.platform) != before:
+                        try:
+                            s = repo.save_source(s)
+                        except Exception:
+                            pass
+                repaired.append(s)
+            return {"sources": [s.model_dump() for s in repaired], "count": len(repaired)}
 
         def get_source_handler(params: dict[str, Any]) -> dict[str, Any]:
             from ..db import default_repository
@@ -824,6 +891,65 @@ class RpcDispatcher:
             summary = rescan_all_sources(repository=repo, tag=tag)
             return {"summary": summary.model_dump()}
 
+        def scan_download_library_handler(params: dict[str, Any]) -> dict[str, Any]:
+            from ..downloader.library import scan_download_library
+
+            base_dir = params.get("base_dir")
+            return scan_download_library(base_dir)
+
+        def delete_library_file_handler(params: dict[str, Any]) -> dict[str, Any]:
+            from pathlib import Path
+
+            from ..core.config import default_config
+            from ..db import default_repository
+            from ..db.connection import get_db_session
+            from ..downloader.library import remove_file
+            from ..utils.paths import validate_destination_path
+
+            file_path_str = params.get("file_path")
+            if not file_path_str or not isinstance(file_path_str, str):
+                raise TypeError("Parameter 'file_path' is required and must be a string.")
+
+            target = validate_destination_path(
+                Path(file_path_str), default_config.download_dir
+            )
+            deleted = False
+            if target.exists() and target.is_file():
+                target.unlink()
+                deleted = True
+            remove_file(target)
+
+            repo = self.repository or default_repository
+            try:
+                with get_db_session(repo.db_path) as conn:
+                    conn.execute(
+                        "DELETE FROM download_tasks WHERE destination_path = ?",
+                        (str(target),),
+                    )
+            except Exception:
+                pass
+            return {"deleted": deleted, "file_path": str(target)}
+
+        def unskip_library_entry_handler(params: dict[str, Any]) -> dict[str, Any]:
+            from pathlib import Path
+
+            from ..core.config import default_config
+            from ..downloader.library import unskip_entry_by_id
+            from ..utils.paths import validate_destination_path
+
+            folder_path_str = params.get("folder_path")
+            identity = params.get("identity")
+            if not folder_path_str or not isinstance(folder_path_str, str):
+                raise TypeError("Parameter 'folder_path' is required and must be a string.")
+            if not identity or not isinstance(identity, str):
+                raise TypeError("Parameter 'identity' is required and must be a string.")
+
+            folder = validate_destination_path(
+                Path(folder_path_str), default_config.download_dir
+            )
+            removed = unskip_entry_by_id(folder, identity)
+            return {"removed": removed, "identity": identity}
+
         self.register("ping", ping_handler)
         self.register("get_version", version_handler)
         self.register("get_system_info", system_info_handler)
@@ -839,6 +965,8 @@ class RpcDispatcher:
         self.register("get_scan_status", get_scan_status_handler)
         self.register("list_scan_jobs", list_scan_jobs_handler)
         self.register("get_scan_posts", get_scan_posts_handler)
+        self.register("skip_media_items", skip_media_items_handler)
+        self.register("unskip_media_items", unskip_media_items_handler)
         self.register("get_library_stats", get_library_stats_handler)
         self.register("get_provider_capabilities", get_provider_capabilities_handler)
         self.register("save_media_item", save_media_item_handler)
@@ -887,4 +1015,7 @@ class RpcDispatcher:
         self.register("delete_saved_source", delete_saved_source_handler)
         self.register("rescan_source", rescan_source_handler)
         self.register("rescan_all_sources", rescan_all_sources_handler)
+        self.register("scan_download_library", scan_download_library_handler)
+        self.register("delete_library_file", delete_library_file_handler)
+        self.register("unskip_library_entry", unskip_library_entry_handler)
 

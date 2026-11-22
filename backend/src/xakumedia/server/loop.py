@@ -6,6 +6,7 @@ import threading
 
 from pydantic import ValidationError
 
+from ..core.config import default_config
 from ..core.logging import get_logger, setup_logging
 from .dispatcher import RpcDispatcher
 from .protocol import (
@@ -45,7 +46,7 @@ def run_stdio_server(dispatcher: RpcDispatcher | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
 
-    setup_logging()
+    setup_logging(default_config.log_level)
     logger.info("XakuMedia Python stdio JSON-RPC server started.")
 
     active_dispatcher = dispatcher or RpcDispatcher()

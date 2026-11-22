@@ -4,14 +4,11 @@ import { RELEASE_CONFIG } from "./downloadConfig";
 
 export const ReleaseChangelogSection: React.FC = () => {
   const highlights = [
-    "Bulk profile and channel scanning with paginated, cancellable background jobs",
-    "Gallery workspace with Select all, Select only new, downloaded badges, and per-scan focus",
-    "Scan History Rescan prefills the Scan tab; bookmark links are saved as sources",
-    "Stable media identity and identity-aware upserts keep rescans duplicate-free",
-    "Cookie import (Chrome default) plus actionable, cookie-aware scan errors",
-    "Lossless FFmpeg video + audio merging with timeout, cancel, and best-audio fallback",
-    "Local SQLite library, scan history, and settings with explicit Save persistence",
-    "Backend regression suite and Electron desktop smoke tests cover the scan and download flows",
+    "Bulk profile and link scans with shared Videos grid, albums, and live scan progress",
+    "Portable xakumedia-library.json tracking for downloaded & skipped items across devices",
+    "JSON-synced Download Library (Platform / Creator / Videos & Images) with Unskip & Delete",
+    "Saved Sources URL bookmarking with image/video thumbnail PFP avatars",
+    "Gap-free creator file naming (user-vdo-N / user-img-N) and 1080p short-edge matching",
   ];
 
   return (

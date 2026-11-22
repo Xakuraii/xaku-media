@@ -13,7 +13,7 @@ def test_default_config_paths() -> None:
     config = AppConfig()
 
     assert config.app_name == "XakuMedia"
-    assert config.version == "0.1.0"
+    assert config.version == "1.0.0"
     assert isinstance(config.data_dir, Path)
     assert isinstance(config.cache_dir, Path)
     assert isinstance(config.download_dir, Path)

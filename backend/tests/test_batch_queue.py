@@ -90,9 +90,9 @@ def test_batch_download_sequential_naming(
             assert len(tasks) == 3
             destinations = [t.destination_path.name for t in tasks if t.destination_path]
             assert destinations == [
-                "art_master_img_001.jpg",
-                "art_master_img_002.jpg",
-                "art_master_img_003.jpg",
+                "art_master-img-1.jpg",
+                "art_master-img-2.jpg",
+                "art_master-img-3.jpg",
             ]
             _drain(manager)
 
@@ -269,87 +269,93 @@ def test_clear_completed(temp_dest_dir: Path, temp_db: MediaRepository) -> None:
 def test_rpc_batch_queue_dispatcher(temp_dest_dir: Path, temp_db: MediaRepository) -> None:
     """Verify all Milestone 13 JSON-RPC endpoints via RpcDispatcher."""
     dispatcher = RpcDispatcher(repository=temp_db)
+    isolated_dm = DownloadManager(repository=temp_db)
 
-    with (
-        patch("xakumedia.db.default_repository", temp_db),
-        patch("xakumedia.downloader.manager.default_repository", temp_db),
-        patch(
-            "xakumedia.downloader.manager.download_stream",
-            return_value=temp_dest_dir / "images" / "test.jpg",
-        ),
-    ):
-        # 1. set_download_concurrency
-        res = dispatcher.dispatch(
-            JsonRpcRequest(
-                id="c-1",
-                method="set_download_concurrency",
-                params={"concurrency": 4},
+    try:
+        with (
+            patch("xakumedia.db.default_repository", temp_db),
+            patch("xakumedia.downloader.manager.default_repository", temp_db),
+            patch("xakumedia.downloader.default_download_manager", isolated_dm),
+            patch("xakumedia.downloader.manager.default_download_manager", isolated_dm),
+            patch(
+                "xakumedia.downloader.manager.download_stream",
+                return_value=temp_dest_dir / "images" / "test.jpg",
+            ),
+        ):
+            # 1. set_download_concurrency
+            res = dispatcher.dispatch(
+                JsonRpcRequest(
+                    id="c-1",
+                    method="set_download_concurrency",
+                    params={"concurrency": 4},
+                )
             )
-        )
-        assert res.error is None
-        assert res.result["max_concurrent"] == 4
+            assert res.error is None
+            assert res.result["max_concurrent"] == 4
 
-        # 2. get_download_queue_state
-        res = dispatcher.dispatch(
-            JsonRpcRequest(id="q-1", method="get_download_queue_state", params={})
-        )
-        assert res.error is None
-        assert res.result["max_concurrent"] == 4
-
-        # 3. start_batch_download
-        batch_items = [
-            {"media_item": create_dummy_item("rpc-batch-1").model_dump(mode="json")},
-            {"media_item": create_dummy_item("rpc-batch-2").model_dump(mode="json")},
-        ]
-        res = dispatcher.dispatch(
-            JsonRpcRequest(
-                id="b-1",
-                method="start_batch_download",
-                params={"items": batch_items, "target_dir": str(temp_dest_dir / "images")},
+            # 2. get_download_queue_state
+            res = dispatcher.dispatch(
+                JsonRpcRequest(id="q-1", method="get_download_queue_state", params={})
             )
-        )
-        assert res.error is None
-        assert res.result["count"] == 2
-        task_id = res.result["tasks"][0]["id"]
+            assert res.error is None
+            assert res.result["max_concurrent"] == 4
 
-        # 4. pause_download
-        res = dispatcher.dispatch(
-            JsonRpcRequest(id="p-1", method="pause_download", params={"task_id": task_id})
-        )
-        assert res.error is None
-        assert "paused" in res.result
+            # 3. start_batch_download
+            batch_items = [
+                {"media_item": create_dummy_item("rpc-batch-1").model_dump(mode="json")},
+                {"media_item": create_dummy_item("rpc-batch-2").model_dump(mode="json")},
+            ]
+            res = dispatcher.dispatch(
+                JsonRpcRequest(
+                    id="b-1",
+                    method="start_batch_download",
+                    params={"items": batch_items, "target_dir": str(temp_dest_dir / "images")},
+                )
+            )
+            assert res.error is None
+            assert res.result["count"] == 2
+            task_id = res.result["tasks"][0]["id"]
 
-        # 5. resume_download
-        res = dispatcher.dispatch(
-            JsonRpcRequest(id="r-1", method="resume_download", params={"task_id": task_id})
-        )
-        assert res.error is None
-        assert "resumed" in res.result
+            # 4. pause_download
+            res = dispatcher.dispatch(
+                JsonRpcRequest(id="p-1", method="pause_download", params={"task_id": task_id})
+            )
+            assert res.error is None
+            assert "paused" in res.result
 
-        # 6. pause_all_downloads
-        res = dispatcher.dispatch(
-            JsonRpcRequest(id="pa-1", method="pause_all_downloads", params={})
-        )
-        assert res.error is None
-        assert "paused_count" in res.result
+            # 5. resume_download
+            res = dispatcher.dispatch(
+                JsonRpcRequest(id="r-1", method="resume_download", params={"task_id": task_id})
+            )
+            assert res.error is None
+            assert "resumed" in res.result
 
-        # 7. resume_all_downloads
-        res = dispatcher.dispatch(
-            JsonRpcRequest(id="ra-1", method="resume_all_downloads", params={})
-        )
-        assert res.error is None
-        assert "resumed_count" in res.result
+            # 6. pause_all_downloads
+            res = dispatcher.dispatch(
+                JsonRpcRequest(id="pa-1", method="pause_all_downloads", params={})
+            )
+            assert res.error is None
+            assert "paused_count" in res.result
 
-        # 8. cancel_all_downloads
-        res = dispatcher.dispatch(
-            JsonRpcRequest(id="ca-1", method="cancel_all_downloads", params={})
-        )
-        assert res.error is None
-        assert "cancelled_count" in res.result
+            # 7. resume_all_downloads
+            res = dispatcher.dispatch(
+                JsonRpcRequest(id="ra-1", method="resume_all_downloads", params={})
+            )
+            assert res.error is None
+            assert "resumed_count" in res.result
 
-        # 9. clear_completed_downloads
-        res = dispatcher.dispatch(
-            JsonRpcRequest(id="cc-1", method="clear_completed_downloads", params={})
-        )
-        assert res.error is None
-        assert "cleared_count" in res.result
+            # 8. cancel_all_downloads
+            res = dispatcher.dispatch(
+                JsonRpcRequest(id="ca-1", method="cancel_all_downloads", params={})
+            )
+            assert res.error is None
+            assert "cancelled_count" in res.result
+
+            # 9. clear_completed_downloads
+            res = dispatcher.dispatch(
+                JsonRpcRequest(id="cc-1", method="clear_completed_downloads", params={})
+            )
+            assert res.error is None
+            assert "cleared_count" in res.result
+    finally:
+        isolated_dm._executor.shutdown(wait=True)

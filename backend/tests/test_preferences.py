@@ -98,9 +98,32 @@ def test_update_preferences_validation(repo: MediaRepository) -> None:
     res2 = repo.update_preferences({"max_concurrent_downloads": -5})
     assert res2["max_concurrent_downloads"] == 1
 
+    # Retries clamped between 0 and 10
+    assert repo.update_preferences({"max_retries": 99})["max_retries"] == 10
+    assert repo.update_preferences({"max_retries": -1})["max_retries"] == 0
+
     # Invalid theme raises ValueError
     with pytest.raises(ValueError, match="Invalid theme"):
         repo.update_preferences({"theme": "neon-green"})
+
+    # Invalid log level raises ValueError
+    with pytest.raises(ValueError, match="Invalid log level"):
+        repo.update_preferences({"log_level": "CHATTY"})
+
+
+def test_log_level_preference_applies_to_logging(repo: MediaRepository) -> None:
+    """Verify the engine log level takes effect in the running process."""
+    import logging
+
+    from xakumedia.core.logging import setup_logging
+
+    setup_logging(default_config.log_level)
+    updated = repo.update_preferences({"log_level": "DEBUG"})
+
+    assert updated["log_level"] == "DEBUG"
+    assert default_config.log_level == "DEBUG"
+    assert logging.getLogger().level == logging.DEBUG
+
 
 
 def test_reset_preferences(repo: MediaRepository) -> None:

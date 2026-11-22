@@ -115,8 +115,8 @@ def test_regression_download_manager_network_failure(tmp_path: Path) -> None:
             destination_path=tmp_path / "downloads" / "netfail.mp4",
         )
 
-        # Wait briefly for worker thread to finish
-        for _ in range(50):
+        # Wait for the retry loop to exhaust the configured attempts
+        for _ in range(400):
             t = repo.get_download_task(task.id)
             if t and t.status in (TaskStatus.FAILED, TaskStatus.COMPLETED):
                 break

@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   AppPreferences,
+  AppUpdateCheckResult,
   BatchDownloadItemParam,
   CancelAllDownloadsResult,
   CancelDownloadResult,
@@ -12,6 +13,7 @@ import type {
   DeleteDownloadedMediaResult,
   DesktopApi,
   DiscoveredMediaItem,
+  DownloadLibrarySnapshot,
   DownloadQueueStateResult,
   DownloadTaskRecord,
   ExportMetadataResult,
@@ -46,6 +48,7 @@ import type {
   ScanProgressEventPayload,
   ScanStartedPayload,
   SetDownloadConcurrencyResult,
+  SkipMediaItemsResult,
   StartBatchDownloadResult,
   StartDownloadResult,
   SupportedBrowsersResult,
@@ -185,6 +188,35 @@ const api: DesktopApi = {
   },
   deleteMediaItem: async (mediaId: string): Promise<{ id: string; deleted: boolean }> => {
     return ipcRenderer.invoke("python:deleteMediaItem", mediaId);
+  },
+  skipMediaItems: async (items: DiscoveredMediaItem[]): Promise<SkipMediaItemsResult> => {
+    return ipcRenderer.invoke("python:skipMediaItems", items);
+  },
+  unskipMediaItems: async (
+    items: DiscoveredMediaItem[]
+  ): Promise<{ count: number; identities: string[]; status: string }> => {
+    return ipcRenderer.invoke("python:unskipMediaItems", items);
+  },
+  scanDownloadLibrary: async (baseDir?: string): Promise<DownloadLibrarySnapshot> => {
+    return ipcRenderer.invoke("python:scanDownloadLibrary", baseDir);
+  },
+  deleteLibraryFile: async (
+    filePath: string
+  ): Promise<{ deleted: boolean; file_path: string }> => {
+    return ipcRenderer.invoke("python:deleteLibraryFile", filePath);
+  },
+  unskipLibraryEntry: async (
+    folderPath: string,
+    identity: string
+  ): Promise<{ removed: boolean; identity: string }> => {
+    return ipcRenderer.invoke("python:unskipLibraryEntry", folderPath, identity);
+  },
+  onLibraryChanged: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on("library:changed", handler);
+    return () => {
+      ipcRenderer.removeListener("library:changed", handler);
+    };
   },
   startDownload: async (
     mediaItem: DiscoveredMediaItem,
@@ -488,6 +520,9 @@ const api: DesktopApi = {
     tag?: string
   ): Promise<{ summary: RescanAllSummary }> => {
     return ipcRenderer.invoke("python:rescanAllSources", tag);
+  },
+  checkForUpdates: async (): Promise<AppUpdateCheckResult> => {
+    return ipcRenderer.invoke("app:checkForUpdates");
   },
 };
 

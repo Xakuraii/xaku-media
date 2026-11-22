@@ -5,32 +5,30 @@ export const RequirementsSection: React.FC = () => {
   const specs = [
     {
       icon: Monitor,
-      title: "Operating system",
-      main: "Windows 10 / 11 · 64-bit",
-      detail: "Windows 10 Build 1809 or higher. 64-bit x86_64 architecture required.",
+      title: "OS",
+      main: "Windows 10 / 11 (64-bit)",
+      detail: "Standard x86_64 Windows desktop.",
     },
     {
       icon: Cpu,
-      title: "System resources",
-      main: "4 GB RAM · 350 MB space",
-      detail: "8 GB RAM recommended for parallel 4K video stream merges.",
+      title: "Resources",
+      main: "4 GB RAM · 350 MB disk",
+      detail: "8 GB RAM recommended for 4K merges.",
     },
     {
       icon: Box,
-      title: "Bundled runtimes",
-      main: "Zero external installs",
-      detail: "Includes embedded Python 3.12 and FFmpeg/FFprobe binaries out of the box.",
+      title: "Dependencies",
+      main: "All bundled",
+      detail: "Python 3.12 and FFmpeg are already inside.",
     },
   ];
 
   return (
     <section id="requirements" className="border-t border-hairline bg-band transition-colors duration-300">
-      <div className="lc-container py-16 sm:py-24">
+      <div className="lc-container py-14 sm:py-20">
         <div className="max-w-xl">
           <h2 className="section-title">System requirements</h2>
-          <p className="section-lead">
-            A self-contained desktop application, ready to run out of the box.
-          </p>
+          <p className="section-lead">Self-contained Windows app with zero external setup.</p>
         </div>
 
         {/* Single spec sheet */}

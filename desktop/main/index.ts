@@ -4,6 +4,7 @@ import path from "path";
 import { pathToFileURL } from "url";
 import type {
   AppPreferences,
+  AppUpdateCheckResult,
   DiscoveredMediaItem,
   MediaFormatInfoPayload,
   QuerySavedMediaParams,
@@ -28,11 +29,61 @@ protocol.registerSchemesAsPrivileged([
 let mainWindow: BrowserWindow | null = null;
 const pythonBridge = new PythonBridge();
 let isQuitting = false;
+let libraryWatcher: fs.FSWatcher | null = null;
+let watchedDownloadDir: string | null = null;
+let libraryNotifyTimer: NodeJS.Timeout | null = null;
+
+function notifyLibraryChanged(): void {
+  if (libraryNotifyTimer) clearTimeout(libraryNotifyTimer);
+  libraryNotifyTimer = setTimeout(() => {
+    libraryNotifyTimer = null;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("library:changed");
+    }
+  }, 400);
+}
+
+function startLibraryWatcher(downloadDir: string | null | undefined): void {
+  if (!downloadDir || typeof downloadDir !== "string") return;
+  const resolved = path.resolve(downloadDir);
+  if (watchedDownloadDir === resolved && libraryWatcher) return;
+
+  if (libraryWatcher) {
+    try {
+      libraryWatcher.close();
+    } catch {
+      // Ignore close errors
+    }
+    libraryWatcher = null;
+  }
+  watchedDownloadDir = resolved;
+
+  try {
+    if (!fs.existsSync(resolved)) {
+      fs.mkdirSync(resolved, { recursive: true });
+    }
+    libraryWatcher = fs.watch(resolved, { recursive: true }, (_eventType, filename) => {
+      if (typeof filename === "string") {
+        const lower = filename.toLowerCase();
+        if (lower.endsWith(".part") || lower.endsWith(".tmp")) return;
+      }
+      notifyLibraryChanged();
+    });
+    libraryWatcher.on("error", (err) => {
+      console.warn("[desktop] Library folder watcher error:", err);
+    });
+  } catch (err) {
+    console.warn(`[desktop] Could not watch download directory '${resolved}':`, err);
+  }
+}
 
 // Forward real-time Python notifications to the renderer window
 pythonBridge.onNotification((method, params) => {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(method, params);
+  }
+  if (method === "download:completed" || method === "download_completed") {
+    notifyLibraryChanged();
   }
 });
 
@@ -200,6 +251,40 @@ function registerIpcHandlers(): void {
   ipcMain.handle("python:deleteMediaItem", async (_event, mediaId: string) => {
     return pythonBridge.sendRequest("delete_media_item", { media_id: mediaId });
   });
+
+  ipcMain.handle("python:skipMediaItems", async (_event, items: DiscoveredMediaItem[]) => {
+    const res = await pythonBridge.sendRequest("skip_media_items", { items });
+    notifyLibraryChanged();
+    return res;
+  });
+
+  ipcMain.handle("python:unskipMediaItems", async (_event, items: DiscoveredMediaItem[]) => {
+    const res = await pythonBridge.sendRequest("unskip_media_items", { items });
+    notifyLibraryChanged();
+    return res;
+  });
+
+  ipcMain.handle("python:scanDownloadLibrary", async (_event, baseDir?: string) => {
+    return pythonBridge.sendRequest("scan_download_library", baseDir ? { base_dir: baseDir } : {});
+  });
+
+  ipcMain.handle("python:deleteLibraryFile", async (_event, filePath: string) => {
+    const res = await pythonBridge.sendRequest("delete_library_file", { file_path: filePath });
+    notifyLibraryChanged();
+    return res;
+  });
+
+  ipcMain.handle(
+    "python:unskipLibraryEntry",
+    async (_event, folderPath: string, identity: string) => {
+      const res = await pythonBridge.sendRequest("unskip_library_entry", {
+        folder_path: folderPath,
+        identity,
+      });
+      notifyLibraryChanged();
+      return res;
+    }
+  );
 
   // Download Manager IPC Handlers
   ipcMain.handle(
@@ -399,6 +484,39 @@ function registerIpcHandlers(): void {
     }
   });
 
+const GITHUB_RELEASES_PAGE = "https://github.com/Xakuraii/xaku-media/releases";
+const GITHUB_RELEASES_API = "https://api.github.com/repos/Xakuraii/xaku-media/releases/latest";
+
+function compareSemver(current: string, candidate: string): number {
+  const parse = (v: string) =>
+    v
+      .trim()
+      .replace(/^v/i, "")
+      .split("-", 1)[0]
+      .split(".")
+      .map((part) => Number.parseInt(part, 10) || 0);
+  const a = parse(current);
+  const b = parse(candidate);
+  const len = Math.max(a.length, b.length, 3);
+  for (let i = 0; i < len; i++) {
+    const av = a[i] ?? 0;
+    const bv = b[i] ?? 0;
+    if (bv > av) return 1;
+    if (bv < av) return -1;
+  }
+  return 0;
+}
+
+function safeHttpsUrl(raw: unknown): string | null {
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  try {
+    const parsed = new URL(raw.trim());
+    return parsed.protocol === "https:" ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
   ipcMain.handle("app:openExternal", async (_event, url: string): Promise<boolean> => {
     if (!url || typeof url !== "string") return false;
     try {
@@ -412,6 +530,81 @@ function registerIpcHandlers(): void {
     } catch (err) {
       console.warn("[desktop] Failed to open external URL:", err);
       return false;
+    }
+  });
+
+  ipcMain.handle("app:checkForUpdates", async (): Promise<AppUpdateCheckResult> => {
+    const currentVersion = app.getVersion();
+    try {
+      const resp = await net.fetch(GITHUB_RELEASES_API, {
+        headers: {
+          Accept: "application/vnd.github+json",
+          "User-Agent": `XakuMedia/${currentVersion}`,
+        },
+        signal: AbortSignal.timeout(6000),
+      });
+      if (resp.status === 404) {
+        return {
+          currentVersion,
+          latestVersion: null,
+          hasUpdate: false,
+          status: "unpublished",
+          releaseUrl: GITHUB_RELEASES_PAGE,
+          downloadUrl: null,
+          assetName: null,
+        };
+      }
+      if (!resp.ok) {
+        return {
+          currentVersion,
+          latestVersion: null,
+          hasUpdate: false,
+          status: "error",
+          releaseUrl: GITHUB_RELEASES_PAGE,
+          downloadUrl: null,
+          assetName: null,
+          error: `GitHub returned HTTP ${resp.status}`,
+        };
+      }
+
+      const data = (await resp.json()) as {
+        tag_name?: string;
+        html_url?: string;
+        published_at?: string;
+        body?: string;
+        assets?: Array<{ name?: string; browser_download_url?: string }>;
+      };
+      const tag = (data.tag_name || "").trim();
+      const latestVersion = tag ? tag.replace(/^v/i, "") : null;
+      const hasUpdate = Boolean(latestVersion && compareSemver(currentVersion, latestVersion) > 0);
+      const assets = Array.isArray(data.assets) ? data.assets : [];
+      const setupAsset =
+        assets.find((a) => typeof a.name === "string" && /setup.*\.exe$/i.test(a.name)) ||
+        assets.find((a) => typeof a.name === "string" && /\.exe$/i.test(a.name)) ||
+        null;
+
+      return {
+        currentVersion,
+        latestVersion: latestVersion ? `v${latestVersion}` : null,
+        hasUpdate,
+        status: hasUpdate ? "update_available" : "up_to_date",
+        releaseUrl: safeHttpsUrl(data.html_url) || GITHUB_RELEASES_PAGE,
+        downloadUrl: setupAsset ? safeHttpsUrl(setupAsset.browser_download_url) : null,
+        assetName: setupAsset?.name || null,
+        publishedAt: data.published_at || null,
+        notes: typeof data.body === "string" ? data.body.slice(0, 600) : null,
+      };
+    } catch (err) {
+      return {
+        currentVersion,
+        latestVersion: null,
+        hasUpdate: false,
+        status: "error",
+        releaseUrl: GITHUB_RELEASES_PAGE,
+        downloadUrl: null,
+        assetName: null,
+        error: err instanceof Error ? err.message : "Could not reach GitHub Releases.",
+      };
     }
   });
 
@@ -434,11 +627,23 @@ function registerIpcHandlers(): void {
   });
 
   ipcMain.handle("preferences:update", async (_event, preferences: Partial<AppPreferences>) => {
-    return pythonBridge.sendRequest("update_preferences", { preferences });
+    const updated = await pythonBridge.sendRequest<AppPreferences>("update_preferences", {
+      preferences,
+    });
+    if (updated?.download_dir) {
+      startLibraryWatcher(updated.download_dir);
+      notifyLibraryChanged();
+    }
+    return updated;
   });
 
   ipcMain.handle("preferences:reset", async () => {
-    return pythonBridge.sendRequest("reset_preferences");
+    const defaults = await pythonBridge.sendRequest<AppPreferences>("reset_preferences");
+    if (defaults?.download_dir) {
+      startLibraryWatcher(defaults.download_dir);
+      notifyLibraryChanged();
+    }
+    return defaults;
   });
 
   // Authentication, Cookies & Custom Request Headers
@@ -910,6 +1115,14 @@ app.whenReady().then(async () => {
     } catch (recErr) {
       console.warn("[desktop] Interrupted task recovery startup check failed:", recErr);
     }
+    try {
+      const prefs = await pythonBridge.sendRequest<AppPreferences>("get_preferences", {});
+      if (prefs?.download_dir) {
+        startLibraryWatcher(prefs.download_dir);
+      }
+    } catch {
+      // Watcher is best-effort
+    }
   } catch (err) {
     console.error("[desktop] Failed to start Python bridge:", err);
   }
@@ -927,6 +1140,18 @@ app.on("before-quit", async (event) => {
   if (!isQuitting) {
     isQuitting = true;
     event.preventDefault();
+    if (libraryNotifyTimer) {
+      clearTimeout(libraryNotifyTimer);
+      libraryNotifyTimer = null;
+    }
+    if (libraryWatcher) {
+      try {
+        libraryWatcher.close();
+      } catch {
+        // Ignore close errors
+      }
+      libraryWatcher = null;
+    }
     console.log("[desktop] Shutting down Python engine before quitting...");
     try {
       await pythonBridge.stop();

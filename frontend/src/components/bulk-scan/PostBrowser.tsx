@@ -3,32 +3,61 @@ import {
   Bookmark,
   CheckSquare,
   Download,
+  EyeOff,
   Film,
   Image as ImageIcon,
   Layers,
-  Link2,
   Loader2,
   Search,
   Square,
   Sparkles,
 } from "lucide-react";
 import type { DiscoveredMediaItem } from "../../../../desktop/shared/types";
-import { isItemDownloaded, type MediaFilter, type PostWithScan } from "./types";
-import { chooseFormat, formatBytes, visibleMedia } from "./utils";
+import { isItemDownloaded, isItemSkipped, type MediaFilter, type PostWithScan } from "./types";
+import { chooseFormat, formatBytes, hostOf, visibleMedia } from "./utils";
 
 /** Keep the DOM small while a large scan is still streaming in. */
 const POST_PAGE_SIZE = 24;
 const GROUP_MEDIA_PAGE_SIZE = 12;
 const VIDEO_PAGE_SIZE = 120;
 
+function cleanCreatorHandle(raw?: string | null): string | null {
+  const trimmed = (raw || "").trim().replace(/^@/, "");
+  if (!trimmed || ["gallery", "unknown", "none", "user"].includes(trimmed.toLowerCase())) {
+    return null;
+  }
+  return trimmed;
+}
+
+function mainSourceFor(post: PostWithScan, item?: DiscoveredMediaItem) {
+  const url = post.source_url || item?.source_url || post.post_url || item?.original_url || "";
+  let author = cleanCreatorHandle(item?.author) || cleanCreatorHandle(post.author);
+  if (!author && url) {
+    try {
+      const seg = new URL(url).pathname.split("/").filter(Boolean)[0];
+      if (seg && !["watch", "playlist", "shorts", "reel", "reels", "p", "explore", "share"].includes(seg)) {
+        author = cleanCreatorHandle(seg);
+      }
+    } catch {
+      // ignore invalid url
+    }
+  }
+  const title = author ? `@${author}` : url ? hostOf(url) : "Saved Source";
+  return { url, author, title };
+}
+
+function avatarThumbFor(item: DiscoveredMediaItem): string | null {
+  return item.thumbnail_url || item.original_url || null;
+}
+
 interface PostBrowserProps {
   filteredPosts: PostWithScan[];
   counts: { posts: number; media: number; images: number; videos: number; albums: number };
   selected: Set<string>;
   downloaded: Set<string>;
-  bookmarked: Set<string>;
-  bookmarkBusy: Set<string>;
+  skipped: Set<string>;
   savedLinks: Set<string>;
+  savedAvatars?: Map<string, string>;
   runningCount: number;
   totalProgress: { posts: number; media: number };
   filter: MediaFilter;
@@ -40,9 +69,11 @@ interface PostBrowserProps {
   onSearchChange: (value: string) => void;
   onToggleMedia: (itemId: string) => void;
   onTogglePost: (post: PostWithScan) => void;
-  onToggleBookmark: (item: DiscoveredMediaItem) => void;
-  onTogglePostBookmark: (post: PostWithScan) => void;
-  onSaveLink: (url: string, title: string) => void;
+  onSaveLink: (
+    url: string,
+    title: string,
+    extra?: { author?: string | null; thumbnail_url?: string | null }
+  ) => void;
   onDownloadItems: (items: DiscoveredMediaItem[]) => void;
   onSelectAllVisible: () => void;
   onSelectOnlyNew: () => void;
@@ -50,6 +81,11 @@ interface PostBrowserProps {
   onInvertSelection: () => void;
   onClearSelection: () => void;
   onDownload: () => void;
+  onSkip: () => void;
+  onUnskip: () => void;
+  skipping: boolean;
+  hideSkipped: boolean;
+  onToggleHideSkipped: () => void;
 }
 
 interface VideoEntry {
@@ -62,9 +98,9 @@ export function PostBrowser({
   counts,
   selected,
   downloaded,
-  bookmarked,
-  bookmarkBusy,
+  skipped,
   savedLinks,
+  savedAvatars,
   runningCount,
   totalProgress,
   filter,
@@ -76,8 +112,6 @@ export function PostBrowser({
   onSearchChange,
   onToggleMedia,
   onTogglePost,
-  onToggleBookmark,
-  onTogglePostBookmark,
   onSaveLink,
   onDownloadItems,
   onSelectAllVisible,
@@ -86,12 +120,36 @@ export function PostBrowser({
   onInvertSelection,
   onClearSelection,
   onDownload,
+  onSkip,
+  onUnskip,
+  skipping,
+  hideSkipped,
+  onToggleHideSkipped,
 }: PostBrowserProps) {
   const visibleItems = useMemo(
-    () => filteredPosts.flatMap((post) => visibleMedia(post, filter)),
-    [filteredPosts, filter]
+    () =>
+      filteredPosts
+        .flatMap((post) => visibleMedia(post, filter))
+        .filter((item) => !hideSkipped || !isItemSkipped(item, skipped)),
+    [filteredPosts, filter, hideSkipped, skipped]
   );
-  const newCount = visibleItems.filter((item) => !isItemDownloaded(item, downloaded)).length;
+  const skippedCount = useMemo(
+    () =>
+      filteredPosts
+        .flatMap((post) => visibleMedia(post, filter))
+        .filter((item) => isItemSkipped(item, skipped)).length,
+    [filteredPosts, filter, skipped]
+  );
+  const selectedSkippedCount = useMemo(
+    () =>
+      visibleItems.filter(
+        (item) => selected.has(item.id) && isItemSkipped(item, skipped)
+      ).length,
+    [visibleItems, selected, skipped]
+  );
+  const newCount = visibleItems.filter(
+    (item) => !isItemDownloaded(item, downloaded) && !isItemSkipped(item, skipped)
+  ).length;
 
   const [renderLimit, setRenderLimit] = useState(POST_PAGE_SIZE);
   const [videoLimit, setVideoLimit] = useState(VIDEO_PAGE_SIZE);
@@ -113,10 +171,14 @@ export function PostBrowser({
     if (filter === "image") return [];
     return filteredPosts.flatMap((post) =>
       post.media_items
-        .filter((item) => item.media_type === "video")
+        .filter(
+          (item) =>
+            item.media_type === "video" &&
+            (!hideSkipped || !isItemSkipped(item, skipped))
+        )
         .map((item) => ({ item, post }))
     );
-  }, [filteredPosts, filter]);
+  }, [filteredPosts, filter, hideSkipped, skipped]);
   const videoEntries = useMemo(
     () => allVideoEntries.slice(0, videoLimit),
     [allVideoEntries, videoLimit]
@@ -129,10 +191,14 @@ export function PostBrowser({
     return displayedPosts
       .map((post) => ({
         post,
-        items: post.media_items.filter((item) => item.media_type === "image"),
+        items: post.media_items.filter(
+          (item) =>
+            item.media_type === "image" &&
+            (!hideSkipped || !isItemSkipped(item, skipped))
+        ),
       }))
       .filter((group) => group.items.length > 0);
-  }, [displayedPosts, filter]);
+  }, [displayedPosts, filter, hideSkipped, skipped]);
 
   const hasResults = allVideoEntries.length > 0 || imageGroups.length > 0;
 
@@ -170,6 +236,21 @@ export function PostBrowser({
               className="w-44 rounded-full border border-hairline bg-page py-1 pl-7 pr-3 font-mono text-[11px] text-ink placeholder-faint focus:border-accent focus:outline-none"
             />
           </div>
+          {skippedCount > 0 && (
+            <button
+              type="button"
+              onClick={onToggleHideSkipped}
+              className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[11px] font-mono transition-colors ${
+                hideSkipped
+                  ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                  : "border-hairline text-muted hover:bg-raised hover:text-ink"
+              }`}
+              title={hideSkipped ? "Show skipped items" : "Hide skipped items"}
+            >
+              <EyeOff className="h-3 w-3" />
+              <span>{hideSkipped ? `Hidden skipped (${skippedCount})` : `Skipped ${skippedCount}`}</span>
+            </button>
+          )}
           {focusedScanLabel && (
             <span className="rounded-full border border-accent/30 bg-accent/10 px-2.5 py-1 font-mono text-[10px] text-accent">
               showing: {focusedScanLabel}
@@ -213,19 +294,50 @@ export function PostBrowser({
             </span>
           )}
         </div>
-        <button
-          type="button"
-          onClick={onDownload}
-          disabled={selected.size === 0 || downloading}
-          className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all ${
-            selected.size > 0 && !downloading
-              ? "cursor-pointer bg-accent text-on-accent shadow-md shadow-accent/25 hover:bg-accent-vivid"
-              : "cursor-not-allowed border border-hairline bg-raised text-faint"
-          }`}
-        >
-          {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-          <span>{downloading ? "Queueing…" : `Download selected (${selected.size})`}</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {selectedSkippedCount > 0 && (
+            <button
+              type="button"
+              onClick={onUnskip}
+              disabled={skipping}
+              title="Remove skipped mark from selected items so they count as new again"
+              className="flex cursor-pointer items-center gap-2 rounded-lg border border-hairline bg-surface px-3 py-2 text-sm font-medium text-ink transition-colors hover:bg-raised disabled:opacity-50"
+            >
+              <span>Unskip ({selectedSkippedCount})</span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onSkip}
+            disabled={selected.size === 0 || skipping}
+            title="Skip selected items and record them in the folder library manifest"
+            className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+              selected.size > 0 && !skipping
+                ? "cursor-pointer border-amber-500/40 bg-amber-500/10 text-amber-700 hover:bg-amber-500/20 dark:text-amber-300"
+                : "cursor-not-allowed border-hairline bg-raised text-faint"
+            }`}
+          >
+            {skipping ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <EyeOff className="h-4 w-4" />
+            )}
+            <span>{skipping ? "Skipping…" : `Skip selected (${selected.size})`}</span>
+          </button>
+          <button
+            type="button"
+            onClick={onDownload}
+            disabled={selected.size === 0 || downloading}
+            className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all ${
+              selected.size > 0 && !downloading
+                ? "cursor-pointer bg-accent text-on-accent shadow-md shadow-accent/25 hover:bg-accent-vivid"
+                : "cursor-not-allowed border border-hairline bg-raised text-faint"
+            }`}
+          >
+            {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+            <span>{downloading ? "Queueing…" : `Download selected (${selected.size})`}</span>
+          </button>
+        </div>
       </div>
 
       {!hasResults && runningCount === 0 ? (
@@ -243,13 +355,12 @@ export function PostBrowser({
               onShowMore={() => setVideoLimit((limit) => limit + VIDEO_PAGE_SIZE)}
               selected={selected}
               downloaded={downloaded}
-              bookmarked={bookmarked}
-              bookmarkBusy={bookmarkBusy}
+              skipped={skipped}
               savedLinks={savedLinks}
+              savedAvatars={savedAvatars}
               preferredResolution={preferredResolution}
               downloading={downloading}
               onToggleMedia={onToggleMedia}
-              onToggleBookmark={onToggleBookmark}
               onSaveLink={onSaveLink}
               onSelectVideos={() => onSelectByType("video")}
             />
@@ -262,15 +373,13 @@ export function PostBrowser({
               filter="image"
               selected={selected}
               downloaded={downloaded}
-              bookmarked={bookmarked}
-              bookmarkBusy={bookmarkBusy}
+              skipped={skipped}
               savedLinks={savedLinks}
+              savedAvatars={savedAvatars}
               preferredResolution={preferredResolution}
               downloading={downloading}
               onToggleMedia={onToggleMedia}
               onTogglePost={onTogglePost}
-              onToggleBookmark={onToggleBookmark}
-              onTogglePostBookmark={onTogglePostBookmark}
               onSaveLink={onSaveLink}
               onDownloadItems={onDownloadItems}
             />
@@ -301,13 +410,12 @@ function VideoShelf({
   onShowMore,
   selected,
   downloaded,
-  bookmarked,
-  bookmarkBusy,
+  skipped,
   savedLinks,
+  savedAvatars,
   preferredResolution,
   downloading,
   onToggleMedia,
-  onToggleBookmark,
   onSaveLink,
   onSelectVideos,
 }: {
@@ -317,14 +425,17 @@ function VideoShelf({
   onShowMore: () => void;
   selected: Set<string>;
   downloaded: Set<string>;
-  bookmarked: Set<string>;
-  bookmarkBusy: Set<string>;
+  skipped: Set<string>;
   savedLinks: Set<string>;
+  savedAvatars?: Map<string, string>;
   preferredResolution?: string;
   downloading: boolean;
   onToggleMedia: (itemId: string) => void;
-  onToggleBookmark: (item: DiscoveredMediaItem) => void;
-  onSaveLink: (url: string, title: string) => void;
+  onSaveLink: (
+    url: string,
+    title: string,
+    extra?: { author?: string | null; thumbnail_url?: string | null }
+  ) => void;
   onSelectVideos: () => void;
 }) {
   return (
@@ -349,24 +460,33 @@ function VideoShelf({
       <div className="grid grid-cols-1 gap-3 p-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {entries.map(({ item, post }) => {
           const chosen = chooseFormat(item, preferredResolution);
-          const linkUrl = item.post_url || item.original_url;
+          const source = mainSourceFor(post, item);
+          const thumb = avatarThumbFor(item);
+          const isAvatarMatch = Boolean(
+            source.url &&
+              thumb &&
+              savedLinks.has(source.url) &&
+              savedAvatars?.get(source.url) === thumb
+          );
           return (
             <MediaCard
               key={item.id}
               item={item}
               index={0}
               variant="video"
-              caption={post.author || post.title}
+              caption={source.author || post.author || post.title}
               isSelected={selected.has(item.id)}
-              isBookmarked={bookmarked.has(item.id)}
-              bookmarkBusy={bookmarkBusy.has(post.id) || bookmarkBusy.has(item.id)}
               wasDownloaded={isItemDownloaded(item, downloaded)}
+              isSkipped={isItemSkipped(item, skipped)}
               chosenFormat={chosen}
-              isLinkSaved={Boolean(linkUrl && savedLinks.has(linkUrl))}
+              isLinkSaved={isAvatarMatch}
               onToggle={() => onToggleMedia(item.id)}
-              onToggleBookmark={() => onToggleBookmark(item)}
               onSaveLink={() =>
-                linkUrl && onSaveLink(linkUrl, item.title || `${post.author} video`)
+                source.url &&
+                onSaveLink(source.url, source.title, {
+                  author: source.author,
+                  thumbnail_url: thumb,
+                })
               }
             />
           );
@@ -398,15 +518,13 @@ function PostGroup({
   filter,
   selected,
   downloaded,
-  bookmarked,
-  bookmarkBusy,
+  skipped,
   savedLinks,
+  savedAvatars,
   preferredResolution,
   downloading,
   onToggleMedia,
   onTogglePost,
-  onToggleBookmark,
-  onTogglePostBookmark,
   onSaveLink,
   onDownloadItems,
 }: {
@@ -414,16 +532,18 @@ function PostGroup({
   filter: MediaFilter;
   selected: Set<string>;
   downloaded: Set<string>;
-  bookmarked: Set<string>;
-  bookmarkBusy: Set<string>;
+  skipped: Set<string>;
   savedLinks: Set<string>;
+  savedAvatars?: Map<string, string>;
   preferredResolution?: string;
   downloading: boolean;
   onToggleMedia: (itemId: string) => void;
   onTogglePost: (post: PostWithScan) => void;
-  onToggleBookmark: (item: DiscoveredMediaItem) => void;
-  onTogglePostBookmark: (post: PostWithScan) => void;
-  onSaveLink: (url: string, title: string) => void;
+  onSaveLink: (
+    url: string,
+    title: string,
+    extra?: { author?: string | null; thumbnail_url?: string | null }
+  ) => void;
   onDownloadItems: (items: DiscoveredMediaItem[]) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -433,15 +553,18 @@ function PostGroup({
   const shownItems = expanded ? items : items.slice(0, GROUP_MEDIA_PAGE_SIZE);
   const hiddenCount = Math.max(0, items.length - shownItems.length);
   const allSelected = items.every((item) => selected.has(item.id));
-  const savedCount = items.filter((item) => bookmarked.has(item.id)).length;
-  const allSaved = savedCount === items.length;
-  const postBusy = bookmarkBusy.has(post.id);
+  const downloadableItems = items.filter((item) => !isItemSkipped(item, skipped));
   const images = items.filter((item) => item.media_type === "image").length;
   const videos = items.filter((item) => item.media_type === "video").length;
   const label = items.length > 1 ? "album" : "post";
   const heading = post.title || post.provider_post_id || `Untitled ${label}`;
-  const linkUrl = post.post_url || post.source_url;
-  const linkSaved = Boolean(linkUrl && savedLinks.has(linkUrl));
+  const source = mainSourceFor(post);
+  const linkSaved = Boolean(source.url && savedLinks.has(source.url));
+  const groupThumb =
+    items.find((item) => item.thumbnail_url)?.thumbnail_url ||
+    items.find((item) => item.media_type === "image")?.original_url ||
+    items[0]?.original_url ||
+    null;
 
   return (
     <section className="overflow-hidden rounded-xl border border-hairline bg-surface">
@@ -462,7 +585,7 @@ function PostGroup({
             {heading}
           </p>
           <p className="truncate font-mono text-[10px] text-muted">
-            {post.author || "unknown"}
+            {source.author || post.author || "unknown"}
             {post.post_url ? ` · ${post.post_url}` : ""}
           </p>
         </div>
@@ -471,62 +594,75 @@ function PostGroup({
           {images > 0 ? ` · ${images} img` : ""}
           {videos > 0 ? ` · ${videos} vid` : ""}
         </span>
-        {linkUrl && (
+        {source.url && (
           <button
             type="button"
-            onClick={() => onSaveLink(linkUrl, heading)}
-            title={linkSaved ? "This source link is already saved" : "Save this source link"}
+            onClick={() =>
+              onSaveLink(source.url, source.title, {
+                author: source.author,
+                thumbnail_url: groupThumb,
+              })
+            }
+            title={
+              linkSaved
+                ? "Update Saved Source avatar using this post's thumbnail"
+                : "Save main user/source URL to Saved Sources"
+            }
             className={`inline-flex items-center gap-1 rounded border px-2 py-1 font-mono text-[10px] transition-colors ${
               linkSaved
-                ? "border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300"
+                ? "border-accent/40 bg-accent/10 text-accent"
                 : "border-hairline text-muted hover:bg-raised hover:text-ink"
             }`}
           >
-            <Link2 className="h-3 w-3" />
-            {linkSaved ? "Link saved" : "Save link"}
+            <Bookmark className={`h-3 w-3 ${linkSaved ? "fill-current" : ""}`} />
+            {linkSaved ? "Saved source" : "Save source"}
           </button>
         )}
         <button
           type="button"
-          onClick={() => onTogglePostBookmark(post)}
-          disabled={postBusy}
-          title={allSaved ? "Remove this post from favorites" : "Save this post to favorites"}
-          aria-pressed={allSaved}
-          className={`inline-flex items-center gap-1 rounded border px-2 py-1 font-mono text-[10px] transition-colors ${
-            allSaved
-              ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
-              : "border-hairline text-muted hover:bg-raised hover:text-ink"
-          } ${postBusy ? "opacity-60" : ""}`}
-        >
-          <Bookmark className={`h-3 w-3 ${allSaved ? "fill-current" : ""}`} />
-          {allSaved ? `Saved ${savedCount}/${items.length}` : "Save post"}
-        </button>
-        <button
-          type="button"
-          onClick={() => onDownloadItems(items)}
-          disabled={downloading || items.length === 0}
+          onClick={() => onDownloadItems(downloadableItems)}
+          disabled={downloading || downloadableItems.length === 0}
           className="inline-flex items-center gap-1 rounded border border-accent/30 bg-accent/10 px-2 py-1 font-mono text-[10px] text-accent transition-colors hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Download className="h-3 w-3" />
-          {items.length > 1 ? `Download ${label} (${items.length})` : "Download"}
+          {downloadableItems.length > 1
+            ? `Download ${label} (${downloadableItems.length})`
+            : downloadableItems.length === 1
+            ? "Download"
+            : "All skipped"}
         </button>
       </header>
 
       <div className="grid grid-cols-2 gap-3 p-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
         {shownItems.map((item, index) => {
           const chosen = chooseFormat(item, preferredResolution);
+          const itemSource = mainSourceFor(post, item);
+          const itemThumb = avatarThumbFor(item);
+          const isAvatarMatch = Boolean(
+            itemSource.url &&
+              itemThumb &&
+              savedLinks.has(itemSource.url) &&
+              savedAvatars?.get(itemSource.url) === itemThumb
+          );
           return (
             <MediaCard
               key={item.id}
               item={item}
               index={index}
               isSelected={selected.has(item.id)}
-              isBookmarked={bookmarked.has(item.id)}
-              bookmarkBusy={postBusy || bookmarkBusy.has(item.id)}
               wasDownloaded={isItemDownloaded(item, downloaded)}
+              isSkipped={isItemSkipped(item, skipped)}
               chosenFormat={chosen}
+              isLinkSaved={isAvatarMatch}
               onToggle={() => onToggleMedia(item.id)}
-              onToggleBookmark={() => onToggleBookmark(item)}
+              onSaveLink={() =>
+                itemSource.url &&
+                itemThumb &&
+                onSaveLink(itemSource.url, itemSource.title, {
+                  author: itemSource.author,
+                  thumbnail_url: itemThumb,
+                })
+              }
             />
           );
         })}
@@ -572,13 +708,11 @@ function MediaCard({
   variant = "image",
   caption,
   isSelected,
-  isBookmarked,
-  bookmarkBusy,
   wasDownloaded,
+  isSkipped,
   chosenFormat,
   isLinkSaved = false,
   onToggle,
-  onToggleBookmark,
   onSaveLink,
 }: {
   item: DiscoveredMediaItem;
@@ -586,13 +720,11 @@ function MediaCard({
   variant?: "video" | "image";
   caption?: string | null;
   isSelected: boolean;
-  isBookmarked: boolean;
-  bookmarkBusy: boolean;
   wasDownloaded: boolean;
+  isSkipped: boolean;
   chosenFormat: ReturnType<typeof chooseFormat>;
   isLinkSaved?: boolean;
   onToggle: () => void;
-  onToggleBookmark: () => void;
   onSaveLink?: () => void;
 }) {
   const displaySize = chosenFormat?.filesize_bytes ?? item.filesize_bytes;
@@ -635,33 +767,23 @@ function MediaCard({
         >
           {isSelected ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
         </button>
-        <button
-          type="button"
-          onClick={onToggleBookmark}
-          disabled={bookmarkBusy}
-          className={`absolute right-1.5 top-1.5 rounded p-1 backdrop-blur transition-colors ${
-            isBookmarked
-              ? "bg-amber-500/90 text-white"
-              : "bg-black/60 text-white/75 hover:bg-amber-500/80 hover:text-white"
-          } ${bookmarkBusy ? "opacity-60" : ""}`}
-          aria-label={isBookmarked ? "Remove from favorites" : "Save to favorites"}
-          aria-pressed={isBookmarked}
-        >
-          <Bookmark className={`h-3.5 w-3.5 ${isBookmarked ? "fill-current" : ""}`} />
-        </button>
         {onSaveLink && (
           <button
             type="button"
             onClick={onSaveLink}
-            className={`absolute right-1.5 top-9 rounded p-1 backdrop-blur transition-colors ${
+            className={`absolute right-1.5 top-1.5 rounded p-1 backdrop-blur transition-colors ${
               isLinkSaved
-                ? "bg-sky-600/90 text-white"
-                : "bg-black/60 text-white/75 hover:bg-sky-600/85 hover:text-white"
+                ? "bg-accent text-on-accent"
+                : "bg-black/60 text-white/75 hover:bg-accent hover:text-on-accent"
             }`}
-            aria-label={isLinkSaved ? "Source link saved" : "Save source link"}
-            title={isLinkSaved ? "Source link saved" : "Save source link"}
+            aria-label={isLinkSaved ? "Selected as Saved Source avatar" : "Save main user URL with this pic as avatar"}
+            title={
+              isLinkSaved
+                ? "Currently used as this source's Saved Source avatar"
+                : "Save user source and set this pic as its avatar"
+            }
           >
-            <Link2 className="h-3.5 w-3.5" />
+            <Bookmark className={`h-3.5 w-3.5 ${isLinkSaved ? "fill-current" : ""}`} />
           </button>
         )}
         <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 font-mono text-[9px] uppercase text-white/85">
@@ -669,9 +791,13 @@ function MediaCard({
           {displayRes ? ` · ${displayRes}` : ""}
           {duration ? ` · ${duration}` : ""}
         </span>
-        {wasDownloaded && (
-          <span className="absolute bottom-1.5 left-1.5 rounded bg-emerald-600/90 px-1.5 py-0.5 font-mono text-[9px] text-white">
-            downloaded
+        {(wasDownloaded || isSkipped) && (
+          <span
+            className={`absolute bottom-1.5 left-1.5 rounded px-1.5 py-0.5 font-mono text-[9px] text-white ${
+              isSkipped ? "bg-amber-600/90" : "bg-emerald-600/90"
+            }`}
+          >
+            {isSkipped ? "skipped" : "downloaded"}
           </span>
         )}
       </div>

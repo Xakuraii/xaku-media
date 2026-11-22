@@ -7,6 +7,7 @@ from urllib.parse import unquote, urlsplit
 import httpx
 
 from ..auth.headers import DEFAULT_USER_AGENT, alternate_user_agent
+from ..core.config import default_config
 from ..core.logging import get_logger
 from ..exceptions.base import (
     MediaUnavailableError,
@@ -86,7 +87,10 @@ def probe_direct_url(
 
     should_close = False
     if client is None:
-        client = httpx.Client(follow_redirects=True, timeout=12.0)
+        client = httpx.Client(
+            follow_redirects=True,
+            timeout=float(default_config.request_timeout_seconds),
+        )
         should_close = True
 
     try:

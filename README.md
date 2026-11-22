@@ -31,7 +31,7 @@ Collecting media from web sources or social platforms often involves tedious man
 ### 📥 High-Performance Download Manager & Resumption
 - **Worker Slot Scheduling:** Strict concurrency bounds (configurable 1–10 simultaneous downloads, default 4). Remaining tasks queue safely without OS socket exhaustion.
 - **HTTP Range Resumption:** Seamlessly resumes partially downloaded `.part` files via `Range: bytes={offset}-` headers.
-- **Non-Destructive Sequential Naming:** Groups downloads by platform and media kind (`tiktok/videos/<post_id>/`, `instagram/reels/`, `youtube/shorts/`, `x/images/`, and so on) with sequential indices (`{username}_vdo_001.mp4`, `{username}_img_001.jpg`). Never overwrites user files on disk.
+- **Non-Destructive Sequential Naming:** Groups downloads into `<Platform>/<username>/Videos|Images/` libraries (`Youtube/`, `Facebook/`, `Instagram/`, `Tiktok/`, `X/`) with per-creator sequences (`xakuraii-vdo-1.mp4`, `xakuraii-img-1.jpg`). Deleted numbers are closed up on the next download, so the sequence is always `1..N` with no gaps, and existing files are never overwritten.
 - **Token-Bucket Bandwidth Throttling:** Dynamic download speed limits (e.g., 500 KB/s, 2 MB/s, 10 MB/s, Unlimited) shared across all concurrent worker threads with micro-slice sleep scheduling.
 
 ### 🎞️ Stream Merging & Technical Media Inspection
@@ -198,7 +198,7 @@ Output files are generated in `dist-package/`:
 
 ## Development Principles
 
-- **Non-Destructive:** Existing user downloads are never overwritten; sequential numbering scans both disk and database.
+- **Non-Destructive:** Existing user downloads are never overwritten; sequential numbering scans the folder, closes numbering gaps, and keeps stored download paths in sync.
 - **No Faked Features:** Incomplete or unverified features are never shown as functional.
 - **Local Privacy:** No telemetry, no third-party cloud backends, no DRM bypassing.
 - **Step-by-Step Delivery:** Development proceeds milestone-by-milestone with explicit verification at each step.

@@ -1,16 +1,20 @@
-"""Sequential filename generation and sanitization utilities."""
+"""Sequential filename generation, gap compaction, and sanitization utilities."""
 
+import logging
 import re
+import uuid
 from pathlib import Path
 
 from ..models.media import MediaType
 from .paths import WINDOWS_RESERVED_NAMES
 
+logger = logging.getLogger(__name__)
+
 # Characters forbidden in Windows filenames: \ / : * ? " < > |
 FORBIDDEN_CHARS_PATTERN = re.compile(r'[\\/:*?"<>|]')
-# Matches sequential pattern: {username}_{prefix}_{number}.{ext}
+# Matches the sequential pattern: {username}-{prefix}-{number}.{ext}
 SEQUENCE_PATTERN = re.compile(
-    r"^(?P<username>.+)_(?P<prefix>vdo|img)_(?P<num>\d+)\.[^.]+$", re.IGNORECASE
+    r"^(?P<username>.+)-(?P<prefix>vdo|img|aud)-(?P<num>\d+)\.[^.]+$", re.IGNORECASE
 )
 
 
@@ -33,9 +37,11 @@ def sanitize_username(username: str | None, fallback: str = "media") -> str:
 
 
 def get_media_type_prefix(media_type: MediaType) -> str:
-    """Return the sequential filename marker for a media type ('vdo' or 'img')."""
+    """Return the sequential filename marker for a media type."""
     if media_type == MediaType.VIDEO:
         return "vdo"
+    if media_type == MediaType.AUDIO:
+        return "aud"
     return "img"
 
 
@@ -48,18 +54,16 @@ def format_sequential_filename(
     """Format filename according to project standards.
 
     Examples:
-        format_sequential_filename("artist", MediaType.VIDEO, 1, "mp4") -> "artist_vdo_001.mp4"
-        format_sequential_filename("artist", MediaType.IMAGE, 12, "png") -> "artist_img_012.png"
+        format_sequential_filename("xakuraii", MediaType.VIDEO, 1, "mp4")
+            -> "xakuraii-vdo-1.mp4"
+        format_sequential_filename("xakuraii", MediaType.IMAGE, 12, "png")
+            -> "xakuraii-img-12.png"
     """
     safe_user = sanitize_username(username)
     prefix = get_media_type_prefix(media_type)
     ext = extension.lstrip(".").lower()
 
-    # Format with at least 3 digits (e.g. 001), expanding to 4+ if number >= 1000
-    digits = max(3, len(str(sequence_number)))
-    padded_number = f"{sequence_number:0{digits}d}"
-
-    return f"{safe_user}_{prefix}_{padded_number}.{ext}"
+    return f"{safe_user}-{prefix}-{sequence_number}.{ext}"
 
 
 def extract_sequence_number(filename: str, username: str, media_type: MediaType) -> int | None:
@@ -86,19 +90,93 @@ def extract_sequence_number(filename: str, username: str, media_type: MediaType)
 def get_next_sequence_number(directory: Path, username: str, media_type: MediaType) -> int:
     """Scan existing directory on disk to find the next sequential number.
 
-    Even if a previous file was manually added or extensions differ (e.g. 001.jpg, 002.png),
+    Even if a previous file was manually added or extensions differ (e.g. 1.jpg, 2.png),
     this scans all files to ensure no existing file is ever overwritten.
     """
-    if not directory.exists() or not directory.is_dir():
+    entries = list_sequence_files(directory, username, media_type)
+    if not entries:
         return 1
+    return max(number for number, _ in entries) + 1
 
-    highest = 0
+
+def list_sequence_files(
+    directory: Path,
+    username: str,
+    media_type: MediaType,
+) -> list[tuple[int, Path]]:
+    """Return ``(number, path)`` pairs for this user's files, ordered by number."""
+    if not directory.exists() or not directory.is_dir():
+        return []
+
+    entries: list[tuple[int, Path]] = []
     safe_user = sanitize_username(username)
 
     for item in directory.iterdir():
-        if item.is_file():
-            seq = extract_sequence_number(item.name, safe_user, media_type)
-            if seq is not None and seq > highest:
-                highest = seq
+        if not item.is_file():
+            continue
+        number = extract_sequence_number(item.name, safe_user, media_type)
+        if number is not None:
+            entries.append((number, item))
 
-    return highest + 1
+    entries.sort(key=lambda entry: (entry[0], entry[1].name.lower()))
+    return entries
+
+
+def compact_sequence_numbers(
+    directory: Path,
+    username: str,
+    media_type: MediaType,
+) -> list[tuple[Path, Path]]:
+    """Renumber this user's files to 1..N so the sequence has no gaps.
+
+    Returns the ``(old_path, new_path)`` pairs that were renamed. Renames run in
+    two phases (stage, then finalize) so a target name can never collide with a
+    file that has not been moved yet.
+    """
+    entries = list_sequence_files(directory, username, media_type)
+    if not entries:
+        return []
+
+    plan: list[tuple[Path, Path]] = []
+    for index, (_, path) in enumerate(entries, start=1):
+        target = directory / format_sequential_filename(
+            username, media_type, index, path.suffix.lstrip(".")
+        )
+        if target != path:
+            plan.append((path, target))
+
+    if not plan:
+        return []
+
+    staged: list[tuple[Path, Path, Path]] = []
+    try:
+        for index, (source, target) in enumerate(plan):
+            temp = directory / f".xakumedia-renumber-{uuid.uuid4().hex}-{index}.tmp"
+            source.rename(temp)
+            staged.append((source, temp, target))
+    except OSError as exc:
+        logger.warning(f"Could not compact sequence in {directory}: {exc}")
+        for source, temp, _ in reversed(staged):
+            try:
+                if temp.exists() and not source.exists():
+                    temp.rename(source)
+            except OSError:
+                pass
+        return []
+
+    renamed: list[tuple[Path, Path]] = []
+    for source, temp, target in staged:
+        try:
+            temp.rename(target)
+        except OSError as exc:
+            logger.warning(
+                f"Could not finalize renumber {temp.name} -> {target.name}: {exc}"
+            )
+            try:
+                temp.rename(source)
+            except OSError:
+                pass
+            continue
+        renamed.append((source, target))
+
+    return renamed

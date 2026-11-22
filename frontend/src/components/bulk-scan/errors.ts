@@ -58,17 +58,38 @@ export function explainScanFailure(
   }
 
   if (normalizedCode === "MEDIA_UNAVAILABLE") {
+    const reason = typeof details?.reason === "string" ? details.reason : undefined;
+    if (reason === "tiktok_secuid_unavailable") {
+      return {
+        title: "Could not list this TikTok profile",
+        summary:
+          message ||
+          "TikTok did not expose public profile posts for this account.",
+        steps: [
+          "This creator may have profile embeds disabled, private visibility, or zero public videos.",
+          "Open any post from this user in your browser and paste that video or slideshow URL instead.",
+        ],
+        actions: [],
+        code,
+      };
+    }
+
     return {
       title: "No media found",
       summary:
         message ||
         "The link returned no downloadable media. It may be empty, private, or removed.",
-      steps: [
-        "Check that the URL opens in a browser without signing in.",
-        "Try a profile or channel URL instead of a single post.",
-        "If the page needs a login, add a cookie profile and scan again.",
-      ],
-      actions: [COOKIE_SETTINGS, COOKIE_DOCS],
+      steps: hasCookies
+        ? [
+            "Check that the URL opens in a browser and actually has public posts.",
+            "Try a direct post/video link or a different creator profile URL.",
+          ]
+        : [
+            "Check that the URL opens in a browser without signing in.",
+            "Try a profile or channel URL instead of a single post.",
+            "If the page needs a login, add a cookie profile and scan again.",
+          ],
+      actions: hasCookies ? [] : [COOKIE_SETTINGS, COOKIE_DOCS],
       code,
     };
   }

@@ -1,22 +1,22 @@
 import React from "react";
-import { ServerOff, EyeOff, ShieldCheck } from "lucide-react";
+import { ServerOff, EyeOff, ShieldCheck, Scale } from "lucide-react";
 
 export const SecurityPrivacySection: React.FC = () => {
   const pillars = [
     {
       icon: ServerOff,
-      title: "100% local-first storage",
-      desc: "All metadata, history, queue records, and imported cookie files stay on your machine in local SQLite and app data. There is no external cloud backend or remote account.",
+      title: "Local-first storage",
+      desc: "History, queues, manifests, and cookies stay on your PC — no cloud backend or remote accounts.",
     },
     {
       icon: EyeOff,
-      title: "Zero cloud telemetry",
-      desc: "XakuMedia has no tracking pixels, analytics SDKs, or remote diagnostic pings. Your media collection and activity remain strictly private.",
+      title: "Zero telemetry",
+      desc: "No tracking pixels, analytics SDKs, or hidden uploads. Your downloads stay private.",
     },
     {
       icon: ShieldCheck,
-      title: "Network defense & boundaries",
-      desc: "Includes built-in SSRF protection against internal IP probing. Strictly respects content boundaries without cracking DRM or bypassing paywalls.",
+      title: "Respects boundaries",
+      desc: "Built-in SSRF and path guards. Does not crack DRM, bypass paywalls, or break access controls.",
     },
   ];
 
@@ -26,18 +26,18 @@ export const SecurityPrivacySection: React.FC = () => {
       id="security"
       className="border-t-2 border-brand-red bg-brand-black text-brand-white dark:bg-surface dark:border-t-2 dark:border-hairline transition-colors duration-300"
     >
-      <div className="lc-container py-16 sm:py-24">
+      <div className="lc-container py-14 sm:py-20">
         <div className="max-w-xl">
           <h2 className="font-display text-2xl sm:text-3xl font-semibold tracking-tight text-white">
-            Privacy &amp; trust
+            Privacy, trust &amp; responsibility
           </h2>
-          <p className="mt-3 max-w-2xl text-sm sm:text-base text-white/60 leading-relaxed">
-            Engineered to respect your privacy and protect your local system.
+          <p className="mt-2.5 max-w-2xl text-sm sm:text-base text-white/65 leading-relaxed">
+            Built to protect your system — use responsibly at your own discretion.
           </p>
         </div>
 
         {/* Pillars */}
-        <div className="mt-10 sm:mt-14 grid grid-cols-1 sm:grid-cols-3 gap-8 sm:gap-0 sm:divide-x sm:divide-white/10">
+        <div className="mt-10 grid grid-cols-1 sm:grid-cols-3 gap-8 sm:gap-0 sm:divide-x sm:divide-white/10">
           {pillars.map((item) => {
             const Icon = item.icon;
             return (
@@ -48,10 +48,21 @@ export const SecurityPrivacySection: React.FC = () => {
                 <h3 className="mt-4 font-display text-base font-semibold text-white">
                   {item.title}
                 </h3>
-                <p className="mt-2 text-sm text-white/60 leading-relaxed">{item.desc}</p>
+                <p className="mt-1.5 text-sm text-white/65 leading-relaxed">{item.desc}</p>
               </div>
             );
           })}
+        </div>
+
+        {/* Use responsibly notice */}
+        <div className="mt-10 flex items-start gap-3.5 rounded-2xl border border-white/15 bg-white/5 px-5 py-4">
+          <Scale className="w-5 h-5 text-brand-accent shrink-0 mt-0.5" aria-hidden="true" />
+          <p className="text-sm text-white/80 leading-relaxed">
+            <strong className="text-white font-semibold">Use at your own responsibility:</strong>{" "}
+            XakuMedia is for personal offline archiving only. Respect copyright, creator rights,
+            and platform terms — you are solely responsible for the URLs you scan, the cookies you
+            use, and how you store or share downloaded media.
+          </p>
         </div>
       </div>
     </section>

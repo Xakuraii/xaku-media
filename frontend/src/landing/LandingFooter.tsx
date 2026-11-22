@@ -62,7 +62,7 @@ export const LandingFooter: React.FC = () => {
         <div className="pt-7 flex flex-col sm:flex-row items-center justify-between gap-2 font-mono text-xs text-faint">
           <span>Copyright © 2026 XAKURAII. Open source.</span>
           <span className="text-center sm:text-right">
-            For personal media archiving. Not affiliated with third-party platforms.
+            Use responsibly at your own risk — respect creators, copyright, and platform terms.
           </span>
         </div>
       </div>

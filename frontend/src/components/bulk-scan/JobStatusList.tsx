@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, Eye, Trash2, X } from "lucide-react";
+import { AlertTriangle, Bookmark, Check, Eye, Loader2, Trash2, X } from "lucide-react";
 import { explainScanFailure } from "./errors";
 import type { JobEntry } from "./types";
 import { hostOf, statusTone } from "./utils";
@@ -54,10 +54,13 @@ function progressFor(entry: JobEntry, now: number) {
 interface JobStatusListProps {
   jobs: JobEntry[];
   focusedJobId: string | null;
+  savedLinks?: Set<string>;
+  savingUrls?: Set<string>;
   onCancel: (jobId: string) => void;
   onFocus: (jobId: string) => void;
   onShowAll: () => void;
   onDelete: (job: JobEntry) => void;
+  onSaveSource?: (job: JobEntry) => void;
   onOpenSettings?: (section?: "cookies") => void;
   onOpenExternal?: (url: string) => void;
 }
@@ -65,10 +68,13 @@ interface JobStatusListProps {
 export function JobStatusList({
   jobs,
   focusedJobId,
+  savedLinks,
+  savingUrls,
   onCancel,
   onFocus,
   onShowAll,
   onDelete,
+  onSaveSource,
   onOpenSettings,
   onOpenExternal,
 }: JobStatusListProps) {
@@ -158,6 +164,32 @@ export function JobStatusList({
                 <span className="font-mono text-[10px] text-muted">
                   {snapshot.stop_reason || snapshot.status}
                 </span>
+              )}
+              {onSaveSource && (
+                <button
+                  type="button"
+                  onClick={() => onSaveSource(entry)}
+                  disabled={Boolean(savingUrls?.has(snapshot.url))}
+                  title={
+                    savedLinks?.has(snapshot.url)
+                      ? "Update saved source with this scan's creator name and thumbnail"
+                      : "Save whole scanned URL to Saved Sources with media thumbnail avatar"
+                  }
+                  className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-mono transition-colors disabled:opacity-50 ${
+                    savedLinks?.has(snapshot.url)
+                      ? "border-accent/40 bg-accent/10 text-accent"
+                      : "border-hairline text-ink/80 hover:border-accent/40 hover:bg-raised hover:text-accent"
+                  }`}
+                >
+                  {savingUrls?.has(snapshot.url) ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : savedLinks?.has(snapshot.url) ? (
+                    <Check className="h-3 w-3" />
+                  ) : (
+                    <Bookmark className="h-3 w-3" />
+                  )}
+                  {savedLinks?.has(snapshot.url) ? "Saved" : "Save source"}
+                </button>
               )}
               <button
                 type="button"
