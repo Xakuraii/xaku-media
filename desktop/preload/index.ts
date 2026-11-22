@@ -524,6 +524,12 @@ const api: DesktopApi = {
   checkForUpdates: async (): Promise<AppUpdateCheckResult> => {
     return ipcRenderer.invoke("app:checkForUpdates");
   },
+  registerPreviewStream: async (
+    url: string,
+    headers?: Record<string, string>
+  ): Promise<string | null> => {
+    return ipcRenderer.invoke("app:registerPreviewStream", url, headers);
+  },
 };
 
 contextBridge.exposeInMainWorld("api", api);

@@ -1,5 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell } from "electron";
+import crypto from "crypto";
 import fs from "fs";
+import netModule from "net";
 import path from "path";
 import { pathToFileURL } from "url";
 import type {
@@ -32,6 +34,40 @@ let isQuitting = false;
 let libraryWatcher: fs.FSWatcher | null = null;
 let watchedDownloadDir: string | null = null;
 let libraryNotifyTimer: NodeJS.Timeout | null = null;
+
+interface PreviewStreamEntry {
+  url: string;
+  headers: Record<string, string>;
+}
+
+const previewStreamRegistry = new Map<string, PreviewStreamEntry>();
+
+function isSafeRemotePreviewUrl(rawUrl: string): string | null {
+  try {
+    const parsed = new URL(rawUrl.trim());
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
+    const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    if (!host || host === "localhost" || host.endsWith(".local")) return null;
+    if (netModule.isIP(host)) {
+      if (
+        host === "::1" ||
+        host.startsWith("127.") ||
+        host.startsWith("10.") ||
+        host.startsWith("192.168.") ||
+        host.startsWith("169.254.") ||
+        host.startsWith("fc") ||
+        host.startsWith("fd") ||
+        host.startsWith("fe80")
+      ) {
+        return null;
+      }
+      if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
 
 function notifyLibraryChanged(): void {
   if (libraryNotifyTimer) clearTimeout(libraryNotifyTimer);
@@ -532,6 +568,33 @@ function safeHttpsUrl(raw: unknown): string | null {
       return false;
     }
   });
+
+  ipcMain.handle(
+    "app:registerPreviewStream",
+    async (_event, url: string, headers?: Record<string, string>): Promise<string | null> => {
+      if (!url || typeof url !== "string") return null;
+      const safeUrl = isSafeRemotePreviewUrl(url);
+      if (!safeUrl) return null;
+
+      const sanitizedHeaders: Record<string, string> = {};
+      if (headers && typeof headers === "object") {
+        for (const [key, value] of Object.entries(headers)) {
+          if (typeof value !== "string" || !key.trim()) continue;
+          const lower = key.toLowerCase();
+          if (lower === "host" || lower === "content-length" || lower === "connection") continue;
+          sanitizedHeaders[key] = value;
+        }
+      }
+
+      const token = crypto.randomUUID();
+      if (previewStreamRegistry.size >= 40) {
+        const oldestKey = previewStreamRegistry.keys().next().value;
+        if (oldestKey) previewStreamRegistry.delete(oldestKey);
+      }
+      previewStreamRegistry.set(token, { url: safeUrl, headers: sanitizedHeaders });
+      return `media-loader://remote/${token}`;
+    }
+  );
 
   ipcMain.handle("app:checkForUpdates", async (): Promise<AppUpdateCheckResult> => {
     const currentVersion = app.getVersion();
@@ -1045,10 +1108,24 @@ app.whenReady().then(async () => {
     ".tmp",
   ]);
 
-  // Register protocol handler for streaming local video, audio, and images to renderer
-  protocol.handle("media-loader", (request) => {
+  // Register protocol handler for streaming local & header-authenticated remote media
+  protocol.handle("media-loader", async (request) => {
     try {
       const parsed = new URL(request.url);
+      if (parsed.hostname === "remote") {
+        const token = parsed.pathname.replace(/^\/+/, "");
+        const entry = previewStreamRegistry.get(token);
+        if (!entry) {
+          return new Response("Preview stream expired", { status: 404 });
+        }
+        const outboundHeaders = new Headers(entry.headers);
+        const range = request.headers.get("range");
+        if (range) {
+          outboundHeaders.set("Range", range);
+        }
+        return await net.fetch(entry.url, { headers: outboundHeaders });
+      }
+
       let filePath = "";
       if (parsed.searchParams.has("path")) {
         filePath = decodeURIComponent(parsed.searchParams.get("path") || "");

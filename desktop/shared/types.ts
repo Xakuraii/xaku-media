@@ -760,6 +760,15 @@ export interface DesktopApi {
   checkForUpdates?: () => Promise<AppUpdateCheckResult>;
 
   /**
+   * Register a remote media URL and optional request headers with the main process
+   * and return a ``media-loader://remote/<token>`` stream URL for in-app previews.
+   */
+  registerPreviewStream?: (
+    url: string,
+    headers?: Record<string, string>
+  ) => Promise<string | null>;
+
+  /**
    * Enqueue and begin streaming download for a media item.
    */
   startDownload: (
