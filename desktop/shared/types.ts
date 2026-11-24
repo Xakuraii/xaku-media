@@ -123,6 +123,7 @@ export interface DiscoveredMediaItem {
   is_thumbnail?: boolean;
   /** Folder-manifest status when the item was downloaded or explicitly skipped. */
   library_status?: "downloaded" | "skipped" | null;
+  metadata_extra?: Record<string, unknown>;
 }
 
 export interface ScanHistoryRecord {

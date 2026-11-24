@@ -255,17 +255,22 @@ class DownloadManager:
         logger.info(f"Queued download task {task.id} for {dest.name}")
         return task
 
+    @staticmethod
+    def _item_published_timestamp(item: MediaItem) -> float | None:
+        raw = item.metadata_extra.get("published_timestamp") if item.metadata_extra else None
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            return float(raw)
+        return None
+
     def start_batch_download(
         self,
         items: list[dict[str, Any] | tuple[Any, ...]],
         target_dir: Path | str | None = None,
     ) -> list[DownloadTask]:
         """Enqueue multiple download tasks with sequential naming and slot scheduling."""
-        created_tasks: list[DownloadTask] = []
-        seq_tracker: dict[tuple[Path, str, MediaType], int] = {}
-        pending_items: list[tuple[DownloadTask, str]] = []
-        created_dirs: set[Path] = set()
-        prepared_dirs: set[tuple[Path, str, MediaType]] = set()
+        parsed_entries: list[
+            tuple[MediaItem, MediaFormatInfo | None, Path | str | None, int]
+        ] = []
 
         for entry in items:
             media_item: MediaItem
@@ -302,6 +307,27 @@ class DownloadManager:
                     dest_override = entry[2]
             else:
                 continue
+
+            parsed_entries.append(
+                (media_item, selected_format, dest_override, len(parsed_entries))
+            )
+
+        if any(self._item_published_timestamp(m) is not None for m, _, _, _ in parsed_entries):
+            parsed_entries.sort(
+                key=lambda tup: (
+                    (0, ts, tup[0].attachment_index, -tup[3])
+                    if (ts := self._item_published_timestamp(tup[0])) is not None
+                    else (1, 0.0, tup[0].attachment_index, tup[3])
+                )
+            )
+
+        created_tasks: list[DownloadTask] = []
+        seq_tracker: dict[tuple[Path, str, MediaType], int] = {}
+        pending_items: list[tuple[DownloadTask, str]] = []
+        created_dirs: set[Path] = set()
+        prepared_dirs: set[tuple[Path, str, MediaType]] = set()
+
+        for media_item, selected_format, dest_override, _idx in parsed_entries:
 
             url = (
                 selected_format.url

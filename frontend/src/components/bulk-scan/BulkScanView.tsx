@@ -19,7 +19,14 @@ import type {
 import { isItemSkipped, itemKeys } from "./types";
 import { useScanJobs } from "./useScanJobs";
 import { useScanSelection } from "./useScanSelection";
-import { chooseFormat, countPosts, filterPosts, hostOf, parseUrls } from "./utils";
+import {
+  chooseFormat,
+  countPosts,
+  filterPosts,
+  hostOf,
+  orderItemsOldestFirst,
+  parseUrls,
+} from "./utils";
 
 /**
  * Bulk-first discovery workspace.
@@ -491,7 +498,8 @@ export function BulkScanView({
     setError(null);
     setNotice(null);
     try {
-      const payload = activeItems.map((item) => ({
+      const orderedItems = orderItemsOldestFirst(activeItems);
+      const payload = orderedItems.map((item) => ({
         media_item: item,
         selected_format: chooseFormat(item, preferredResolution),
       }));
