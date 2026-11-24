@@ -12,6 +12,7 @@ import re
 import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit, urlunsplit
@@ -35,7 +36,16 @@ from ..models.media import MediaFormatInfo, MediaType
 from ..models.post import Post, ProviderCapabilities, ScanOptions
 from ..models.url import ClassifiedUrl, UrlCategory
 from ..utils.security import validate_url_security
-from .base import BaseProvider, PageCallback, TotalCallback, host_of, make_media_item, make_post
+from .base import (
+    BaseProvider,
+    PageCallback,
+    TotalCallback,
+    extract_published_timestamp,
+    host_of,
+    lookup_cookie_profile,
+    make_media_item,
+    make_post,
+)
 
 logger = get_logger("providers.ytdlp")
 
@@ -252,16 +262,13 @@ class YtDlpProvider(BaseProvider):
             return True
         return False
 
+    def _cookie_candidate_urls(self, url: str) -> tuple[str, ...]:
+        return (url,)
+
     def capabilities_for(self, url: str) -> ProviderCapabilities:
         collection = is_collection_url(url)
         youtube = is_youtube(url)
-        has_cookies = False
-        try:
-            from ..db import default_repository
-
-            has_cookies = bool(default_repository.get_cookie_profile_for_domain(url))
-        except Exception:
-            pass
+        has_cookies = lookup_cookie_profile(self._cookie_candidate_urls(url)) is not None
         return ProviderCapabilities(
             provider=self.name,
             label=self.label,
@@ -323,7 +330,7 @@ class YtDlpProvider(BaseProvider):
         try:
             from ..db import default_repository
 
-            profile = default_repository.get_cookie_profile_for_domain(url)
+            profile = lookup_cookie_profile(self._cookie_candidate_urls(url))
             if profile and profile.cookie_file_path:
                 cookie_path = Path(profile.cookie_file_path)
                 if cookie_path.exists() and cookie_path.is_file():
@@ -337,6 +344,14 @@ class YtDlpProvider(BaseProvider):
                     opts["impersonate"] = target
         except Exception as exc:  # pragma: no cover - defensive auth wiring
             logger.debug(f"Cookie/header lookup skipped for {url}: {exc}")
+
+    def _build_hydrator(self, hydrate_opts: dict[str, Any]) -> _EntryHydrator:
+        return _EntryHydrator(hydrate_opts)
+
+    def _extract_single_info(self, opts: dict[str, Any], safe_url: str) -> Any:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            strip_stale_waf_cookies(ydl, safe_url)
+            return ydl.extract_info(safe_url, download=False)
 
     def _hydrate_entries(
         self,
@@ -358,7 +373,7 @@ class YtDlpProvider(BaseProvider):
             return
 
         workers = min(HYDRATE_WORKERS, max(2, len(entries)))
-        hydrator = _EntryHydrator(hydrate_opts)
+        hydrator = self._build_hydrator(hydrate_opts)
         executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="xaku-hydrate")
         pending: dict[Any, dict[str, Any]] = {}
         iterator = iter(entries)
@@ -595,11 +610,14 @@ class YtDlpProvider(BaseProvider):
         title: str | None,
         video_id: str,
         page_url: str,
+        published_ts: float | None = None,
     ) -> list[Any]:
         """Build image items from TikTok's ``imagePost`` payload."""
         images = ((data.get("imagePost") or {}).get("images") or [])
         items: list[Any] = []
         seen: set[str] = set()
+        if published_ts is None:
+            published_ts = extract_published_timestamp(data)
         for index, image in enumerate(images):
             if not isinstance(image, dict):
                 continue
@@ -632,6 +650,9 @@ class YtDlpProvider(BaseProvider):
                 format_note="original",
                 http_headers={"Referer": "https://www.tiktok.com/"},
             )
+            slide_meta: dict[str, Any] = {"post_id": video_id, "slideshow": True}
+            if published_ts is not None:
+                slide_meta["published_timestamp"] = published_ts
             items.append(
                 make_media_item(
                     provider=YtDlpProvider.name,
@@ -649,7 +670,7 @@ class YtDlpProvider(BaseProvider):
                     format_info=format_info,
                     provider_media_id=f"{video_id}:{index}",
                     attachment_index=index,
-                    metadata_extra={"post_id": video_id, "slideshow": True},
+                    metadata_extra=slide_meta,
                 )
             )
         return items
@@ -744,8 +765,21 @@ class YtDlpProvider(BaseProvider):
             or "media"
         )
         title = data.get("desc") or info.get("title")
-        items = self._tiktok_slideshow_items(data, author, title, video_id, page_url)
+        published_ts = extract_published_timestamp(data) or extract_published_timestamp(info)
+        items = self._tiktok_slideshow_items(
+            data,
+            author,
+            title,
+            video_id,
+            page_url,
+            published_ts=published_ts,
+        )
         if items:
+            created_at = (
+                datetime.fromtimestamp(published_ts, tz=UTC)
+                if published_ts is not None
+                else None
+            )
             return make_post(
                 provider=self.name,
                 source_url=source_url,
@@ -755,6 +789,7 @@ class YtDlpProvider(BaseProvider):
                 title=title,
                 media_items=items,
                 post_url=page_url,
+                created_at=created_at,
                 metadata_extra={
                     "extractor": "TikTok",
                     "slideshow": True,
@@ -818,6 +853,12 @@ class YtDlpProvider(BaseProvider):
             or info.get("uploader_id")
             or "media"
         )
+        published_ts = extract_published_timestamp(info)
+        created_at = (
+            datetime.fromtimestamp(published_ts, tz=UTC)
+            if published_ts is not None
+            else None
+        )
         post_key = f"{platform_label(source_url)}:{video_id}"
         post = make_post(
             provider=self.name,
@@ -828,11 +869,15 @@ class YtDlpProvider(BaseProvider):
             title=info.get("title"),
             media_items=[],
             post_url=page_url,
+            created_at=created_at,
             metadata_extra={
                 "extractor": info.get("extractor_key") or info.get("extractor"),
                 "view_count": info.get("view_count"),
             },
         )
+        item_meta: dict[str, Any] = {"formats_available": len(formats)}
+        if published_ts is not None:
+            item_meta["published_timestamp"] = published_ts
         item = make_media_item(
             provider=self.name,
             source_url=source_url,
@@ -854,7 +899,7 @@ class YtDlpProvider(BaseProvider):
             provider_media_id=video_id,
             post_url=page_url,
             attachment_index=0,
-            metadata_extra={"formats_available": len(formats)},
+            metadata_extra=item_meta,
         )
         item.available_formats = formats
         post.media_items = [item]
@@ -885,9 +930,7 @@ class YtDlpProvider(BaseProvider):
             opts = self._base_opts() | {"noplaylist": True, "extract_flat": False}
             self._apply_auth(safe_url, opts)
             try:
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    strip_stale_waf_cookies(ydl, safe_url)
-                    info = ydl.extract_info(safe_url, download=False)
+                info = self._extract_single_info(opts, safe_url)
             except (DownloadError, ExtractorError) as exc:
                 if is_tiktok(safe_url) and options.include_images:
                     slideshow = self._tiktok_image_post(safe_url, safe_url, {}, warn)
