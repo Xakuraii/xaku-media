@@ -1,8 +1,8 @@
 # XakuMedia — Current Project State
 
-**Last Updated:** November 23, 2026
-**Active Milestone:** Release v1.1.0 — In-App Media Preview, TikTok WAF/Public Profile Support & Auto-Update UX
-**Overall Status:** In Progress - v1.1.0 features implemented and verified; gallery-dl platforms remain subject to site/auth coverage
+**Last Updated:** November 25, 2026
+**Active Milestone:** Release v1.2.0 — Per-Platform Focus Modules, Oldest-First Numbering & Windows Dist
+**Overall Status:** Completed for v1.2.0 - all focus platforms, oldest-first sequential naming, unit/build checks, and Windows installers verified; gallery-dl platforms remain subject to site/auth coverage
 
 ---
 
@@ -290,6 +290,7 @@ The system relies on a secure 3-tier desktop architecture:
     - Split discovery into dedicated platform modules under `backend/src/xakumedia/providers/platforms/`: `tiktok.py` (`TikTokProvider`, preserving all existing TikTok behavior untouched), `youtube.py` (`YouTubeProvider` with `node`/`deno` `js_runtimes` detection and cookie-free retry when stale cookies trigger format-unavailable errors), `x.py` (`XProvider`), `facebook.py` (`FacebookProvider`), `instagram.py` (`InstagramProvider`), and `other.py` (`OtherProvider` / `resolve_other_provider` for all other sites), routed via `registry.py` with cross-domain cookie aliasing (`lookup_cookie_profile`).
     - Added `extract_published_timestamp` across `ytdlp.py` and `gallerydl.py` (`published_timestamp` + `post.created_at`) and chronological oldest-first ordering in `DownloadManager.start_batch_download`, `BulkScanView.tsx`, and `App.tsx` (`orderItemsOldestFirst`) so `#1` is assigned to the creator's oldest post while multi-image album slides remain in natural `attachment_index` order (`0, 1, 2...`).
   - **Verification:** `ruff check backend/` clean; `tsc --noEmit` clean; `pytest backend/` **248 passed**; `npm run build:all` clean; live scans across all 5 focus platforms verified (`YouTube` video `22` formats, Shorts `39–40` formats, channel `42` formats; `TikTok` `@dorybbi` `3` posts / `7` formats; `X` `@NASA` `3` posts; `Instagram` `@nasa` `3` posts with images + reel; `Facebook` `/NASA` `4`-image album + prior reels).
+  - **Version 1.2.0 Release Packaging (`package.json`, `pyproject.toml`, `downloadConfig.ts`, `dist-package/`):** Audited local DB and `schema.py` (0 sample/seed rows present; user's real history preserved intact), bumped all app/backend/frontend/landing/test versions to `1.2.0` (`v1.2.0`), updated `ReleaseChangelogSection.tsx` highlights, reinstalled editable backend (`pip install --no-deps -e backend`), and built Windows installers (`dist-package/XakuMedia-Setup-1.2.0.exe`, 171 MB / `179,298,659` bytes; `dist-package/XakuMedia-Portable-1.2.0.exe`, 151 MB / `158,442,498` bytes; `dist-package/win-unpacked/XakuMedia.exe`).
 
 ---
 
