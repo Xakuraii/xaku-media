@@ -3,13 +3,9 @@
 Resolution order is explicit and deterministic:
 
 1. Direct media URLs (an actual image/video file).
-2. Native yt-dlp video hosts, where yt-dlp offers real pagination and no auth.
-3. gallery-dl profile-style sources (user/channel/board/subreddit).
-4. Any other gallery-dl source (single post or gallery).
-5. Unsupported.
-
-A URL is only advertised as bulk-capable when a provider can actually paginate
-it, which keeps the capability report honest for the UI.
+2. The 5 focus platforms via dedicated adapters: TikTok, YouTube, X, Facebook, Instagram.
+3. Other fallback platforms via ``OtherProvider`` (remaining yt-dlp & gallery-dl sites).
+4. Unsupported.
 """
 
 from __future__ import annotations
@@ -17,14 +13,27 @@ from __future__ import annotations
 from ..exceptions.base import UnsupportedSourceError
 from ..models.post import ProviderCapabilities
 from ..models.url import ClassifiedUrl
-from .base import BaseProvider, host_of
+from .base import BaseProvider
 from .direct import DirectProvider
 from .gallerydl import PROFILE_SUBCATEGORIES, GalleryDlProvider
-from .ytdlp import TIKTOK_HOSTS, VIDEO_HOSTS, YOUTUBE_HOSTS, YtDlpProvider
+from .platforms import (
+    FacebookProvider,
+    InstagramProvider,
+    TikTokProvider,
+    XProvider,
+    YouTubeProvider,
+    resolve_other_provider,
+)
 
 _DIRECT = DirectProvider()
 _GALLERYDL = GalleryDlProvider()
-_YTDLP = YtDlpProvider()
+_FOCUS_PROVIDERS: tuple[BaseProvider, ...] = (
+    TikTokProvider(),
+    YouTubeProvider(),
+    XProvider(),
+    FacebookProvider(),
+    InstagramProvider(),
+)
 
 
 def _gallery_subcategory(url: str) -> str | None:
@@ -38,14 +47,13 @@ def resolve_provider(url: str) -> BaseProvider:
     if _DIRECT.match(url):
         return _DIRECT
 
-    host = host_of(url)
-    if host in YOUTUBE_HOSTS or host in VIDEO_HOSTS or host in TIKTOK_HOSTS:
-        return _YTDLP
+    for provider in _FOCUS_PROVIDERS:
+        if provider.match(url):
+            return provider
 
-    if _GALLERYDL.match(url):
-        # Profile sources are preferred over generic gallery handling because
-        # they are the bulk-first workflow this registry exists to serve.
-        return _GALLERYDL
+    other = resolve_other_provider(url)
+    if other is not None:
+        return other
 
     raise UnsupportedSourceError(
         f"No provider supports this URL: {url}",

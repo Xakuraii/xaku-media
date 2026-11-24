@@ -16,6 +16,7 @@ import re
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -51,7 +52,9 @@ from .base import (
     PageCallback,
     TotalCallback,
     WarningCallback,
+    extract_published_timestamp,
     host_of,
+    lookup_cookie_profile,
     make_media_item,
     make_post,
 )
@@ -259,18 +262,15 @@ class GalleryDlProvider(BaseProvider):
             return None, None
         return getattr(extractor, "category", None), getattr(extractor, "subcategory", None)
 
+    def _cookie_candidate_urls(self, url: str) -> tuple[str, ...]:
+        return (url,)
+
     def capabilities_for(self, url: str) -> ProviderCapabilities:
         category, subcategory = self._extractor_info(url)
         profile = subcategory in PROFILE_SUBCATEGORIES
         requires_auth = category in AUTH_HEAVY_CATEGORIES
-        has_cookies = False
-        try:
-            from ..db import default_repository
-
-            has_cookies = bool(default_repository.get_cookie_profile_for_domain(url))
-            requires_auth = requires_auth and not has_cookies
-        except Exception:
-            pass
+        has_cookies = lookup_cookie_profile(self._cookie_candidate_urls(url)) is not None
+        requires_auth = requires_auth and not has_cookies
         if category is None:
             return ProviderCapabilities(
                 provider=self.name,
@@ -341,9 +341,7 @@ class GalleryDlProvider(BaseProvider):
         gdl_config.set(("extractor",), "timeout", float(default_config.request_timeout_seconds))
         gdl_config.set(("extractor",), "retries", int(default_config.max_retries))
         try:
-            from ..db import default_repository
-
-            profile = default_repository.get_cookie_profile_for_domain(safe_url)
+            profile = lookup_cookie_profile(self._cookie_candidate_urls(safe_url))
             category = getattr(extractor, "category", None)
             if category and profile and profile.cookie_file_path:
                 cookie_path = Path(profile.cookie_file_path)
@@ -658,6 +656,12 @@ class GalleryDlProvider(BaseProvider):
             if state.post_limit_reached():
                 group_items = []
                 return None
+            post_ts = extract_published_timestamp(group_meta)
+            created_at = (
+                datetime.fromtimestamp(post_ts, tz=UTC)
+                if post_ts is not None
+                else None
+            )
             post = make_post(
                 provider=self.name,
                 source_url=safe_url,
@@ -669,6 +673,7 @@ class GalleryDlProvider(BaseProvider):
                 post_url=group_meta.get("post_url")
                 or group_meta.get("webpage_url")
                 or safe_url,
+                created_at=created_at,
                 metadata_extra={
                     "extractor": category,
                     "group_key": group_key or safe_url,
@@ -763,6 +768,13 @@ class GalleryDlProvider(BaseProvider):
                     "title",
                     "description",
                     "post_url",
+                    "date",
+                    "created_at",
+                    "published_at",
+                    "timestamp",
+                    "release_timestamp",
+                    "createTime",
+                    "created_utc",
                 )
                 for candidate in meta_keys:
                     if not group_meta.get(candidate) and meta.get(candidate):
@@ -808,6 +820,16 @@ class GalleryDlProvider(BaseProvider):
                     format_note=meta.get("format") or "original",
                     http_headers=_http_headers(meta),
                 )
+                published_ts = (
+                    extract_published_timestamp(meta)
+                    or extract_published_timestamp(group_meta)
+                )
+                item_meta: dict[str, Any] = {
+                    "post_key": key,
+                    "extractor": category,
+                }
+                if published_ts is not None:
+                    item_meta["published_timestamp"] = published_ts
                 item = make_media_item(
                     provider=self.name,
                     source_url=safe_url,
@@ -836,10 +858,7 @@ class GalleryDlProvider(BaseProvider):
                     format_info=format_info,
                     provider_media_id=hint,
                     attachment_index=len(group_items),
-                    metadata_extra={
-                        "post_key": key,
-                        "extractor": category,
-                    },
+                    metadata_extra=item_meta,
                 )
                 group_items.append(item)
                 if is_video:

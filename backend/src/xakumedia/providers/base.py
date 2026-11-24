@@ -5,6 +5,8 @@ from __future__ import annotations
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
+from typing import Any
 from urllib.parse import urlsplit
 
 from ..models.media import MediaItem, MediaType
@@ -23,6 +25,24 @@ def host_of(url: str) -> str:
         return (urlsplit(url).hostname or "").lower()
     except ValueError:
         return ""
+
+
+def lookup_cookie_profile(candidate_urls: tuple[str, ...] | list[str]) -> Any | None:
+    """Return the first matching cookie profile across candidate URLs/aliases."""
+    try:
+        from ..db import default_repository
+
+        seen: set[str] = set()
+        for url in candidate_urls:
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            profile = default_repository.get_cookie_profile_for_domain(url)
+            if profile and profile.cookie_file_path:
+                return profile
+    except Exception:
+        return None
+    return None
 
 
 def media_identity(provider: str, provider_media_id: str | None, url: str) -> str:
@@ -78,6 +98,53 @@ def make_media_item(
     )
 
 
+def extract_published_timestamp(raw: dict[str, Any] | None) -> float | None:
+    """Return a UTC Unix epoch timestamp in seconds from common extractor metadata."""
+    if not isinstance(raw, dict):
+        return None
+
+    for key in ("timestamp", "release_timestamp", "createTime", "created_utc"):
+        val = raw.get(key)
+        if isinstance(val, bool) or val is None:
+            continue
+        if isinstance(val, (int, float)):
+            num = float(val)
+            if num > 0:
+                return num / 1000.0 if num > 1e12 else num
+        elif isinstance(val, str) and val.strip():
+            try:
+                num = float(val.strip())
+                if num > 0:
+                    return num / 1000.0 if num > 1e12 else num
+            except ValueError:
+                pass
+
+    for key in ("date", "created_at", "published_at"):
+        val = raw.get(key)
+        if isinstance(val, datetime):
+            dt = val if val.tzinfo is not None else val.replace(tzinfo=UTC)
+            return dt.timestamp()
+        if isinstance(val, str) and val.strip():
+            text = val.strip().replace("Z", "+00:00")
+            try:
+                dt = datetime.fromisoformat(text)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=UTC)
+                return dt.timestamp()
+            except ValueError:
+                pass
+
+    upload_date = raw.get("upload_date")
+    if isinstance(upload_date, str) and len(upload_date) == 8 and upload_date.isdigit():
+        try:
+            dt = datetime.strptime(upload_date, "%Y%m%d").replace(tzinfo=UTC)
+            return dt.timestamp()
+        except ValueError:
+            pass
+
+    return None
+
+
 def make_post(
     *,
     provider: str,
@@ -88,6 +155,7 @@ def make_post(
     media_items: list[MediaItem],
     post_url: str | None = None,
     provider_post_id: str | None = None,
+    created_at: datetime | None = None,
     metadata_extra: dict | None = None,
 ) -> Post:
     """Build a post whose id is stable across scans."""
@@ -105,6 +173,7 @@ def make_post(
         title=title,
         post_type=Post.infer_type(media_items),
         media_items=media_items,
+        created_at=created_at,
         metadata_extra=metadata_extra or {},
     )
 

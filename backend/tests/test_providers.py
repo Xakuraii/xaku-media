@@ -1021,3 +1021,121 @@ def test_ytdlp_tiktok_waf_fallback_extracts_secuid_and_flags_private() -> None:
             _FakeYdl(private_ie),  # type: ignore[arg-type]
             "https://www.tiktok.com/@privateuser",
         )
+
+
+def test_registry_routes_focus_platforms_and_other() -> None:
+    from xakumedia.providers import (
+        FacebookProvider,
+        InstagramProvider,
+        OtherGalleryProvider,
+        OtherProvider,
+        OtherVideoProvider,
+        TikTokProvider,
+        XProvider,
+        YouTubeProvider,
+    )
+
+    assert isinstance(resolve_provider("https://www.tiktok.com/@user"), TikTokProvider)
+    assert isinstance(resolve_provider("https://vm.tiktok.com/ZM123/"), TikTokProvider)
+    assert isinstance(resolve_provider("https://www.youtube.com/@SomeChannel"), YouTubeProvider)
+    assert isinstance(resolve_provider("https://youtu.be/jNQXAC9IVRw"), YouTubeProvider)
+    assert isinstance(resolve_provider("https://x.com/NASA"), XProvider)
+    assert isinstance(resolve_provider("https://twitter.com/NASA"), XProvider)
+    assert isinstance(resolve_provider("https://www.facebook.com/NASA"), FacebookProvider)
+    assert isinstance(resolve_provider("https://fb.watch/abc123/"), FacebookProvider)
+    assert isinstance(resolve_provider("https://www.instagram.com/nasa/"), InstagramProvider)
+    assert isinstance(resolve_provider("https://instagr.am/p/abc123/"), InstagramProvider)
+
+    vimeo = resolve_provider("https://vimeo.com/123456")
+    assert isinstance(vimeo, OtherProvider)
+    assert isinstance(vimeo, OtherVideoProvider)
+    assert vimeo.name == "ytdlp"
+
+    reddit = resolve_provider("https://www.reddit.com/r/pics/")
+    assert isinstance(reddit, OtherProvider)
+    assert isinstance(reddit, OtherGalleryProvider)
+    assert reddit.name == "gallerydl"
+
+
+def test_youtube_provider_injects_js_runtime_and_retries_without_stale_cookies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from yt_dlp.utils import ExtractorError
+
+    from xakumedia.providers.platforms import youtube as yt_module
+
+    monkeypatch.setattr(
+        yt_module.shutil,
+        "which",
+        lambda exe: f"/bin/{exe}" if exe == "node" else None,
+    )
+    provider = yt_module.YouTubeProvider()
+    opts = provider._base_opts()
+    assert opts["js_runtimes"] == {"node": {"path": "/bin/node"}}
+
+    calls: list[str | None] = []
+
+    class _FakeYdl:
+        def __init__(self, ydl_opts: dict) -> None:
+            self._cookie = ydl_opts.get("cookiefile")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> bool:
+            return False
+
+        def extract_info(self, url: str, download: bool = False):
+            calls.append(self._cookie)
+            if self._cookie:
+                raise ExtractorError("Requested format is not available")
+            return {"id": "jNQXAC9IVRw", "formats": [{"format_id": "18"}]}
+
+    monkeypatch.setattr(yt_module.yt_dlp, "YoutubeDL", _FakeYdl)
+    info = provider._extract_single_info(
+        {"cookiefile": "stale_yt_cookies.txt"},
+        "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+    )
+    assert calls == ["stale_yt_cookies.txt", None]
+    assert info["id"] == "jNQXAC9IVRw"
+
+
+def test_focus_platform_cookie_aliases_and_timestamp_extraction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from xakumedia.providers import (
+        FacebookProvider,
+        InstagramProvider,
+        XProvider,
+        YouTubeProvider,
+    )
+    from xakumedia.providers import base as base_module
+    from xakumedia.providers.base import extract_published_timestamp, lookup_cookie_profile
+
+    assert "https://x.com/" in XProvider()._cookie_candidate_urls("https://twitter.com/NASA")
+    assert "https://www.facebook.com/" in FacebookProvider()._cookie_candidate_urls("https://fb.watch/x/")
+    assert "https://www.instagram.com/" in InstagramProvider()._cookie_candidate_urls("https://instagr.am/p/x/")
+    assert "https://www.youtube.com/" in YouTubeProvider()._cookie_candidate_urls("https://youtu.be/abc")
+
+    seen: list[str] = []
+
+    class _FakeRepo:
+        def get_cookie_profile_for_domain(self, url: str):
+            seen.append(url)
+            if url == "https://x.com/":
+                return SimpleNamespace(cookie_file_path="x_cookies.txt")
+            return None
+
+    from xakumedia import db as db_pkg
+
+    monkeypatch.setattr(db_pkg, "default_repository", _FakeRepo())
+    profile = lookup_cookie_profile(XProvider()._cookie_candidate_urls("https://twitter.com/NASA"))
+    assert profile is not None
+    assert profile.cookie_file_path == "x_cookies.txt"
+    assert seen == ["https://twitter.com/NASA", "https://x.com/"]
+    del base_module
+
+    assert extract_published_timestamp({"timestamp": 1700000000}) == 1700000000.0
+    assert extract_published_timestamp({"createTime": 1700000000000}) == 1700000000.0
+    assert extract_published_timestamp({"upload_date": "20050424"}) == 1114300800.0
+    assert extract_published_timestamp({"date": "2024-01-01T00:00:00Z"}) == 1704067200.0

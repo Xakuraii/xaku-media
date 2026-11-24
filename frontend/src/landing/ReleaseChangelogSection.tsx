@@ -4,11 +4,11 @@ import { RELEASE_CONFIG } from "./downloadConfig";
 
 export const ReleaseChangelogSection: React.FC = () => {
   const highlights = [
+    "Dedicated provider adapters for TikTok, YouTube (Shorts & channels), X, Facebook, Instagram, and Other sites",
+    "Oldest-first sequential numbering so #1 lands on the creator's oldest post while keeping slides in order",
+    "Automatic Node/Deno JS runtime detection and stale-cookie recovery for reliable YouTube streams",
     "In-app video player & zoomable image lightbox directly from Scan Media results with inline Skip",
-    "Full TikTok profile & slideshow scanning/downloading with SlardarWAF challenge recovery",
-    "Non-destructive Saved Sources rescanning that keeps downloaded libraries intact",
-    "Top-right Update checker & automatic new-release modal powered by GitHub Releases",
-    "Portable xakumedia-library.json tracking for downloaded & skipped items across devices",
+    "Non-destructive Saved Sources rescanning & portable xakumedia-library.json library preservation",
   ];
 
   return (

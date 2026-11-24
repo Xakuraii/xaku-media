@@ -60,7 +60,7 @@ import { SettingsView } from "./components/SettingsView";
 import { SavedSourcesView } from "./components/SavedSourcesView";
 import { DownloadLibraryView } from "./components/DownloadLibraryView";
 import { BulkScanView } from "./components/bulk-scan/BulkScanView";
-import { chooseFormat } from "./components/bulk-scan/utils";
+import { chooseFormat, orderItemsOldestFirst } from "./components/bulk-scan/utils";
 import { useDesktopTheme } from "./desktop/theme";
 
 export const App: React.FC = () => {
@@ -681,7 +681,8 @@ export const App: React.FC = () => {
     if (!window.api?.startBatchDownload || items.length === 0) return;
     setBatchDownloading(true);
     try {
-      const payload = items.map((item) => ({
+      const orderedItems = orderItemsOldestFirst(items);
+      const payload = orderedItems.map((item) => ({
         media_item: item,
         selected_format: chooseFormat(item, preferredResolution),
       }));
@@ -3386,7 +3387,7 @@ export const App: React.FC = () => {
                       : "XakuMedia Updates"}
                   </h3>
                   <p className="text-xs font-mono text-muted">
-                    Installed version: v{updateInfo?.currentVersion || systemInfo?.version || "1.1.0"}
+                    Installed version: v{updateInfo?.currentVersion || systemInfo?.version || "1.2.0"}
                   </p>
                 </div>
               </div>

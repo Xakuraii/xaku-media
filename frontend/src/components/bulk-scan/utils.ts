@@ -227,3 +227,58 @@ export function statusTone(status: string): string {
     return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300";
   return "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300";
 }
+
+function itemPublishedTimestamp(item: DiscoveredMediaItem): number | null {
+  const raw = (item.metadata_extra as Record<string, unknown> | undefined)?.published_timestamp;
+  return typeof raw === "number" && Number.isFinite(raw) ? raw : null;
+}
+
+/**
+ * Order batch items oldest-first so file #1 lands on the creator's oldest
+ * selected post, while keeping slides within each multi-image album ordered
+ * naturally (attachment_index 0, 1, 2...).
+ */
+export function orderItemsOldestFirst(items: DiscoveredMediaItem[]): DiscoveredMediaItem[] {
+  if (items.length <= 1) return items;
+
+  const groupsMap = new Map<
+    string,
+    { order: number; ts: number | null; items: DiscoveredMediaItem[] }
+  >();
+  for (const item of items) {
+    const key = item.post_id || item.post_url || item.original_url || item.id;
+    let group = groupsMap.get(key);
+    const ts = itemPublishedTimestamp(item);
+    if (!group) {
+      group = { order: groupsMap.size, ts, items: [] };
+      groupsMap.set(key, group);
+    } else if (group.ts === null && ts !== null) {
+      group.ts = ts;
+    }
+    group.items.push(item);
+  }
+
+  const groups = Array.from(groupsMap.values());
+  for (const group of groups) {
+    if (group.items.length > 1) {
+      group.items.sort((a, b) => (a.attachment_index ?? 0) - (b.attachment_index ?? 0));
+    }
+  }
+
+  const hasAnyTimestamp = groups.some((g) => g.ts !== null);
+  if (hasAnyTimestamp) {
+    groups.sort((a, b) => {
+      if (a.ts !== null && b.ts !== null) {
+        if (a.ts !== b.ts) return a.ts - b.ts;
+        return b.order - a.order;
+      }
+      if (a.ts !== null) return -1;
+      if (b.ts !== null) return 1;
+      return b.order - a.order;
+    });
+  } else if (groups.length > 1) {
+    groups.reverse();
+  }
+
+  return groups.flatMap((g) => g.items);
+}

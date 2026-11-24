@@ -97,6 +97,87 @@ def test_batch_download_sequential_naming(
             _drain(manager)
 
 
+def test_batch_download_orders_oldest_first_by_published_timestamp(
+    temp_dest_dir: Path, temp_db: MediaRepository
+) -> None:
+    """Verify #1 lands on the oldest published post while slides keep attachment_index order."""
+    with patch("xakumedia.downloader.manager.default_repository", temp_db):
+        manager = DownloadManager(max_concurrent=3)
+
+        def make_video(item_id: str, ts: float) -> dict:
+            return {
+                "media_item": MediaItem(
+                    id=item_id,
+                    source_url="https://www.tiktok.com/@creator",
+                    media_type=MediaType.VIDEO,
+                    title=item_id,
+                    author="creator",
+                    original_url=f"https://cdn.example.com/{item_id}.mp4",
+                    metadata_extra={"published_timestamp": ts},
+                )
+            }
+
+        def make_slide(item_id: str, ts: float, idx: int) -> dict:
+            return {
+                "media_item": MediaItem(
+                    id=item_id,
+                    source_url="https://www.instagram.com/creator/",
+                    media_type=MediaType.IMAGE,
+                    title=item_id,
+                    author="creator",
+                    original_url=f"https://cdn.example.com/{item_id}.jpg",
+                    post_id="album-mid",
+                    attachment_index=idx,
+                    metadata_extra={"published_timestamp": ts},
+                )
+            }
+
+        # Submitted newest-first (feed order) with slide 1 out of order to verify slide sort too
+        items = [
+            make_video("vid-newest", 300.0),
+            make_video("vid-middle", 200.0),
+            make_video("vid-oldest", 100.0),
+            make_slide("slide-2", 150.0, 1),
+            make_slide("slide-1", 150.0, 0),
+        ]
+        target_dir = temp_dest_dir / "videos"
+
+        def fake_stream(**kwargs) -> Path:
+            return kwargs["destination_path"]
+
+        with patch(
+            "xakumedia.downloader.manager.download_stream", side_effect=fake_stream
+        ):
+            tasks = manager.start_batch_download(items=items, target_dir=target_dir)
+            assert [t.media_item.id for t in tasks] == [
+                "vid-oldest",
+                "slide-1",
+                "slide-2",
+                "vid-middle",
+                "vid-newest",
+            ]
+            video_names = [
+                (t.media_item.id, t.destination_path.name)
+                for t in tasks
+                if t.media_item.media_type == MediaType.VIDEO and t.destination_path
+            ]
+            assert video_names == [
+                ("vid-oldest", "creator-vdo-1.mp4"),
+                ("vid-middle", "creator-vdo-2.mp4"),
+                ("vid-newest", "creator-vdo-3.mp4"),
+            ]
+            img_names = [
+                (t.media_item.id, t.destination_path.name)
+                for t in tasks
+                if t.media_item.media_type == MediaType.IMAGE and t.destination_path
+            ]
+            assert img_names == [
+                ("slide-1", "creator-img-1.jpg"),
+                ("slide-2", "creator-img-2.jpg"),
+            ]
+            _drain(manager)
+
+
 def test_concurrency_throttling_and_scheduling(
     temp_dest_dir: Path, temp_db: MediaRepository
 ) -> None:
