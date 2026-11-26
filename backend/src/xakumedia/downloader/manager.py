@@ -13,6 +13,7 @@ from ..core.config import default_config
 from ..core.logging import get_logger
 from ..db import default_repository
 from ..exceptions import (
+    DownloadCancelledError,
     DownloadError,
     DownloadPausedError,
     MediaUnavailableError,
@@ -761,15 +762,7 @@ class DownloadManager:
         the headers needed to fetch it.
         """
         provider_name = (media_item.provider or "").lower()
-        if provider_name == "gallerydl":
-            from ..providers.gallerydl import GalleryDlProvider
-
-            provider = GalleryDlProvider()
-        elif provider_name == "ytdlp":
-            from ..providers.ytdlp import YtDlpProvider
-
-            provider = YtDlpProvider()
-        else:
+        if provider_name not in ("gallerydl", "ytdlp"):
             return None
 
         page_url = (
@@ -777,8 +770,49 @@ class DownloadManager:
             or media_item.original_url
             or media_item.source_url
         )
+        # Recover direct per-item Facebook page URLs even for legacy DB items
+        extractor_hint = (media_item.metadata_extra or {}).get("extractor")
+        if (
+            extractor_hint == "facebook"
+            and media_item.provider_media_id
+            and (
+                not media_item.post_url
+                or media_item.post_url == media_item.source_url
+                or "/photos" in (media_item.post_url or "")
+            )
+        ):
+            raw_id = str(media_item.provider_media_id).split(":", 1)[0]
+            if raw_id.isdigit():
+                page_url = (
+                    f"https://www.facebook.com/reel/{raw_id}"
+                    if media_item.media_type == MediaType.VIDEO
+                    else f"https://www.facebook.com/photo/?fbid={raw_id}"
+                )
+
         if not page_url.lower().startswith(("http://", "https://")):
             return None
+
+        provider = None
+        try:
+            from ..providers.registry import resolve_provider
+
+            resolved = resolve_provider(page_url)
+            if (resolved.name or "").lower() == provider_name:
+                provider = resolved
+        except Exception:
+            provider = None
+
+        if provider is None:
+            if provider_name == "gallerydl":
+                from ..providers.gallerydl import GalleryDlProvider
+
+                provider = GalleryDlProvider()
+            elif provider_name == "ytdlp":
+                from ..providers.ytdlp import YtDlpProvider
+
+                provider = YtDlpProvider()
+            else:
+                return None
 
         try:
             posts = list(
@@ -1155,7 +1189,10 @@ class DownloadManager:
                 try:
                     final_path = run_plan()
                     break
+                except (DownloadCancelledError, DownloadPausedError):
+                    raise
                 except (
+                    DownloadError,
                     PrivateMediaError,
                     MediaUnavailableError,
                     NetworkTimeoutError,
@@ -1163,13 +1200,23 @@ class DownloadManager:
                 ) as exc:
                     if attempt >= attempts:
                         raise
-                    # Signed CDN URLs expire while a task waits in the queue.
-                    # Ask the owning provider for fresh URLs and try again.
+                    # Signed CDN URLs expire while a task waits in the queue, or a
+                    # transient HTTP 400/5xx/corrupt chunk fails the transfer. Clean up
+                    # stale parts and ask the owning provider for fresh URLs.
                     logger.warning(
                         f"Task {task.id}: attempt {attempt}/{attempts} failed "
                         f"({exc}); refreshing media URLs from the source provider."
                     )
                     cleanup_parts()
+                    if (
+                        isinstance(exc, DownloadError)
+                        and not isinstance(exc, NetworkTimeoutError)
+                        and dest
+                    ):
+                        try:
+                            dest.with_suffix(dest.suffix + ".part").unlink(missing_ok=True)
+                        except OSError:
+                            pass
                     refreshed_item = self._refresh_media_item(media_item)
                     if refreshed_item is not None:
                         fresh_selected = self._match_format(refreshed_item, selected)

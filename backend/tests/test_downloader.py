@@ -679,3 +679,66 @@ def test_download_manager_shares_one_stream_client(
         assert repo.get_download_task(second.id).status == TaskStatus.COMPLETED
     finally:
         manager._stream_client().close()
+
+
+def test_download_manager_refreshes_expired_facebook_url_on_download_error(
+    temp_dest_dir: Path, tmp_path: Path
+) -> None:
+    """Transient HTTP 400 / DownloadError triggers URL refresh + retry for Facebook."""
+    from xakumedia.exceptions import DownloadError
+
+    repo = MediaRepository(tmp_path / "fb_retry.db")
+    manager = DownloadManager(max_concurrent=1, repository=repo)
+
+    stale_fmt = MediaFormatInfo(
+        format_id="hd",
+        container="mp4",
+        video_codec="h264",
+        audio_codec="aac",
+        url="https://cdn.example.com/fb-stale.mp4",
+    )
+    fresh_fmt = MediaFormatInfo(
+        format_id="hd",
+        container="mp4",
+        video_codec="h264",
+        audio_codec="aac",
+        url="https://cdn.example.com/fb-fresh.mp4",
+    )
+    item = _video_item_with([stale_fmt])
+    item.provider = "gallerydl"
+    item.provider_media_id = "99887766"
+    item.source_url = "https://www.facebook.com/61580886670213"
+    item.post_url = "https://www.facebook.com/61580886670213"
+    item.metadata_extra = {"extractor": "facebook"}
+
+    fresh_item = item.model_copy(deep=True)
+    fresh_item.original_url = fresh_fmt.url
+    fresh_item.available_formats = [fresh_fmt]
+
+    attempted_urls: list[str] = []
+
+    import xakumedia.downloader.manager as dm_mod
+
+    def fake_stream(url: str, destination_path: Path, **kwargs: Any) -> Path:
+        attempted_urls.append(url)
+        if "fb-stale" in url:
+            raise DownloadError("HTTP error 400: Bad Request")
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        destination_path.write_bytes(b"ok-fb-bytes")
+        return destination_path
+
+    with (
+        patch.object(dm_mod, "download_stream", side_effect=fake_stream),
+        patch.object(manager, "_refresh_media_item", return_value=fresh_item) as refresh_mock,
+    ):
+        task = manager.start_download(media_item=item, selected_format=stale_fmt)
+        manager._executor.shutdown(wait=True)
+
+    stored = repo.get_download_task(task.id)
+    assert stored is not None
+    assert stored.status == TaskStatus.COMPLETED
+    assert attempted_urls == [
+        "https://cdn.example.com/fb-stale.mp4",
+        "https://cdn.example.com/fb-fresh.mp4",
+    ]
+    refresh_mock.assert_called_once()
