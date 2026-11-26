@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, protocol, session, shell } from "electron";
 import crypto from "crypto";
 import fs from "fs";
 import http from "http";
@@ -37,6 +37,55 @@ let isQuitting = false;
 let libraryWatcher: fs.FSWatcher | null = null;
 let watchedDownloadDir: string | null = null;
 let libraryNotifyTimer: NodeJS.Timeout | null = null;
+type CachedThemePreference = "dark" | "light" | "system";
+let activeThemePreference: CachedThemePreference | null = null;
+
+function getThemeCachePath(): string {
+  return path.join(app.getPath("userData"), "theme-cache.json");
+}
+
+function resolveThemePreferenceIsDark(pref: CachedThemePreference | null): boolean {
+  if (pref === "light") return false;
+  if (pref === "system") return nativeTheme.shouldUseDarkColors;
+  return true;
+}
+
+function getStartupThemePreference(): CachedThemePreference {
+  if (activeThemePreference) return activeThemePreference;
+  try {
+    const cacheFile = getThemeCachePath();
+    if (fs.existsSync(cacheFile)) {
+      const parsed = JSON.parse(fs.readFileSync(cacheFile, "utf-8"));
+      const t = parsed?.theme;
+      if (t === "light" || t === "dark" || t === "system") {
+        activeThemePreference = t;
+        return t;
+      }
+    }
+  } catch {
+    // Best-effort cache read
+  }
+  return "dark";
+}
+
+function syncThemePreference(rawTheme: unknown): void {
+  if (rawTheme !== "light" && rawTheme !== "dark" && rawTheme !== "system") return;
+  activeThemePreference = rawTheme;
+  try {
+    fs.mkdirSync(app.getPath("userData"), { recursive: true });
+    fs.writeFileSync(
+      getThemeCachePath(),
+      JSON.stringify({ theme: rawTheme }),
+      "utf-8"
+    );
+  } catch {
+    // Best-effort cache write
+  }
+  const bg = resolveThemePreferenceIsDark(rawTheme) ? "#0b0c10" : "#f4f5f7";
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setBackgroundColor(bg);
+  }
+}
 
 interface PreviewStreamEntry {
   url: string;
@@ -847,13 +896,20 @@ function safeHttpsUrl(raw: unknown): string | null {
   });
 
   ipcMain.handle("preferences:get", async () => {
-    return pythonBridge.sendRequest("get_preferences");
+    const prefs = await pythonBridge.sendRequest<AppPreferences>("get_preferences");
+    if (prefs?.theme) {
+      syncThemePreference(prefs.theme);
+    }
+    return prefs;
   });
 
   ipcMain.handle("preferences:update", async (_event, preferences: Partial<AppPreferences>) => {
     const updated = await pythonBridge.sendRequest<AppPreferences>("update_preferences", {
       preferences,
     });
+    if (updated?.theme) {
+      syncThemePreference(updated.theme);
+    }
     if (updated?.download_dir) {
       startLibraryWatcher(updated.download_dir);
       notifyLibraryChanged();
@@ -863,6 +919,9 @@ function safeHttpsUrl(raw: unknown): string | null {
 
   ipcMain.handle("preferences:reset", async () => {
     const defaults = await pythonBridge.sendRequest<AppPreferences>("reset_preferences");
+    if (defaults?.theme) {
+      syncThemePreference(defaults.theme);
+    }
     if (defaults?.download_dir) {
       startLibraryWatcher(defaults.download_dir);
       notifyLibraryChanged();
@@ -988,12 +1047,17 @@ function createWindow(): void {
     ? fallbackIcon
     : undefined;
 
+  const initialTheme = getStartupThemePreference();
+  const initialBackground = resolveThemePreferenceIsDark(initialTheme)
+    ? "#0b0c10"
+    : "#f4f5f7";
+
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     minWidth: 960,
     minHeight: 640,
-    backgroundColor: "#0b0c10",
+    backgroundColor: initialBackground,
     title: "XakuMedia",
     icon: windowIcon,
     show: false, // Prevent white flash before ready-to-show
@@ -1220,8 +1284,10 @@ function createWindow(): void {
 
   // Load the appropriate interface
   if (isDev) {
-    const devUrl = process.env.VITE_DEV_SERVER_URL || "http://localhost:5173";
-    mainWindow.loadURL(devUrl);
+    const devBase = process.env.VITE_DEV_SERVER_URL || "http://localhost:5173";
+    const devUrl = new URL(devBase);
+    devUrl.searchParams.set("desktopTheme", initialTheme);
+    mainWindow.loadURL(devUrl.toString());
   } else {
     const candidates = [
       path.join(__dirname, "../../frontend/dist/index.html"),
@@ -1229,7 +1295,7 @@ function createWindow(): void {
       path.join(app.getAppPath(), "frontend/dist/index.html"),
     ];
     const prodPath = candidates.find((p) => fs.existsSync(p)) || candidates[0];
-    mainWindow.loadFile(prodPath);
+    mainWindow.loadFile(prodPath, { query: { desktopTheme: initialTheme } });
   }
 
   mainWindow.on("closed", () => {
@@ -1355,6 +1421,9 @@ app.whenReady().then(async () => {
     }
     try {
       const prefs = await pythonBridge.sendRequest<AppPreferences>("get_preferences", {});
+      if (prefs?.theme) {
+        syncThemePreference(prefs.theme);
+      }
       if (prefs?.download_dir) {
         startLibraryWatcher(prefs.download_dir);
       }
