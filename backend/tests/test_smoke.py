@@ -4,4 +4,4 @@ import xakumedia
 
 
 def test_package_version() -> None:
-    assert xakumedia.__version__ == "1.2.0"
+    assert xakumedia.__version__ == "1.3.0"
