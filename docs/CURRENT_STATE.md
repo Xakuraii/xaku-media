@@ -1,8 +1,8 @@
 # XakuMedia — Current Project State
 
-**Last Updated:** November 25, 2026
-**Active Milestone:** Release v1.2.0 — Per-Platform Focus Modules, Oldest-First Numbering & Windows Dist
-**Overall Status:** Completed for v1.2.0 - all focus platforms, oldest-first sequential naming, unit/build checks, and Windows installers verified; gallery-dl platforms remain subject to site/auth coverage
+**Last Updated:** November 27, 2026
+**Active Milestone:** Release v1.3.0 — Full Paginated Facebook Discovery, Preview Audio, UI Filters & Theme Pre-Paint
+**Overall Status:** Completed for v1.3.0 - paginated Facebook Reels/Videos discovery, DASH + muxed audio preview/download reliability, Saved Sources platform filters & avatar preview modal, per-scan Clear button, zero-flash CSP-safe startup theme init, unit/smoke checks, and Windows installers verified; gallery-dl platforms remain subject to site/auth coverage
 
 ---
 
@@ -291,6 +291,11 @@ The system relies on a secure 3-tier desktop architecture:
     - Added `extract_published_timestamp` across `ytdlp.py` and `gallerydl.py` (`published_timestamp` + `post.created_at`) and chronological oldest-first ordering in `DownloadManager.start_batch_download`, `BulkScanView.tsx`, and `App.tsx` (`orderItemsOldestFirst`) so `#1` is assigned to the creator's oldest post while multi-image album slides remain in natural `attachment_index` order (`0, 1, 2...`).
   - **Verification:** `ruff check backend/` clean; `tsc --noEmit` clean; `pytest backend/` **248 passed**; `npm run build:all` clean; live scans across all 5 focus platforms verified (`YouTube` video `22` formats, Shorts `39–40` formats, channel `42` formats; `TikTok` `@dorybbi` `3` posts / `7` formats; `X` `@NASA` `3` posts; `Instagram` `@nasa` `3` posts with images + reel; `Facebook` `/NASA` `4`-image album + prior reels).
   - **Version 1.2.0 Release Packaging (`package.json`, `pyproject.toml`, `downloadConfig.ts`, `dist-package/`):** Audited local DB and `schema.py` (0 sample/seed rows present; user's real history preserved intact), bumped all app/backend/frontend/landing/test versions to `1.2.0` (`v1.2.0`), updated `ReleaseChangelogSection.tsx` highlights, reinstalled editable backend (`pip install --no-deps -e backend`), and built Windows installers (`dist-package/XakuMedia-Setup-1.2.0.exe`, 171 MB / `179,298,659` bytes; `dist-package/XakuMedia-Portable-1.2.0.exe`, 151 MB / `158,442,498` bytes; `dist-package/win-unpacked/XakuMedia.exe`).
+  - **Facebook Full Pagination, Download Reliability, Audio Preview, Saved Sources Filters, Scan Clear & Theme Pre-Paint (`v1.3.0`):**
+    - Upgraded `FacebookProvider` (`providers/platforms/facebook.py`) to normalize `profile.php?id=...&sk=reels_tab|videos|photos`, `/people/...`, `/<user>/reels`, and `/<user>/videos`, paginate all Reels (`ProfileCometAppCollectionReelsRendererPaginationQuery`) and Videos (`PagesCometChannelTabAllVideosCardImplPaginationQuery`) via GraphQL, parse multi-resolution XML `<MPD>` DASH + progressive streams (`requires_merge=True` on video-only DASH tracks), and set direct photo `post_url` targets (`gallerydl.py`) + `DownloadManager` provider-resolved retries (`DownloadError` recovery).
+    - Updated `pickPlayableRemoteStream` (`App.tsx`) to prioritize tracks with audio tracks (`audio_codec`) over silent video-only DASH streams so remote previews play with audio cleanly.
+    - Added platform category filter tabs (`All`, `FB`, `IG`, `TikTok`, `X`, `YT`, `Others`) and click-to-preview avatar lightbox modal in `SavedSourcesView.tsx`, per-scan `Clear` buttons in **Scan History** (`App.tsx`), and CSP-safe pre-paint theme initialization (`frontend/public/theme-init.js`, synchronous `useDesktopTheme`, Electron `theme-cache.json` + `BrowserWindow.backgroundColor`).
+  - **Version 1.3.0 Release Packaging (`package.json`, `pyproject.toml`, `downloadConfig.ts`, `dist-package/`):** Bumped versions to `1.3.0` (`v1.3.0`), reinstalled editable backend (`xakumedia-1.3.0`), updated `ReleaseChangelogSection.tsx`, verified `ruff`, `tsc --noEmit`, `251` pytest cases, `npm run build:all`, and `npm run test:desktop` (`theme=light`, all IPC checks), and built Windows installers (`dist-package/XakuMedia-Setup-1.3.0.exe`, 171 MB / `179,323,351` bytes; `dist-package/XakuMedia-Portable-1.3.0.exe`, 151 MB / `158,449,065` bytes; `dist-package/win-unpacked/XakuMedia.exe`).
 
 ---
 
