@@ -256,7 +256,9 @@ def parse_facebook_dash_mpd(xml_string: str) -> tuple[list[MediaFormatInfo], flo
 
     ordered: list[MediaFormatInfo] = []
     seen_ids: set[str] = set()
+    has_audio = bool(audio_formats)
     for _, fmt in video_formats:
+        fmt.requires_merge = has_audio
         if fmt.format_id in seen_ids:
             fmt.format_id = f"{fmt.format_id}-{len(seen_ids) + 1}"
         seen_ids.add(fmt.format_id)
@@ -769,7 +771,7 @@ class FacebookProvider(GalleryDlProvider):
                 MediaFormatInfo(
                     format_id=fmt_id,
                     container="mp4",
-                    resolution=f"?x{height}",
+                    resolution=f"{height}p",
                     video_codec="h264",
                     audio_codec="aac",
                     height=height,
@@ -873,7 +875,7 @@ class FacebookProvider(GalleryDlProvider):
                             MediaFormatInfo(
                                 format_id=fmt_id,
                                 container="mp4",
-                                resolution=f"?x{h}",
+                                resolution=f"{h}p",
                                 video_codec="h264",
                                 audio_codec="aac",
                                 height=h,

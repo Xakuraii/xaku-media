@@ -1193,6 +1193,8 @@ def test_facebook_url_parsing_and_dash_mpd_formats() -> None:
     formats, duration = parse_facebook_dash_mpd(mpd)
     assert duration == 12.5
     assert [f.format_id for f in formats] == ["720p-h264", "720p-av1", "360p-vp9", "audio"]
+    assert all(f.requires_merge for f in formats[:-1])
+    assert not formats[-1].requires_merge
     assert formats[0].url == "https://video.fbcdn.net/h264-720.mp4?a=1&b=2"
     assert formats[-1].audio_codec == "aac"
 

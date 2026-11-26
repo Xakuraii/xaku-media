@@ -232,7 +232,7 @@ export const App: React.FC = () => {
         if (!res) return 0;
         const pMatch = res.match(/(\d+)p/i);
         if (pMatch) return Number.parseInt(pMatch[1], 10) || 0;
-        const xMatch = res.match(/\d+\s*[xX×]\s*(\d+)/);
+        const xMatch = res.match(/(?:\d+|\?)\s*[xX×]\s*(\d+)/);
         return xMatch ? Number.parseInt(xMatch[1], 10) || 0 : 0;
       };
       const targetHeight = preferredResolution === "best" ? 2160 : parseHeight(preferredResolution) || 1080;
@@ -241,12 +241,14 @@ export const App: React.FC = () => {
         const codecText = `${f.video_codec || ""} ${f.format_id || ""}`;
         const isHevc = /h265|hevc|bytevc|hvc1|hev1/i.test(codecText);
         const isWebVideo = /h264|avc|vp8|vp9|av1/i.test(codecText);
+        const hasAudioTrack = Boolean(f.audio_codec && f.audio_codec.toLowerCase() !== "none");
         const container = (f.container || "").toLowerCase();
         const isWebContainer = container === "mp4" || container === "webm";
-        const height = parseHeight(f.resolution);
+        const height = f.height || parseHeight(f.resolution);
         const cappedHeight = height > 0 ? Math.min(height, targetHeight) : 0;
 
         let score = 0;
+        if (hasAudioTrack) score += 1000;
         if (!f.requires_merge) score += 500;
         if (isHevc) score -= 1000;
         else if (isWebVideo) score += 200;
