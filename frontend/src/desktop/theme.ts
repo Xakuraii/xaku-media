@@ -42,14 +42,45 @@ export function applyTheme(preference: ThemePreference): ResolvedTheme {
   return resolved;
 }
 
+function readInitialPreference(): ThemePreference {
+  if (typeof window !== "undefined") {
+    try {
+      const cached = localStorage.getItem(PREPAINT_KEY);
+      if (cached === "dark" || cached === "light" || cached === "system") {
+        return cached;
+      }
+      const queryTheme = new URLSearchParams(window.location.search).get("desktopTheme");
+      if (queryTheme === "dark" || queryTheme === "light" || queryTheme === "system") {
+        return queryTheme;
+      }
+    } catch {
+      // Ignore storage access errors.
+    }
+    if (document.documentElement.classList.contains("light")) {
+      return "light";
+    }
+  }
+  return "dark";
+}
+
+function readInitialResolved(initialPref: ThemePreference): ResolvedTheme {
+  if (typeof document !== "undefined") {
+    if (document.documentElement.classList.contains("light")) return "light";
+    if (document.documentElement.classList.contains("dark")) return "dark";
+  }
+  return resolveTheme(initialPref);
+}
+
 /**
  * Desktop theme controller. The preference is persisted in SQLite by the
  * Python engine and mirrored to localStorage so the pre-paint script can
  * avoid a flash on the next launch.
  */
 export function useDesktopTheme() {
-  const [preference, setPreferenceState] = useState<ThemePreference>("dark");
-  const [resolved, setResolved] = useState<ResolvedTheme>("dark");
+  const [preference, setPreferenceState] = useState<ThemePreference>(readInitialPreference);
+  const [resolved, setResolved] = useState<ResolvedTheme>(() =>
+    readInitialResolved(readInitialPreference())
+  );
   const [ready, setReady] = useState(false);
   // If the user toggles before the stored preference resolves, their click wins.
   const interacted = useRef(false);

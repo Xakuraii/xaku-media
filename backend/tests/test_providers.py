@@ -1139,3 +1139,169 @@ def test_focus_platform_cookie_aliases_and_timestamp_extraction(
     assert extract_published_timestamp({"createTime": 1700000000000}) == 1700000000.0
     assert extract_published_timestamp({"upload_date": "20050424"}) == 1114300800.0
     assert extract_published_timestamp({"date": "2024-01-01T00:00:00Z"}) == 1704067200.0
+
+
+def test_facebook_url_parsing_and_dash_mpd_formats() -> None:
+    from xakumedia.providers.platforms.facebook import (
+        FacebookProvider,
+        _parse_facebook_url,
+        parse_facebook_dash_mpd,
+    )
+
+    t_reels = _parse_facebook_url(
+        "https://www.facebook.com/profile.php?id=61580886670213&sk=reels_tab"
+    )
+    assert t_reels.scope == "reels"
+    assert t_reels.profile_base == "https://www.facebook.com/61580886670213"
+
+    t_photos = _parse_facebook_url(
+        "https://www.facebook.com/profile.php?id=61580886670213&sk=photos"
+    )
+    assert t_photos.scope == "photos"
+    assert t_photos.canonical_gallery_url == "https://www.facebook.com/61580886670213/photos"
+
+    t_tab = _parse_facebook_url("https://www.facebook.com/NASA/videos")
+    assert t_tab.scope == "videos"
+    assert FacebookProvider().classify("https://www.facebook.com/NASA/reels").is_supported
+
+    mpd = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<MPD mediaPresentationDuration="PT12.5S">\n'
+        '  <Period id="0">\n'
+        '    <AdaptationSet contentType="video">\n'
+        '      <Representation id="v1" codecs="av01.0.08M" width="720" '
+        'height="1280" FBQualityLabel="720p" bandwidth="1200000">\n'
+        "        <BaseURL>https://video.fbcdn.net/av1-720.mp4?a=1&amp;b=2</BaseURL>\n"
+        "      </Representation>\n"
+        '      <Representation id="v2" codecs="avc1.64001f" width="720" '
+        'height="1280" FBQualityLabel="720p" bandwidth="1500000">\n'
+        "        <BaseURL>https://video.fbcdn.net/h264-720.mp4?a=1&amp;b=2</BaseURL>\n"
+        "      </Representation>\n"
+        '      <Representation id="v3" codecs="vp09.00.21.08" width="360" '
+        'height="640" FBQualityLabel="360p" bandwidth="500000">\n'
+        "        <BaseURL>https://video.fbcdn.net/vp9-360.mp4</BaseURL>\n"
+        "      </Representation>\n"
+        "    </AdaptationSet>\n"
+        '    <AdaptationSet contentType="audio">\n'
+        '      <Representation id="a1" codecs="mp4a.40.5" bandwidth="64000">\n'
+        "        <BaseURL>https://video.fbcdn.net/audio.m4a</BaseURL>\n"
+        "      </Representation>\n"
+        "    </AdaptationSet>\n"
+        "  </Period>\n"
+        "</MPD>"
+    )
+    formats, duration = parse_facebook_dash_mpd(mpd)
+    assert duration == 12.5
+    assert [f.format_id for f in formats] == ["720p-h264", "720p-av1", "360p-vp9", "audio"]
+    assert all(f.requires_merge for f in formats[:-1])
+    assert not formats[-1].requires_merge
+    assert formats[0].url == "https://video.fbcdn.net/h264-720.mp4?a=1&b=2"
+    assert formats[-1].audio_codec == "aac"
+
+
+def test_facebook_provider_paginates_all_reels_via_graphql(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+
+    from xakumedia.providers.platforms.facebook import FacebookProvider
+
+    html_page = (
+        '"DTSGInitialData",[],{"token":"dtsg-tok"}'
+        '"LSD",[],{"token":"lsd-tok"}'
+        '"aggregated_fb_shorts":{"edges":[],"page_info":'
+        '{"end_cursor":"c1","has_next_page":true}},"id":"COL123"'
+    )
+    mpd_1 = (
+        '<?xml version="1.0"?><MPD mediaPresentationDuration="PT5S"><Period>'
+        '<AdaptationSet contentType="video">'
+        '<Representation codecs="avc1" width="720" height="1280" FBQualityLabel="720p">'
+        "<BaseURL>https://cdn.example.com/r1.mp4</BaseURL></Representation></AdaptationSet>"
+        '<AdaptationSet contentType="audio"><Representation codecs="mp4a.40.5">'
+        "<BaseURL>https://cdn.example.com/r1.m4a</BaseURL></Representation></AdaptationSet>"
+        "</Period></MPD>"
+    )
+    mpd_2 = mpd_1.replace("r1.", "r2.")
+
+    page1 = json.dumps({
+        "data": {
+            "node": {
+                "aggregated_fb_shorts": {
+                    "edges": [{
+                        "profile_reel_node": {
+                            "node": {
+                                "tracking": '{"publish_time":1700000001}',
+                                "attachments": [{
+                                    "media": {
+                                        "id": "101",
+                                        "permalink_url": "https://www.facebook.com/reel/101/",
+                                        "first_frame_thumbnail": "https://cdn.example.com/t1.jpg",
+                                        "videoDeliveryLegacyFields": {
+                                            "dash_manifest_xml_string": mpd_1
+                                        },
+                                    }
+                                }],
+                            }
+                        }
+                    }],
+                    "page_info": {"end_cursor": "cursor-2", "has_next_page": True},
+                }
+            }
+        }
+    })
+    page2 = json.dumps({
+        "data": {
+            "node": {
+                "aggregated_fb_shorts": {
+                    "edges": [{
+                        "profile_reel_node": {
+                            "node": {
+                                "tracking": '{"publish_time":1700000002}',
+                                "attachments": [{
+                                    "media": {
+                                        "id": "102",
+                                        "permalink_url": "https://www.facebook.com/reel/102/",
+                                        "first_frame_thumbnail": "https://cdn.example.com/t2.jpg",
+                                        "videoDeliveryLegacyFields": {
+                                            "dash_manifest_xml_string": mpd_2
+                                        },
+                                    }
+                                }],
+                            }
+                        }
+                    }],
+                    "page_info": {"end_cursor": None, "has_next_page": False},
+                }
+            }
+        }
+    })
+
+    gql_calls: list[str | None] = []
+
+    class _FakeExtractor:
+        def request(self, url: str, method: str = "GET", fatal: bool = True, **kwargs):
+            del fatal
+            if "api/graphql" in url:
+                variables = json.loads(kwargs["data"]["variables"])
+                cursor = variables.get("cursor")
+                gql_calls.append(cursor)
+                body = page1 if cursor is None else page2
+                return SimpleNamespace(status_code=200, text=body, url=url)
+            return SimpleNamespace(status_code=200, text=html_page, url=url)
+
+    monkeypatch.setattr(FacebookProvider, "_prepare_extractor", lambda self, url: _FakeExtractor())
+
+    posts = list(
+        FacebookProvider().iter_posts(
+            "https://www.facebook.com/profile.php?id=61580886670213&sk=reels_tab",
+            ScanOptions(include_videos=True, include_images=False),
+            threading.Event(),
+        )
+    )
+
+    assert gql_calls == [None, "cursor-2"]
+    assert [p.media_items[0].provider_media_id for p in posts] == ["101", "102"]
+    assert [p.media_items[0].thumbnail_url for p in posts] == [
+        "https://cdn.example.com/t1.jpg",
+        "https://cdn.example.com/t2.jpg",
+    ]

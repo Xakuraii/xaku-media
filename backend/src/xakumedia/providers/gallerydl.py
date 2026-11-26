@@ -662,6 +662,25 @@ class GalleryDlProvider(BaseProvider):
                 if post_ts is not None
                 else None
             )
+            resolved_post_url = (
+                group_meta.get("post_url")
+                or group_meta.get("webpage_url")
+                or safe_url
+            )
+            if (
+                category == FACEBOOK_CATEGORY
+                and not group_meta.get("post_url")
+                and not group_meta.get("webpage_url")
+                and all(item.media_type == MediaType.IMAGE for item in group_items)
+            ):
+                fb_photo_id = group_meta.get("id") or group_items[0].provider_media_id
+                if fb_photo_id and str(fb_photo_id).isdigit():
+                    set_id = group_meta.get("set_id")
+                    resolved_post_url = (
+                        f"https://www.facebook.com/photo/?fbid={fb_photo_id}&set={set_id}"
+                        if set_id
+                        else f"https://www.facebook.com/photo/?fbid={fb_photo_id}"
+                    )
             post = make_post(
                 provider=self.name,
                 source_url=safe_url,
@@ -670,9 +689,7 @@ class GalleryDlProvider(BaseProvider):
                 author=_author_label(group_meta),
                 title=group_meta.get("title") or group_meta.get("description"),
                 media_items=list(group_items),
-                post_url=group_meta.get("post_url")
-                or group_meta.get("webpage_url")
-                or safe_url,
+                post_url=resolved_post_url,
                 created_at=created_at,
                 metadata_extra={
                     "extractor": category,

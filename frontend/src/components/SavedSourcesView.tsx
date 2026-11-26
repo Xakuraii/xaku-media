@@ -15,6 +15,7 @@ import {
   ArrowRight,
   Filter,
   X,
+  ZoomIn,
 } from "lucide-react";
 import type {
   DiscoveredMediaItem,
@@ -27,6 +28,73 @@ interface SavedSourcesViewProps {
   onScanUrl: (url: string) => void;
   onBatchDownload?: (items: DiscoveredMediaItem[]) => void;
   onNavigateToDownloads?: () => void;
+}
+
+type PlatformCategory = "all" | "facebook" | "instagram" | "tiktok" | "x" | "youtube" | "others";
+
+const PLATFORM_CATEGORY_TABS: ReadonlyArray<{ id: PlatformCategory; label: string }> = [
+  { id: "all", label: "All" },
+  { id: "facebook", label: "FB" },
+  { id: "instagram", label: "IG" },
+  { id: "tiktok", label: "TikTok" },
+  { id: "x", label: "X" },
+  { id: "youtube", label: "YT" },
+  { id: "others", label: "Others" },
+];
+
+function classifySourcePlatform(source: SavedSourceRecord): Exclude<PlatformCategory, "all"> {
+  const platformText = (source.platform || "").trim().toLowerCase();
+  let host = "";
+  try {
+    host = new URL(source.url).hostname.toLowerCase();
+  } catch {
+    host = source.url.toLowerCase();
+  }
+
+  if (
+    platformText === "tiktok" ||
+    host === "tiktok.com" ||
+    host.endsWith(".tiktok.com")
+  ) {
+    return "tiktok";
+  }
+  if (
+    platformText === "instagram" ||
+    host === "instagram.com" ||
+    host.endsWith(".instagram.com") ||
+    host === "instagr.am"
+  ) {
+    return "instagram";
+  }
+  if (
+    platformText === "facebook" ||
+    host === "facebook.com" ||
+    host.endsWith(".facebook.com") ||
+    host === "fb.com" ||
+    host.endsWith(".fb.com") ||
+    host === "fb.watch"
+  ) {
+    return "facebook";
+  }
+  if (
+    platformText === "x" ||
+    platformText === "twitter" ||
+    host === "x.com" ||
+    host.endsWith(".x.com") ||
+    host === "twitter.com" ||
+    host.endsWith(".twitter.com")
+  ) {
+    return "x";
+  }
+  if (
+    platformText === "youtube" ||
+    host === "youtube.com" ||
+    host.endsWith(".youtube.com") ||
+    host === "youtu.be"
+  ) {
+    return "youtube";
+  }
+  return "others";
 }
 
 function isVideoAvatarUrl(url: string): boolean {
@@ -44,7 +112,8 @@ const SourceAvatar: React.FC<{
   thumbnailUrl?: string | null;
   author?: string | null;
   title: string;
-}> = ({ thumbnailUrl, author, title }) => {
+  onPreview?: () => void;
+}> = ({ thumbnailUrl, author, title, onPreview }) => {
   const [failed, setFailed] = useState(false);
   const label = (author || title || "?").replace(/^@/, "").trim();
   const initials = label.slice(0, 2).toUpperCase() || "?";
@@ -53,20 +122,19 @@ const SourceAvatar: React.FC<{
     setFailed(false);
   }, [thumbnailUrl]);
 
-  if (thumbnailUrl && !failed) {
-    if (isVideoAvatarUrl(thumbnailUrl)) {
-      return (
-        <video
-          src={`${thumbnailUrl}#t=0.5`}
-          muted
-          playsInline
-          preload="metadata"
-          onError={() => setFailed(true)}
-          className="h-11 w-11 shrink-0 rounded-full border border-hairline bg-raised object-cover"
-        />
-      );
-    }
-    return (
+  const canPreview = Boolean(thumbnailUrl && !failed && onPreview);
+
+  const mediaElement = thumbnailUrl && !failed ? (
+    isVideoAvatarUrl(thumbnailUrl) ? (
+      <video
+        src={`${thumbnailUrl}#t=0.5`}
+        muted
+        playsInline
+        preload="metadata"
+        onError={() => setFailed(true)}
+        className="h-11 w-11 shrink-0 rounded-full border border-hairline bg-raised object-cover"
+      />
+    ) : (
       <img
         src={thumbnailUrl}
         alt={label}
@@ -74,13 +142,29 @@ const SourceAvatar: React.FC<{
         onError={() => setFailed(true)}
         className="h-11 w-11 shrink-0 rounded-full border border-hairline bg-raised object-cover"
       />
-    );
-  }
-
-  return (
+    )
+  ) : (
     <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-accent/30 bg-accent/10 font-mono text-xs font-bold text-accent">
       {initials}
     </div>
+  );
+
+  if (!canPreview) {
+    return mediaElement;
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onPreview}
+      className="group relative h-11 w-11 shrink-0 rounded-full focus:outline-none focus:ring-2 focus:ring-accent/50"
+      title={`Preview avatar for ${label}`}
+    >
+      {mediaElement}
+      <span className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-full bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100">
+        <ZoomIn className="h-4 w-4" />
+      </span>
+    </button>
   );
 };
 
@@ -93,7 +177,9 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const [selectedPlatform, setSelectedPlatform] = useState<PlatformCategory>("all");
   const [selectedTag, setSelectedTag] = useState<string>("all");
+  const [previewAvatar, setPreviewAvatar] = useState<SavedSourceRecord | null>(null);
   const [activeRescanId, setActiveRescanId] = useState<string | null>(null);
   const [isRescanningAll, setIsRescanningAll] = useState<boolean>(false);
   const [rescanResult, setRescanResult] = useState<IncrementalScanResult | null>(null);
@@ -141,13 +227,40 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
     loadSources();
   }, []);
 
+  useEffect(() => {
+    if (!previewAvatar) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setPreviewAvatar(null);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [previewAvatar]);
+
   // Compute unique tags from all sources
   const allTags = Array.from(
     new Set(sources.flatMap((s) => s.tags || []).filter(Boolean))
   ).sort();
 
-  // Filter sources based on query and selected tag
+  const platformCounts: Record<PlatformCategory, number> = {
+    all: sources.length,
+    facebook: 0,
+    instagram: 0,
+    tiktok: 0,
+    x: 0,
+    youtube: 0,
+    others: 0,
+  };
+  for (const s of sources) {
+    platformCounts[classifySourcePlatform(s)] += 1;
+  }
+
+  // Filter sources based on platform category, query, and selected tag
   const filteredSources = sources.filter((s) => {
+    const matchesPlatform =
+      selectedPlatform === "all" || classifySourcePlatform(s) === selectedPlatform;
+
     const matchesQuery =
       searchQuery.trim() === "" ||
       s.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -158,7 +271,7 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
       selectedTag === "all" ||
       (s.tags && s.tags.some((t) => t.toLowerCase() === selectedTag.toLowerCase()));
 
-    return matchesQuery && matchesTag;
+    return matchesPlatform && matchesQuery && matchesTag;
   });
 
   const handleAddSource = async () => {
@@ -369,47 +482,76 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
         </div>
       )}
 
-      {/* Filter and Search Bar */}
-      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-surface border border-hairline rounded-2xl p-4 shadow-card">
-        <div className="flex-1 relative">
-          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted" />
-          <input
-            type="text"
-            placeholder="Search by title, author, or URL..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-page border border-hairline rounded-xl pl-9 pr-3.5 py-2 text-xs text-ink/90 placeholder-faint font-mono focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
-          />
+      {/* Platform Category Tabs + Filter and Search Bar */}
+      <div className="space-y-3 bg-surface border border-hairline rounded-2xl p-4 shadow-card">
+        <div className="flex flex-wrap items-center gap-1.5 pb-2 border-b border-hairline text-xs font-mono">
+          {PLATFORM_CATEGORY_TABS.map((tab) => {
+            const active = selectedPlatform === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setSelectedPlatform(tab.id)}
+                className={`px-3 py-1.5 rounded-xl transition-colors flex items-center space-x-1.5 ${
+                  active
+                    ? "bg-accent text-on-accent font-bold shadow-sm shadow-accent/20"
+                    : "bg-page border border-hairline text-muted hover:text-ink hover:bg-raised"
+                }`}
+              >
+                <span>{tab.label}</span>
+                <span
+                  className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                    active ? "bg-black/15 text-on-accent" : "bg-raised text-muted"
+                  }`}
+                >
+                  {platformCounts[tab.id]}
+                </span>
+              </button>
+            );
+          })}
         </div>
 
-        {/* Tag Pills */}
-        <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 md:pb-0 text-xs font-mono">
-          <Filter className="h-3.5 w-3.5 text-muted shrink-0 ml-1" />
-          <button
-            type="button"
-            onClick={() => setSelectedTag("all")}
-            className={`px-2.5 py-1 rounded-lg transition-colors ${
-              selectedTag === "all"
-                ? "bg-accent/10 text-accent font-bold border border-accent/30"
-                : "bg-page border border-hairline text-muted hover:text-ink"
-            }`}
-          >
-            All ({sources.length})
-          </button>
-          {allTags.map((tag) => (
+        <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+          <div className="flex-1 relative">
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted" />
+            <input
+              type="text"
+              placeholder="Search by title, author, or URL..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-page border border-hairline rounded-xl pl-9 pr-3.5 py-2 text-xs text-ink/90 placeholder-faint font-mono focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
+            />
+          </div>
+
+          {/* Tag Pills */}
+          <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 md:pb-0 text-xs font-mono">
+            <Filter className="h-3.5 w-3.5 text-muted shrink-0 ml-1" />
             <button
-              key={tag}
               type="button"
-              onClick={() => setSelectedTag(tag)}
-              className={`px-2.5 py-1 rounded-lg transition-colors capitalize ${
-                selectedTag === tag
+              onClick={() => setSelectedTag("all")}
+              className={`px-2.5 py-1 rounded-lg transition-colors ${
+                selectedTag === "all"
                   ? "bg-accent/10 text-accent font-bold border border-accent/30"
                   : "bg-page border border-hairline text-muted hover:text-ink"
               }`}
             >
-              #{tag}
+              All ({sources.length})
             </button>
-          ))}
+            {allTags.map((tag) => (
+              <button
+                key={tag}
+                type="button"
+                onClick={() => setSelectedTag(tag)}
+                className={`px-2.5 py-1 rounded-lg transition-colors capitalize ${
+                  selectedTag === tag
+                    ? "bg-accent/10 text-accent font-bold border border-accent/30"
+                    : "bg-page border border-hairline text-muted hover:text-ink"
+                }`}
+              >
+                #{tag}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -424,17 +566,27 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
           <Bookmark className="h-8 w-8 text-faint mx-auto" />
           <h3 className="text-sm font-bold text-ink/80">No Saved Sources Found</h3>
           <p className="text-xs text-faint font-mono max-w-md mx-auto">
-            {searchQuery || selectedTag !== "all"
-              ? "No sources match your active filter. Try resetting your search."
+            {searchQuery || selectedTag !== "all" || selectedPlatform !== "all"
+              ? "No sources match your active filter. Try resetting your search or category."
               : "Bookmark artist profiles, galleries, and channels to track new uploads and run differential rescans."}
           </p>
-          <button
-            type="button"
-            onClick={() => setAddModalOpen(true)}
-            className="mt-2 px-3 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline text-accent text-xs font-mono rounded-lg transition-colors"
-          >
-            + Add Your First Source
-          </button>
+          {selectedPlatform !== "all" ? (
+            <button
+              type="button"
+              onClick={() => setSelectedPlatform("all")}
+              className="mt-2 px-3 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline text-accent text-xs font-mono rounded-lg transition-colors"
+            >
+              Show All Platforms
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setAddModalOpen(true)}
+              className="mt-2 px-3 py-1.5 bg-raised hover:bg-hairline/70 border border-hairline text-accent text-xs font-mono rounded-lg transition-colors"
+            >
+              + Add Your First Source
+            </button>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -462,6 +614,7 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
                       thumbnailUrl={source.thumbnail_url}
                       author={source.author}
                       title={source.title}
+                      onPreview={() => setPreviewAvatar(source)}
                     />
                     <div className="min-w-0 flex-1">
                       <h3 className="text-sm font-bold text-ink line-clamp-1" title={source.title}>
@@ -788,6 +941,75 @@ export const SavedSourcesView: React.FC<SavedSourcesViewProps> = ({
                 className="px-4 py-1.5 bg-raised hover:bg-hairline/70 text-ink/80 hover:text-ink rounded-xl text-xs font-mono transition-colors"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Avatar Preview Lightbox Modal */}
+      {previewAvatar && previewAvatar.thumbnail_url && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm animate-in fade-in duration-150"
+          onClick={() => setPreviewAvatar(null)}
+        >
+          <div
+            className="relative flex max-w-2xl flex-col items-center gap-3 rounded-2xl border border-white/15 bg-zinc-950/90 p-5 text-white shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={() => setPreviewAvatar(null)}
+              className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full border border-white/25 bg-black/60 text-white transition-colors hover:bg-white/20"
+              aria-label="Close avatar preview"
+              title="Close (Esc)"
+            >
+              <X className="h-4 w-4" />
+            </button>
+
+            <div className="flex items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-black/40">
+              {isVideoAvatarUrl(previewAvatar.thumbnail_url) ? (
+                <video
+                  src={previewAvatar.thumbnail_url}
+                  controls
+                  autoPlay
+                  loop
+                  muted
+                  playsInline
+                  className="max-h-[70vh] max-w-[80vw] rounded-xl object-contain"
+                />
+              ) : (
+                <img
+                  src={previewAvatar.thumbnail_url}
+                  alt={previewAvatar.title}
+                  referrerPolicy="no-referrer"
+                  className="max-h-[70vh] max-w-[80vw] rounded-xl object-contain"
+                />
+              )}
+            </div>
+
+            <div className="flex w-full items-center justify-between gap-4 pt-1 font-mono text-xs">
+              <div className="min-w-0">
+                <div className="truncate font-sans text-sm font-bold text-white">
+                  {previewAvatar.title}
+                </div>
+                {previewAvatar.author && (
+                  <div className="truncate text-zinc-400">
+                    @{previewAvatar.author.replace(/^@/, "")}
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const target = previewAvatar.url;
+                  setPreviewAvatar(null);
+                  onScanUrl(target);
+                }}
+                className="shrink-0 flex items-center gap-1.5 rounded-xl bg-accent px-3 py-1.5 font-sans text-xs font-semibold text-on-accent transition-colors hover:bg-accent-vivid"
+              >
+                <span>Open in Scan</span>
+                <ArrowRight className="h-3.5 w-3.5" />
               </button>
             </div>
           </div>

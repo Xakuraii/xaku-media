@@ -232,7 +232,7 @@ export const App: React.FC = () => {
         if (!res) return 0;
         const pMatch = res.match(/(\d+)p/i);
         if (pMatch) return Number.parseInt(pMatch[1], 10) || 0;
-        const xMatch = res.match(/\d+\s*[xX×]\s*(\d+)/);
+        const xMatch = res.match(/(?:\d+|\?)\s*[xX×]\s*(\d+)/);
         return xMatch ? Number.parseInt(xMatch[1], 10) || 0 : 0;
       };
       const targetHeight = preferredResolution === "best" ? 2160 : parseHeight(preferredResolution) || 1080;
@@ -241,12 +241,14 @@ export const App: React.FC = () => {
         const codecText = `${f.video_codec || ""} ${f.format_id || ""}`;
         const isHevc = /h265|hevc|bytevc|hvc1|hev1/i.test(codecText);
         const isWebVideo = /h264|avc|vp8|vp9|av1/i.test(codecText);
+        const hasAudioTrack = Boolean(f.audio_codec && f.audio_codec.toLowerCase() !== "none");
         const container = (f.container || "").toLowerCase();
         const isWebContainer = container === "mp4" || container === "webm";
-        const height = parseHeight(f.resolution);
+        const height = f.height || parseHeight(f.resolution);
         const cappedHeight = height > 0 ? Math.min(height, targetHeight) : 0;
 
         let score = 0;
+        if (hasAudioTrack) score += 1000;
         if (!f.requires_merge) score += 500;
         if (isHevc) score -= 1000;
         else if (isWebVideo) score += 200;
@@ -511,12 +513,17 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleClearHistory = async () => {
+  const handleClearHistory = async (scanId?: string) => {
     if (!window.api?.clearScanHistory) return;
     try {
-      await window.api.clearScanHistory();
-      setScanHistory([]);
-      setSelectedScanDetail(null);
+      await window.api.clearScanHistory(scanId);
+      if (scanId) {
+        setScanHistory((prev) => prev.filter((item) => item.id !== scanId));
+        setSelectedScanDetail((prev) => (prev?.scan.id === scanId ? null : prev));
+      } else {
+        setScanHistory([]);
+        setSelectedScanDetail(null);
+      }
     } catch (err) {
       console.error("Failed to clear scan history:", err);
     }
@@ -1931,7 +1938,7 @@ export const App: React.FC = () => {
                   </button>
                   {scanHistory.length > 0 && (
                     <button
-                      onClick={handleClearHistory}
+                      onClick={() => handleClearHistory()}
                       className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded-md text-xs font-mono text-red-700 dark:text-red-300 flex items-center space-x-1.5 transition-colors"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -2020,6 +2027,14 @@ export const App: React.FC = () => {
                           >
                             <RefreshCw className="h-3 w-3" />
                             <span>Rescan</span>
+                          </button>
+                          <button
+                            onClick={() => handleClearHistory(scan.id)}
+                            className="px-2.5 py-1.5 bg-page hover:bg-red-500/10 border border-hairline hover:border-red-500/30 rounded-md text-xs font-mono text-muted hover:text-red-600 dark:hover:text-red-300 flex items-center space-x-1 transition-colors"
+                            title="Clear this scan entry"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            <span>Clear</span>
                           </button>
                         </div>
                       </div>
@@ -3387,7 +3402,7 @@ export const App: React.FC = () => {
                       : "XakuMedia Updates"}
                   </h3>
                   <p className="text-xs font-mono text-muted">
-                    Installed version: v{updateInfo?.currentVersion || systemInfo?.version || "1.2.0"}
+                    Installed version: v{updateInfo?.currentVersion || systemInfo?.version || "1.3.0"}
                   </p>
                 </div>
               </div>
