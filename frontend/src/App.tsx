@@ -511,12 +511,17 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleClearHistory = async () => {
+  const handleClearHistory = async (scanId?: string) => {
     if (!window.api?.clearScanHistory) return;
     try {
-      await window.api.clearScanHistory();
-      setScanHistory([]);
-      setSelectedScanDetail(null);
+      await window.api.clearScanHistory(scanId);
+      if (scanId) {
+        setScanHistory((prev) => prev.filter((item) => item.id !== scanId));
+        setSelectedScanDetail((prev) => (prev?.scan.id === scanId ? null : prev));
+      } else {
+        setScanHistory([]);
+        setSelectedScanDetail(null);
+      }
     } catch (err) {
       console.error("Failed to clear scan history:", err);
     }
@@ -1931,7 +1936,7 @@ export const App: React.FC = () => {
                   </button>
                   {scanHistory.length > 0 && (
                     <button
-                      onClick={handleClearHistory}
+                      onClick={() => handleClearHistory()}
                       className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded-md text-xs font-mono text-red-700 dark:text-red-300 flex items-center space-x-1.5 transition-colors"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -2020,6 +2025,14 @@ export const App: React.FC = () => {
                           >
                             <RefreshCw className="h-3 w-3" />
                             <span>Rescan</span>
+                          </button>
+                          <button
+                            onClick={() => handleClearHistory(scan.id)}
+                            className="px-2.5 py-1.5 bg-page hover:bg-red-500/10 border border-hairline hover:border-red-500/30 rounded-md text-xs font-mono text-muted hover:text-red-600 dark:hover:text-red-300 flex items-center space-x-1 transition-colors"
+                            title="Clear this scan entry"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            <span>Clear</span>
                           </button>
                         </div>
                       </div>
