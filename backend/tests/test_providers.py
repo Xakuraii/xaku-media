@@ -2075,4 +2075,35 @@ def test_facebook_story_highlights_discovery(monkeypatch: pytest.MonkeyPatch) ->
     assert posts[1].media_items[0].media_type == MediaType.IMAGE
     assert posts[0].author == "AliceFB"
 
+    # /stories/highlights/<id> URLs must target the highlight bucket ID, not "highlights",
+    # and unrelated buckets in the navigation tray must not leak into results.
+    from xakumedia.providers.platforms.facebook import _collect_story_nodes_from_payloads
+
+    hl_target = _parse_facebook_url("https://www.facebook.com/stories/highlights/444555666")
+    assert hl_target.scope == "stories"
+    assert hl_target.video_id == "444555666"
+
+    nav_tray = {
+        "data": {
+            "other_bucket": {
+                "__isStoryBucket": "DirectMessageThreadBucket",
+                "id": "999999999",
+                "story_bucket_owner": {"id": "777", "name": "Stranger"},
+                "unified_stories": {"edges": [{"node": {"id": "other_card"}}]},
+            },
+            "target_bucket": {
+                "__isStoryBucket": "DirectMessageThreadBucket",
+                "id": "444555666",
+                "story_bucket_owner": {"id": "61580886670213", "name": "AliceFB"},
+                "unified_stories": {"edges": [{"node": {"id": "target_card"}}]},
+            },
+        }
+    }
+    filtered_nodes, filtered_owner = _collect_story_nodes_from_payloads(
+        [nav_tray], target_bucket_id="444555666"
+    )
+    assert [n["id"] for n in filtered_nodes] == ["target_card"]
+    assert filtered_owner == "AliceFB"
+
+
 

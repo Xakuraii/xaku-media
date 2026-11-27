@@ -58,6 +58,9 @@ VIDEOS_PAGINATION_DEFAULT_DOC_ID = "29643863005208862"
 TIMELINE_ROOT_QUERY_NAME = "ProfileCometTimelineListViewRootQuery"
 TIMELINE_ROOT_DEFAULT_DOC_ID = "29875146502090540"
 
+TILES_PAGINATION_QUERY_NAME = "ProfileCometTilesFeedPaginationQuery"
+TILES_PAGINATION_DEFAULT_DOC_ID = "28137111635965845"
+
 STORIES_CONTENT_QUERY_NAME = "StoriesSuspenseContentPaneRootWithEntryPointQuery"
 STORIES_CONTENT_DEFAULT_DOC_ID = "29556157090686900"
 
@@ -65,6 +68,7 @@ _DOC_ID_CACHE: dict[str, str] = {
     REELS_PAGINATION_QUERY_NAME: REELS_PAGINATION_DEFAULT_DOC_ID,
     VIDEOS_PAGINATION_QUERY_NAME: VIDEOS_PAGINATION_DEFAULT_DOC_ID,
     TIMELINE_ROOT_QUERY_NAME: TIMELINE_ROOT_DEFAULT_DOC_ID,
+    TILES_PAGINATION_QUERY_NAME: TILES_PAGINATION_DEFAULT_DOC_ID,
     STORIES_CONTENT_QUERY_NAME: STORIES_CONTENT_DEFAULT_DOC_ID,
 }
 
@@ -229,13 +233,18 @@ def _parse_facebook_url(url: str) -> FacebookTarget:
         base = f"https://www.facebook.com/{segments[2]}"
         return FacebookTarget(scope="profile", profile_base=base, canonical_gallery_url=base)
 
-    # Story / Highlight bucket URLs: /stories/<bucket_id>[/<story_id>]
+    # Story / Highlight bucket URLs: /stories/<bucket_id>[/<story_id>] or /stories/highlights/<id>
     if (
         len(segments) >= 2
         and segments[0].lower() == "stories"
         and segments[1].lower() not in ("archive", "settings", "create")
     ):
-        bucket_id = segments[1]
+        if segments[1].lower() == "highlights":
+            if len(segments) < 3:
+                return FacebookTarget(scope="gallery", profile_base=None, canonical_gallery_url=url)
+            bucket_id = segments[2]
+        else:
+            bucket_id = segments[1]
         return FacebookTarget(
             scope="stories",
             profile_base=None,
@@ -413,10 +422,12 @@ def _extract_highlight_bucket_ids(
 
     bucket_keys = {
         "story_bucket",
+        "story_buckets",
         "featured_highlights",
         "highlight_units_section",
         "highlight_units",
         "highlight_buckets",
+        "profile_intro_card",
         "bucket",
         "buckets",
     }
@@ -469,11 +480,27 @@ def _extract_highlight_bucket_ids(
 
 def _collect_story_nodes_from_payloads(
     payloads: list[Any],
+    *,
+    target_bucket_id: str | None = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
     """Collect unified story card nodes and bucket owner name from Relay payloads."""
     stories: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     owner_name: str | None = None
+
+    def _is_other_bucket(obj: dict[str, Any]) -> bool:
+        if not target_bucket_id:
+            return False
+        bid = obj.get("id")
+        if not isinstance(bid, (str, int)) or not str(bid):
+            return False
+        typename = str(obj.get("__typename") or "")
+        is_bucket = (
+            "__isStoryBucket" in obj
+            or "Bucket" in typename
+            or "story_bucket_owner" in obj
+        )
+        return is_bucket and str(bid) != target_bucket_id
 
     def _walk(obj: Any) -> None:
         nonlocal owner_name
@@ -481,7 +508,7 @@ def _collect_story_nodes_from_payloads(
             for entry in obj:
                 _walk(entry)
             return
-        if not isinstance(obj, dict):
+        if not isinstance(obj, dict) or _is_other_bucket(obj):
             return
         bucket_owner = obj.get("story_bucket_owner")
         if isinstance(bucket_owner, dict) and not owner_name:
@@ -1484,9 +1511,14 @@ class FacebookProvider(GalleryDlProvider):
             except Exception:
                 continue
 
-        # Fetch full Stories bucket payload if SSR HTML didn't include unified_stories edges.
-        initial_stories, bucket_owner = _collect_story_nodes_from_payloads(payloads)
-        if not initial_stories and dtsg and lsd:
+        # Fetch full Stories bucket payload if SSR HTML lacked attachments or had only nav stubs.
+        initial_stories, bucket_owner = _collect_story_nodes_from_payloads(
+            payloads, target_bucket_id=bucket_id
+        )
+        needs_gql = not initial_stories or any(
+            not (s.get("attachments") or s.get("media")) for s in initial_stories
+        )
+        if needs_gql and dtsg and lsd:
             m_pre = re.search(
                 r'"adp_StoriesSuspenseContentPaneRootWithEntryPointQueryRelayPreloader_[^"]+",'
                 r'"queryID":"(\d+)","variables":(\{.*?\}),'
@@ -1527,7 +1559,9 @@ class FacebookProvider(GalleryDlProvider):
             )
             if raw_gql:
                 payloads.extend(_parse_ndjson_chunks(raw_gql))
-            initial_stories, owner_after = _collect_story_nodes_from_payloads(payloads)
+            initial_stories, owner_after = _collect_story_nodes_from_payloads(
+                payloads, target_bucket_id=bucket_id
+            )
             bucket_owner = bucket_owner or owner_after
 
         author = bucket_owner or fallback_author
@@ -1695,7 +1729,62 @@ class FacebookProvider(GalleryDlProvider):
                     referer=profile_base,
                 )
                 if raw_gql:
-                    payloads.extend(_parse_ndjson_chunks(raw_gql))
+                    tl_chunks = _parse_ndjson_chunks(raw_gql)
+                    payloads.extend(tl_chunks)
+                    # Paginate profile_tile_sections when Featured Highlights sit past tile 2.
+                    target_uid = str(variables.get("userID") or "")
+
+                    def _tile_page_info(
+                        chunks: list[Any], root_key: str
+                    ) -> tuple[bool, str | None, str | None]:
+                        for ch in chunks:
+                            if not isinstance(ch, dict):
+                                continue
+                            holder = (ch.get("data") or {}).get(root_key)
+                            if not isinstance(holder, dict):
+                                continue
+                            pts = holder.get("profile_tile_sections")
+                            pinfo = pts.get("page_info") if isinstance(pts, dict) else None
+                            if isinstance(pinfo, dict):
+                                hid = str(holder.get("id") or "") or None
+                                return (
+                                    bool(pinfo.get("has_next_page")),
+                                    pinfo.get("end_cursor"),
+                                    hid,
+                                )
+                        return False, None, None
+
+                    has_next, cursor, found_uid = _tile_page_info(tl_chunks, "user")
+                    target_uid = found_uid or target_uid
+                    tiles_doc_id = _resolve_doc_id_from_bundles(clean, TILES_PAGINATION_QUERY_NAME)
+                    for _ in range(6):
+                        if not has_next or not cursor or not target_uid or cancel_event.is_set():
+                            break
+                        tile_raw = self._graphql_post_raw(
+                            extractor,
+                            fb_dtsg=dtsg,
+                            lsd=lsd,
+                            friendly_name=TILES_PAGINATION_QUERY_NAME,
+                            doc_id=tiles_doc_id,
+                            variables={
+                                "count": 4,
+                                "cursor": cursor,
+                                "id": target_uid,
+                                "previousProfileId": None,
+                                "renderLocation": "timeline",
+                                "scale": 1,
+                            },
+                            referer=profile_base,
+                        )
+                        if not tile_raw:
+                            break
+                        tile_chunks = _parse_ndjson_chunks(tile_raw)
+                        payloads.extend(tile_chunks)
+                        next_has, next_cursor, _ = _tile_page_info(tile_chunks, "node")
+                        if not next_cursor or next_cursor == cursor:
+                            break
+                        cursor = next_cursor
+                        has_next = next_has
             except Exception:
                 pass
 
