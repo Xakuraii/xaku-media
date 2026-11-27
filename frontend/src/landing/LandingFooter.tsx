@@ -20,11 +20,14 @@ export const LandingFooter: React.FC = () => {
           {/* Brand info */}
           <div className="space-y-2">
             <div className="flex items-center gap-2.5">
-              <span className="grid place-items-center w-6 h-6 rounded-md bg-brand-white">
-                <img src="XakuMedia.svg" alt="XakuMedia" className="w-full h-full" />
-              </span>
+              <img
+                src="./XakuMedia.svg"
+                alt="XakuMedia logo"
+                className="w-8 h-8 shrink-0 object-contain"
+                draggable={false}
+              />
               <span className="font-display font-semibold text-ink text-sm tracking-tight">
-                XakuMedia
+                Xaku<span className="text-accent">Media</span>
               </span>
               <span className="font-mono text-xs text-faint">
                 {RELEASE_CONFIG.latestTag}

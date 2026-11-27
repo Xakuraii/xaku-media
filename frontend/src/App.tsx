@@ -1115,14 +1115,12 @@ export const App: React.FC = () => {
           {/* Brand */}
           <div className="-mx-1 mb-5 overflow-hidden rounded-2xl border border-hairline bg-surface/80 px-3 py-3.5 shadow-sm">
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-hairline bg-brand-white shadow-sm">
-                <img
-                  src="./XakuMedia.svg"
-                  alt="XakuMedia logo"
-                  className="h-7 w-7"
-                  draggable={false}
-                />
-              </div>
+              <img
+                src="./XakuMedia.svg"
+                alt="XakuMedia logo"
+                className="h-10 w-10 shrink-0 object-contain"
+                draggable={false}
+              />
               <div className="min-w-0">
                 <span className="block truncate text-[15px] font-bold tracking-tight text-ink">
                   Xaku<span className="text-accent">Media</span>
