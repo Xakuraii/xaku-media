@@ -7,7 +7,7 @@ import html as html_lib
 import json
 import re
 import threading
-import xml.etree.ElementTree as ET
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -30,6 +30,7 @@ from ..base import (
     make_media_item,
     make_post,
 )
+from ..dash import parse_dash_mpd
 from ..gallerydl import (
     FACEBOOK_CATEGORY,
     GalleryDlProvider,
@@ -59,23 +60,6 @@ _DOC_ID_CACHE: dict[str, str] = {
     VIDEOS_PAGINATION_QUERY_NAME: VIDEOS_PAGINATION_DEFAULT_DOC_ID,
 }
 
-_CODEC_ALIASES = (
-    ("avc1", "h264"),
-    ("h264", "h264"),
-    ("vp09", "vp9"),
-    ("vp9", "vp9"),
-    ("vp08", "vp8"),
-    ("vp8", "vp8"),
-    ("av01", "av1"),
-    ("av1", "av1"),
-    ("hev1", "hevc"),
-    ("hvc1", "hevc"),
-    ("hevc", "hevc"),
-    ("mp4a", "aac"),
-    ("aac", "aac"),
-    ("opus", "opus"),
-)
-
 _RE_NON_PROFILE_SEGMENTS = {
     "reel",
     "reels",
@@ -98,10 +82,8 @@ _RE_NON_PROFILE_SEGMENTS = {
 }
 
 _RE_SINGLE_VIDEO_ID = re.compile(r"/(?:reel|videos?|watch)/(\d+)|[?&](?:v|video_id)=(\d+)")
-_RE_DURATION_ISO = re.compile(
-    r"^PT(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?$",
-    re.IGNORECASE,
-)
+
+parse_facebook_dash_mpd = parse_dash_mpd
 
 
 @dataclass(frozen=True)
@@ -112,29 +94,6 @@ class FacebookTarget:
     profile_base: str | None
     canonical_gallery_url: str
     video_id: str | None = None
-
-
-def _normalize_codec(raw: str | None) -> str | None:
-    if not raw:
-        return None
-    lower = raw.lower()
-    for prefix, canonical in _CODEC_ALIASES:
-        if prefix in lower:
-            return canonical
-    return lower
-
-
-def _parse_iso_duration(value: str | None) -> float | None:
-    if not value:
-        return None
-    match = _RE_DURATION_ISO.match(value.strip())
-    if not match:
-        return None
-    hours = float(match.group(1) or 0)
-    minutes = float(match.group(2) or 0)
-    seconds = float(match.group(3) or 0)
-    total = hours * 3600.0 + minutes * 60.0 + seconds
-    return total if total > 0 else None
 
 
 def _decode_js_escaped_url(raw: str) -> str:
@@ -149,127 +108,61 @@ def _decode_js_escaped_url(raw: str) -> str:
     return html_lib.unescape(text)
 
 
-def _codec_preference_rank(codec: str | None) -> int:
-    c = (codec or "").lower()
-    if c == "h264":
-        return 3
-    if c == "vp9":
-        return 2
-    if c == "av1":
-        return 1
-    return 0
-
-
-def parse_facebook_dash_mpd(xml_string: str) -> tuple[list[MediaFormatInfo], float | None]:
-    """Parse a Facebook DASH MPD manifest into downloadable video/audio formats."""
-    if not xml_string or "<MPD" not in xml_string:
-        return [], None
-    try:
-        root = ET.fromstring(xml_string)
-    except ET.ParseError:
-        return [], None
-
-    duration_seconds = _parse_iso_duration(root.attrib.get("mediaPresentationDuration"))
-    video_formats: list[tuple[tuple[int, int, int], MediaFormatInfo]] = []
-    audio_formats: list[tuple[int, MediaFormatInfo]] = []
-
-    for elem in root.iter():
-        if not elem.tag.endswith("AdaptationSet"):
+def _extract_json_object_after(clean_html: str, key: str) -> dict[str, Any] | None:
+    """Decode the JSON object immediately following ``"<key>":`` in SSR HTML."""
+    decoder = json.JSONDecoder()
+    marker = f'"{key}":'
+    start = 0
+    while True:
+        idx = clean_html.find(marker, start)
+        if idx < 0:
+            return None
+        brace = clean_html.find("{", idx + len(marker))
+        if brace < 0 or brace - (idx + len(marker)) > 8:
+            start = idx + len(marker)
             continue
-        content_type = (elem.attrib.get("contentType") or "").lower()
-        mime_base = (elem.attrib.get("mimeType") or "").lower()
-        is_audio_set = content_type == "audio" or mime_base.startswith("audio/")
-        is_video_set = content_type == "video" or mime_base.startswith("video/")
+        try:
+            obj, _ = decoder.raw_decode(clean_html, brace)
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            pass
+        start = idx + len(marker)
 
-        for rep in elem:
-            if not rep.tag.endswith("Representation"):
-                continue
-            base_url = next(
-                (
-                    child.text.strip()
-                    for child in rep
-                    if child.tag.endswith("BaseURL") and child.text
-                ),
-                None,
-            )
-            if not base_url:
-                continue
 
-            rep_mime = (rep.attrib.get("mimeType") or mime_base).lower()
-            codecs_attr = rep.attrib.get("codecs") or ""
-            codec = _normalize_codec(codecs_attr)
-            bandwidth = (
-                int(rep.attrib.get("bandwidth") or 0)
-                if str(rep.attrib.get("bandwidth") or "").isdigit()
-                else 0
-            )
+def _extract_connection_info(
+    clean_html: str,
+    field_name: str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Extract a Relay connection dict (edges + page_info) and its enclosing node id.
 
-            if is_audio_set or rep_mime.startswith("audio/"):
-                fmt = MediaFormatInfo(
-                    format_id="audio" if not audio_formats else f"audio-{len(audio_formats) + 1}",
-                    container="m4a",
-                    audio_codec=codec or "aac",
-                    is_direct_stream=True,
-                    url=base_url,
-                    requires_merge=False,
-                    format_note="audio",
-                )
-                audio_formats.append((bandwidth, fmt))
-                continue
-
-            if is_video_set or rep_mime.startswith("video/"):
-                width = (
-                    int(rep.attrib["width"])
-                    if str(rep.attrib.get("width") or "").isdigit()
-                    else None
-                )
-                height = (
-                    int(rep.attrib["height"])
-                    if str(rep.attrib.get("height") or "").isdigit()
-                    else None
-                )
-                fb_label = rep.attrib.get("FBQualityLabel") or (
-                    f"{height}p" if height else "original"
-                )
-                v_codec = codec or "h264"
-                fmt_id = f"{fb_label}-{v_codec}" if fb_label else v_codec
-                resolution = f"{width}x{height}" if width and height else None
-                fmt = MediaFormatInfo(
-                    format_id=fmt_id,
-                    container="mp4",
-                    resolution=resolution,
-                    video_codec=v_codec,
-                    audio_codec=None,
-                    width=width,
-                    height=height,
-                    is_direct_stream=True,
-                    url=base_url,
-                    requires_merge=False,
-                    format_note=f"DASH {fb_label} ({v_codec})",
-                )
-                rank = (height or 0, _codec_preference_rank(v_codec), bandwidth)
-                video_formats.append((rank, fmt))
-
-    # Highest resolution first, with H.264 ranked ahead of VP9/AV1 at equal height
-    video_formats.sort(key=lambda pair: pair[0], reverse=True)
-    audio_formats.sort(key=lambda pair: pair[0], reverse=True)
-
-    ordered: list[MediaFormatInfo] = []
-    seen_ids: set[str] = set()
-    has_audio = bool(audio_formats)
-    for _, fmt in video_formats:
-        fmt.requires_merge = has_audio
-        if fmt.format_id in seen_ids:
-            fmt.format_id = f"{fmt.format_id}-{len(seen_ids) + 1}"
-        seen_ids.add(fmt.format_id)
-        ordered.append(fmt)
-
-    if audio_formats:
-        best_audio = audio_formats[0][1]
-        best_audio.format_id = "audio"
-        ordered.append(best_audio)
-
-    return ordered, duration_seconds
+    Works regardless of JSON key ordering inside ``page_info`` or ``edges``.
+    """
+    marker = f'"{field_name}":'
+    decoder = json.JSONDecoder()
+    idx = 0
+    while True:
+        pos = clean_html.find(marker, idx)
+        if pos < 0:
+            return None, None
+        brace = clean_html.find("{", pos + len(marker))
+        if brace < 0 or brace - (pos + len(marker)) > 8:
+            idx = pos + len(marker)
+            continue
+        try:
+            conn, end_pos = decoder.raw_decode(clean_html, brace)
+            if isinstance(conn, dict) and "page_info" in conn:
+                tail = clean_html[end_pos : end_pos + 200]
+                m_id = re.search(r'"id":"([^"]+)"', tail)
+                return conn, (m_id.group(1) if m_id else None)
+        except Exception:
+            # Fallback if truncated/non-JSON before full block closes: find page_info object nearby.
+            window = clean_html[brace : brace + 20000]
+            pinfo = _extract_json_object_after(window, "page_info")
+            if pinfo is not None:
+                m_id = re.search(r'\},"id":"([^"]+)"', window)
+                return {"edges": [], "page_info": pinfo}, (m_id.group(1) if m_id else None)
+        idx = pos + len(marker)
 
 
 def _parse_facebook_url(url: str) -> FacebookTarget:
@@ -699,24 +592,40 @@ class FacebookProvider(GalleryDlProvider):
             "Referer": referer,
             "Origin": "https://www.facebook.com",
         }
-        resp = extractor.request(
-            "https://www.facebook.com/api/graphql/",
-            method="POST",
-            headers=headers,
-            data={
-                "fb_dtsg": fb_dtsg,
-                "lsd": lsd,
-                "fb_api_caller_class": "RelayModern",
-                "fb_api_req_friendly_name": friendly_name,
-                "variables": json.dumps(variables),
-                "server_timestamps": "true",
-                "doc_id": doc_id,
-            },
-            fatal=False,
-        )
-        if getattr(resp, "status_code", 200) >= 400:
-            return None
-        return _parse_ndjson_primary(getattr(resp, "text", "") or "")
+        payload = {
+            "fb_dtsg": fb_dtsg,
+            "lsd": lsd,
+            "fb_api_caller_class": "RelayModern",
+            "fb_api_req_friendly_name": friendly_name,
+            "variables": json.dumps(variables),
+            "server_timestamps": "true",
+            "doc_id": doc_id,
+        }
+        for attempt in range(2):
+            try:
+                resp = extractor.request(
+                    "https://www.facebook.com/api/graphql/",
+                    method="POST",
+                    headers=headers,
+                    data=payload,
+                    fatal=False,
+                )
+            except Exception:
+                if attempt == 0:
+                    time.sleep(0.8)
+                    continue
+                return None
+            status = getattr(resp, "status_code", 200)
+            if status in (429, 500, 502, 503, 504) and attempt == 0:
+                time.sleep(0.8)
+                continue
+            if status >= 400:
+                return None
+            parsed = _parse_ndjson_primary(getattr(resp, "text", "") or "")
+            if parsed is not None or attempt == 1:
+                return parsed
+            time.sleep(0.5)
+        return None
 
     def _extract_formats_from_media_dict(
         self,
@@ -992,10 +901,7 @@ class FacebookProvider(GalleryDlProvider):
         clean = html_text.replace("\\/", "/")
         dtsg, lsd, preload_vars = _extract_tokens_and_preload_vars(clean)
 
-        m_col = re.search(
-            r'"aggregated_fb_shorts":\{"edges":\[.*?"page_info":\{"end_cursor":(?:"([^"]+)"|null),"has_next_page":(true|false)\}\},"id":"([^"]+)"',
-            clean,
-        )
+        shorts_conn, col_id = _extract_connection_info(clean, "aggregated_fb_shorts")
 
         # Author hint from profile HTML
         author_fallback = profile_base.rsplit("/", 1)[-1]
@@ -1005,8 +911,7 @@ class FacebookProvider(GalleryDlProvider):
             if candidate and candidate.lower() != "facebook":
                 author_fallback = candidate
 
-        if dtsg and lsd and m_col:
-            col_id = m_col.group(3)
+        if dtsg and lsd and shorts_conn is not None and col_id:
             doc_id = _resolve_doc_id_from_bundles(clean, REELS_PAGINATION_QUERY_NAME)
             base_vars = {
                 k: v for k, v in preload_vars.items() if k.startswith("__relay_internal__pv__")
@@ -1175,23 +1080,16 @@ class FacebookProvider(GalleryDlProvider):
         for vid in _facebook_video_ids([html_text]):
             _record_vid(vid)
 
-        m_all = re.search(
-            r'"all_videos":\{"edges":(\[.*?\])\s*,\s*"page_info":\{"end_cursor":(?:"([^"]+)"|null),"has_next_page":(true|false)\}\},"id":"([^"]+)"',
-            clean,
-        )
-        if m_all:
-            try:
-                initial_edges = json.loads(m_all.group(1))
-                for edge in initial_edges:
-                    node = edge.get("node") or {}
-                    if isinstance(node, dict) and node.get("id"):
-                        _record_vid(str(node["id"]))
-            except Exception:
-                pass
+        all_videos_conn, page_id = _extract_connection_info(clean, "all_videos")
+        if all_videos_conn and page_id:
+            for edge in all_videos_conn.get("edges") or []:
+                node = (edge.get("node") if isinstance(edge, dict) else None) or {}
+                if isinstance(node, dict) and node.get("id"):
+                    _record_vid(str(node["id"]))
 
-            cursor: str | None = m_all.group(2)
-            has_next = m_all.group(3) == "true" and bool(cursor)
-            page_id = m_all.group(4)
+            pinfo_init = all_videos_conn.get("page_info") or {}
+            cursor: str | None = pinfo_init.get("end_cursor")
+            has_next = bool(pinfo_init.get("has_next_page")) and bool(cursor)
 
             if has_next and dtsg and lsd:
                 doc_id = _resolve_doc_id_from_bundles(clean, VIDEOS_PAGINATION_QUERY_NAME)
@@ -1252,6 +1150,15 @@ class FacebookProvider(GalleryDlProvider):
                         and len(seen_video_ids) + len(ordered_ids) >= state.options.max_posts
                     ):
                         break
+        else:
+            # Personal profiles may expose videos under /videos_by instead of /videos.
+            try:
+                vb_resp = extractor.request(f"{profile_base}/videos_by", fatal=False)
+                if getattr(vb_resp, "status_code", 200) < 400:
+                    for vid in _facebook_video_ids([getattr(vb_resp, "text", "") or ""]):
+                        _record_vid(vid)
+            except Exception:
+                pass
 
         for vid in ordered_ids:
             if cancel_event.is_set() or state.limit_reached():
@@ -1276,6 +1183,62 @@ class FacebookProvider(GalleryDlProvider):
                 state.posts_emitted += 1
                 state.media_count += len(post.media_items)
                 yield post
+
+    def _iter_profile_photos_and_albums(
+        self,
+        profile_base: str,
+        *,
+        include_photos_tab: bool,
+        include_albums_tab: bool,
+        include_avatar: bool,
+        cancel_event: threading.Event,
+        warn: WarningCallback,
+        on_page: PageCallback | None,
+        state: _DiscoveryState,
+    ) -> Iterator[Post]:
+        """Discover profile photos, albums, and avatars without losing one tab if another fails."""
+        tab_urls: list[str] = []
+        if include_photos_tab:
+            tab_urls.append(f"{profile_base}/photos")
+        if include_albums_tab:
+            tab_urls.append(f"{profile_base}/photos_albums")
+        if include_avatar:
+            tab_urls.append(f"{profile_base}/avatar")
+
+        seen_photo_keys: set[str] = set()
+        for tab_url in tab_urls:
+            if cancel_event.is_set() or state.limit_reached():
+                return
+            try:
+                for post in super()._discover(
+                    tab_url,
+                    cancel_event,
+                    warn,
+                    on_page,
+                    state,
+                    depth=0,
+                ):
+                    unique_items = []
+                    for item in post.media_items:
+                        key = str(item.provider_media_id or item.original_url)
+                        if key in seen_photo_keys:
+                            continue
+                        seen_photo_keys.add(key)
+                        unique_items.append(item)
+                    if not unique_items:
+                        state.posts_emitted = max(0, state.posts_emitted - 1)
+                        state.media_count = max(0, state.media_count - len(post.media_items))
+                        continue
+                    if len(unique_items) < len(post.media_items):
+                        dropped = len(post.media_items) - len(unique_items)
+                        state.media_count = max(0, state.media_count - dropped)
+                        post.media_items = unique_items
+                        post.post_type = Post.infer_type(unique_items)
+                    yield post
+            except XakuMediaError as exc:
+                warn(f"Facebook {tab_url.rsplit('/', 1)[-1]} discovery ended early: {exc.message}")
+            except Exception as exc:
+                warn(f"Facebook {tab_url.rsplit('/', 1)[-1]} discovery ended early: {exc}")
 
     def iter_posts(
         self,
@@ -1331,29 +1294,38 @@ class FacebookProvider(GalleryDlProvider):
                     )
 
             if target.scope == "profile" and options.include_images and not state.limit_reached():
-                try:
-                    yield from super()._discover(
-                        target.canonical_gallery_url,
-                        cancel_event,
-                        warn,
-                        on_page,
-                        state,
-                        depth=0,
-                    )
-                except XakuMediaError as exc:
-                    if state.posts_emitted == 0:
-                        raise
-                    warn(f"Photo discovery ended early: {exc.message}")
-                except Exception as exc:
-                    if state.posts_emitted == 0:
-                        raise
-                    warn(f"Photo discovery ended early: {exc}")
+                yield from self._iter_profile_photos_and_albums(
+                    target.profile_base,
+                    include_photos_tab=True,
+                    include_albums_tab=True,
+                    include_avatar=True,
+                    cancel_event=cancel_event,
+                    warn=warn,
+                    on_page=on_page,
+                    state=state,
+                )
 
             if state.posts_emitted == 0:
                 raise self._no_media_error(safe_url)
             return
 
-        # "photos" or "gallery" (album/set/photo/post/group)
+        if target.scope == "photos" and target.profile_base and options.include_images:
+            albums_only = target.canonical_gallery_url.rstrip("/").endswith("/photos_albums")
+            yield from self._iter_profile_photos_and_albums(
+                target.profile_base,
+                include_photos_tab=not albums_only,
+                include_albums_tab=True,
+                include_avatar=False,
+                cancel_event=cancel_event,
+                warn=warn,
+                on_page=on_page,
+                state=state,
+            )
+            if state.posts_emitted == 0:
+                raise self._no_media_error(safe_url)
+            return
+
+        # "gallery" (album/set/photo/post/group)
         try:
             yield from super()._discover(
                 target.canonical_gallery_url,
