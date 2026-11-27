@@ -15,7 +15,13 @@ import {
   Sparkles,
 } from "lucide-react";
 import type { DiscoveredMediaItem } from "../../../../desktop/shared/types";
-import { isItemDownloaded, isItemSkipped, type MediaFilter, type PostWithScan } from "./types";
+import {
+  isItemDownloaded,
+  isItemHandled,
+  isItemSkipped,
+  type MediaFilter,
+  type PostWithScan,
+} from "./types";
 import { chooseFormat, formatBytes, hostOf, visibleMedia } from "./utils";
 
 /** Keep the DOM small while a large scan is still streaming in. */
@@ -88,6 +94,8 @@ interface PostBrowserProps {
   skipping: boolean;
   hideSkipped: boolean;
   onToggleHideSkipped: () => void;
+  showNewOnly: boolean;
+  onToggleShowNewOnly: () => void;
   onPreviewItem?: (item: DiscoveredMediaItem) => void;
 }
 
@@ -128,21 +136,25 @@ export function PostBrowser({
   skipping,
   hideSkipped,
   onToggleHideSkipped,
+  showNewOnly,
+  onToggleShowNewOnly,
   onPreviewItem,
 }: PostBrowserProps) {
+  const baseItems = useMemo(
+    () => filteredPosts.flatMap((post) => visibleMedia(post, filter)),
+    [filteredPosts, filter]
+  );
+  const itemMatchesView = (item: DiscoveredMediaItem) =>
+    (!showNewOnly || !isItemHandled(item, downloaded, skipped)) &&
+    (!hideSkipped || !isItemSkipped(item, skipped));
+
   const visibleItems = useMemo(
-    () =>
-      filteredPosts
-        .flatMap((post) => visibleMedia(post, filter))
-        .filter((item) => !hideSkipped || !isItemSkipped(item, skipped)),
-    [filteredPosts, filter, hideSkipped, skipped]
+    () => baseItems.filter(itemMatchesView),
+    [baseItems, showNewOnly, hideSkipped, downloaded, skipped]
   );
   const skippedCount = useMemo(
-    () =>
-      filteredPosts
-        .flatMap((post) => visibleMedia(post, filter))
-        .filter((item) => isItemSkipped(item, skipped)).length,
-    [filteredPosts, filter, skipped]
+    () => baseItems.filter((item) => isItemSkipped(item, skipped)).length,
+    [baseItems, skipped]
   );
   const selectedSkippedCount = useMemo(
     () =>
@@ -151,22 +163,17 @@ export function PostBrowser({
       ).length,
     [visibleItems, selected, skipped]
   );
-  const newCount = visibleItems.filter(
-    (item) => !isItemDownloaded(item, downloaded) && !isItemSkipped(item, skipped)
-  ).length;
+  const newCount = useMemo(
+    () => baseItems.filter((item) => !isItemHandled(item, downloaded, skipped)).length,
+    [baseItems, downloaded, skipped]
+  );
 
   const [renderLimit, setRenderLimit] = useState(POST_PAGE_SIZE);
   const [videoLimit, setVideoLimit] = useState(VIDEO_PAGE_SIZE);
   useEffect(() => {
     setRenderLimit(POST_PAGE_SIZE);
     setVideoLimit(VIDEO_PAGE_SIZE);
-  }, [filter, search, focusedScanLabel]);
-
-  const displayedPosts = useMemo(
-    () => filteredPosts.slice(0, renderLimit),
-    [filteredPosts, renderLimit]
-  );
-  const remainingCount = Math.max(0, filteredPosts.length - displayedPosts.length);
+  }, [filter, search, focusedScanLabel, showNewOnly]);
 
   // Every video in the current result set lives in one shared shelf. A profile
   // with 50 video posts should read as a video grid, not 50 separate one-card
@@ -175,14 +182,10 @@ export function PostBrowser({
     if (filter === "image") return [];
     return filteredPosts.flatMap((post) =>
       post.media_items
-        .filter(
-          (item) =>
-            item.media_type === "video" &&
-            (!hideSkipped || !isItemSkipped(item, skipped))
-        )
+        .filter((item) => item.media_type === "video" && itemMatchesView(item))
         .map((item) => ({ item, post }))
     );
-  }, [filteredPosts, filter, hideSkipped, skipped]);
+  }, [filteredPosts, filter, hideSkipped, showNewOnly, downloaded, skipped]);
   const videoEntries = useMemo(
     () => allVideoEntries.slice(0, videoLimit),
     [allVideoEntries, videoLimit]
@@ -190,19 +193,22 @@ export function PostBrowser({
   const remainingVideos = Math.max(0, allVideoEntries.length - videoEntries.length);
 
   // Image posts keep their own album grouping so a carousel stays together.
-  const imageGroups = useMemo(() => {
+  const allImageGroups = useMemo(() => {
     if (filter === "video") return [];
-    return displayedPosts
+    return filteredPosts
       .map((post) => ({
         post,
         items: post.media_items.filter(
-          (item) =>
-            item.media_type === "image" &&
-            (!hideSkipped || !isItemSkipped(item, skipped))
+          (item) => item.media_type === "image" && itemMatchesView(item)
         ),
       }))
       .filter((group) => group.items.length > 0);
-  }, [displayedPosts, filter, hideSkipped, skipped]);
+  }, [filteredPosts, filter, hideSkipped, showNewOnly, downloaded, skipped]);
+  const imageGroups = useMemo(
+    () => allImageGroups.slice(0, renderLimit),
+    [allImageGroups, renderLimit]
+  );
+  const remainingCount = Math.max(0, allImageGroups.length - imageGroups.length);
 
   const hasResults = allVideoEntries.length > 0 || imageGroups.length > 0;
 
@@ -231,6 +237,24 @@ export function PostBrowser({
               {label}
             </button>
           ))}
+          <button
+            type="button"
+            onClick={onToggleShowNewOnly}
+            aria-pressed={showNewOnly}
+            className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[11px] font-mono transition-colors ${
+              showNewOnly
+                ? "border-accent/50 bg-accent/15 text-accent font-semibold"
+                : "border-hairline text-muted hover:bg-raised hover:text-ink"
+            }`}
+            title={
+              showNewOnly
+                ? "Show all discovered media"
+                : "Show only new items (hides already downloaded & skipped)"
+            }
+          >
+            <Sparkles className="h-3 w-3" />
+            <span>New only ({newCount})</span>
+          </button>
           <div className="relative">
             <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted" />
             <input
@@ -347,7 +371,20 @@ export function PostBrowser({
       {!hasResults && runningCount === 0 ? (
         <div className="rounded-xl border border-hairline bg-surface py-16 text-center">
           <Layers className="mx-auto h-8 w-8 stroke-1 text-muted" />
-          <p className="mt-2 text-xs text-muted">No media match this view yet.</p>
+          <p className="mt-2 text-xs text-muted">
+            {showNewOnly
+              ? "All items in this scan are already downloaded or skipped."
+              : "No media match this view yet."}
+          </p>
+          {showNewOnly && (
+            <button
+              type="button"
+              onClick={onToggleShowNewOnly}
+              className="mt-3 rounded-lg border border-hairline bg-raised px-3 py-1.5 text-xs font-medium text-ink transition-colors hover:border-accent/40 hover:text-accent"
+            >
+              Show all items
+            </button>
+          )}
         </div>
       ) : (
         <div className="space-y-3">
@@ -371,10 +408,11 @@ export function PostBrowser({
             />
           )}
 
-          {imageGroups.map(({ post }) => (
+          {imageGroups.map(({ post, items }) => (
             <PostGroup
               key={post.id}
               post={post}
+              visibleItems={items}
               filter="image"
               selected={selected}
               downloaded={downloaded}
@@ -524,6 +562,7 @@ function VideoShelf({
 
 function PostGroup({
   post,
+  visibleItems,
   filter,
   selected,
   downloaded,
@@ -539,6 +578,7 @@ function PostGroup({
   onPreviewItem,
 }: {
   post: PostWithScan;
+  visibleItems?: DiscoveredMediaItem[];
   filter: MediaFilter;
   selected: Set<string>;
   downloaded: Set<string>;
@@ -558,7 +598,10 @@ function PostGroup({
   onPreviewItem?: (item: DiscoveredMediaItem) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const items = useMemo(() => visibleMedia(post, filter), [post, filter]);
+  const items = useMemo(
+    () => visibleItems ?? visibleMedia(post, filter),
+    [visibleItems, post, filter]
+  );
   if (items.length === 0) return null;
 
   const shownItems = expanded ? items : items.slice(0, GROUP_MEDIA_PAGE_SIZE);
