@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 from ..core.config import default_config
 from ..core.logging import get_logger
@@ -31,6 +33,137 @@ MANIFEST_FILENAME = "xakumedia-library.json"
 MANIFEST_VERSION = 1
 
 _LOCK = threading.Lock()
+
+_GENERIC_URL_STEMS = {
+    "video",
+    "image",
+    "img",
+    "media",
+    "index",
+    "original",
+    "stream",
+    "playlist",
+    "master",
+    "audio",
+    "thumbnail",
+    "thumb",
+    "preview",
+    "avatar",
+    "videoplayback",
+}
+_TRAILING_SLOT_RE = re.compile(r"^(.+):(\d+)$")
+_IG_POST_RE = re.compile(r"^/(?:[^/]+/)?(?:p|reel|reels|tv)/([^/?#]+)", re.IGNORECASE)
+_FB_VIDEO_RE = re.compile(r"/(?:reel|videos?)/(\d+)", re.IGNORECASE)
+_X_STATUS_RE = re.compile(r"/(?:[^/]+|i(?:/web)?)/status/(\d+)", re.IGNORECASE)
+_TT_POST_RE = re.compile(r"/@[^/]+/(?:video|photo)/(\d+)", re.IGNORECASE)
+_YT_PATH_ID_RE = re.compile(r"^/(?:shorts|live)/([A-Za-z0-9_-]{11})", re.IGNORECASE)
+_YT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
+
+def _pid_base(pid: str | None) -> str | None:
+    if not pid:
+        return None
+    match = _TRAILING_SLOT_RE.match(pid)
+    return match.group(1) if match else pid
+
+
+def canonical_single_post_key(url: str | None) -> str | None:
+    """Return a platform-wide key for single post/video/photo URLs (never collections)."""
+    if not url or not isinstance(url, str):
+        return None
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return None
+    host = (parts.hostname or "").lower()
+    if host.startswith(("www.", "m.", "mobile.")):
+        host = host.split(".", 1)[1]
+    path = parts.path or ""
+    query = parse_qs(parts.query)
+
+    if host in ("instagram.com", "instagr.am"):
+        m = _IG_POST_RE.match(path)
+        if m:
+            return f"ig:post:{m.group(1)}"
+        return None
+
+    if host in ("facebook.com", "fb.com", "fb.watch"):
+        m_vid = _FB_VIDEO_RE.search(path)
+        if m_vid:
+            return f"fb:video:{m_vid.group(1)}"
+        v_param = (query.get("v") or query.get("video_id") or [""])[0].strip()
+        if v_param.isdigit():
+            return f"fb:video:{v_param}"
+        fbid = (query.get("fbid") or [""])[0].strip()
+        if fbid.isdigit() and "/photo" in path.lower():
+            return f"fb:photo:{fbid}"
+        return None
+
+    if host in ("x.com", "twitter.com"):
+        m = _X_STATUS_RE.search(path)
+        if m:
+            return f"x:status:{m.group(1)}"
+        return None
+
+    if host == "tiktok.com":
+        m = _TT_POST_RE.match(path)
+        if m:
+            return f"tt:post:{m.group(1)}"
+        return None
+
+    if host == "youtu.be":
+        vid = path.strip("/").split("/", 1)[0]
+        if _YT_ID_RE.match(vid):
+            return f"yt:video:{vid}"
+        return None
+
+    if host in ("youtube.com", "music.youtube.com"):
+        v_param = (query.get("v") or [""])[0].strip()
+        if _YT_ID_RE.match(v_param):
+            return f"yt:video:{v_param}"
+        m = _YT_PATH_ID_RE.match(path)
+        if m:
+            return f"yt:video:{m.group(1)}"
+        return None
+
+    return None
+
+
+def url_asset_tokens(url: str | None) -> set[str]:
+    """Extract query-independent CDN path and filename stem tokens for a media URL."""
+    tokens: set[str] = set()
+    if not url or not isinstance(url, str):
+        return tokens
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return tokens
+    host = (parts.hostname or "").lower()
+    path = (parts.path or "").rstrip("/")
+    if not path:
+        return tokens
+
+    basename = path.rsplit("/", 1)[-1]
+    stem = basename.rsplit(".", 1)[0] if "." in basename else basename
+    stem_low = stem.lower()
+    if stem_low and stem_low not in _GENERIC_URL_STEMS:
+        if host and "googlevideo.com" not in host:
+            tokens.add(f"hp:{host}{path}")
+            if path.count("/") >= 2 and len(stem) >= 10:
+                tokens.add(f"p:{path}")
+        if len(stem) >= 12:
+            tokens.add(f"stem:{stem}")
+    return tokens
+
+
+def _item_candidate_urls(item: MediaItem) -> list[str]:
+    urls: list[str] = []
+    seen: set[str] = set()
+    for raw in [item.original_url, *(fmt.url or "" for fmt in item.available_formats)]:
+        if raw and raw not in seen:
+            seen.add(raw)
+            urls.append(raw)
+    return urls
 
 
 def media_identity(item: MediaItem) -> str:
@@ -189,25 +322,28 @@ def unskip_items(items: Iterable[MediaItem]) -> list[str]:
     """Remove ``skipped`` manifest entries so items show as new again."""
     from .layout import destination_directory
 
-    by_directory: dict[Path, list[str]] = {}
+    by_directory: dict[Path, list[MediaItem]] = {}
     for item in items:
         try:
-            directory = destination_directory(item)
-            by_directory.setdefault(directory, []).append(media_identity(item))
+            directory = _resolve_existing_manifest_dir(destination_directory(item))
+            by_directory.setdefault(directory, []).append(item)
         except Exception as exc:
             logger.warning(f"Could not resolve destination for unskip media: {exc}")
 
     removed: list[str] = []
-    for directory, ids in by_directory.items():
+    for directory, dir_items in by_directory.items():
         try:
             with _LOCK:
                 data = load_manifest(directory)
                 changed = False
-                for identity in ids:
-                    entry = data["items"].get(identity)
+                for item in dir_items:
+                    matched_key = _find_manifest_entry_key(data, item)
+                    if matched_key is None:
+                        continue
+                    entry = data["items"].get(matched_key)
                     if isinstance(entry, dict) and entry.get("status") == "skipped":
-                        data["items"].pop(identity, None)
-                        removed.append(identity)
+                        data["items"].pop(matched_key, None)
+                        removed.append(matched_key)
                         changed = True
                 if changed:
                     _write_manifest(directory, data)
@@ -236,46 +372,199 @@ def _resolve_existing_manifest_dir(directory: Path) -> Path:
     return directory
 
 
-def _find_manifest_entry(data: dict[str, Any], item: MediaItem) -> dict[str, Any] | None:
-    """Match an item against a manifest by primary identity or fallback metadata."""
-    items = data.get("items") or {}
-    entry = items.get(media_identity(item))
-    if isinstance(entry, dict):
-        return entry
+class _ManifestIndex:
+    """Fast O(1) lookup index over one folder's ``xakumedia-library.json``."""
 
-    target_pid = item.provider_media_id
-    target_kind = str(item.media_type)
-    target_url = item.original_url or ""
-    for candidate in items.values():
-        if not isinstance(candidate, dict):
-            continue
-        if (
-            target_pid
-            and candidate.get("provider_media_id") == target_pid
-            and candidate.get("media_type") == target_kind
-            and (candidate.get("attachment_index") or 0) == (item.attachment_index or 0)
+    def __init__(self, data: dict[str, Any]) -> None:
+        self.items: dict[str, dict[str, Any]] = {}
+        self.by_pid_exact: dict[tuple[str, str, int], str] = {}
+        self.by_url_exact: dict[str, str] = {}
+        self.by_asset_token: dict[tuple[str, str], str] = {}
+        self.by_post_slot: dict[tuple[str, str, int], str] = {}
+        self.by_post_unique: dict[tuple[str, str], str | None] = {}
+
+        raw_items = data.get("items") or {}
+        for key, entry in raw_items.items():
+            if not isinstance(entry, dict):
+                continue
+            status = entry.get("status")
+            if status not in ("downloaded", "skipped"):
+                continue
+            self.items[key] = entry
+            kind = str(entry.get("media_type") or "")
+            idx = int(entry.get("attachment_index") or 0)
+
+            pid = entry.get("provider_media_id")
+            if isinstance(pid, str) and pid:
+                self._put_prefer_downloaded(self.by_pid_exact, (kind, pid, idx), key)
+                base = _pid_base(pid)
+                if (
+                    base
+                    and not base.isdigit()
+                    and len(base) >= 12
+                    and base.lower() not in _GENERIC_URL_STEMS
+                ):
+                    self._put_prefer_downloaded(
+                        self.by_asset_token, (kind, f"stem:{base}"), key
+                    )
+
+            orig_url = entry.get("original_url")
+            if isinstance(orig_url, str) and orig_url:
+                self._put_prefer_downloaded(self.by_url_exact, orig_url, key)
+                for tok in url_asset_tokens(orig_url):
+                    self._put_prefer_downloaded(self.by_asset_token, (kind, tok), key)
+
+            post_key = canonical_single_post_key(entry.get("post_url"))
+            if post_key:
+                self._put_prefer_downloaded(self.by_post_slot, (kind, post_key, idx), key)
+                self._put_unique(self.by_post_unique, (kind, post_key), key)
+
+    def _is_downloaded(self, key: str) -> bool:
+        entry = self.items.get(key)
+        return isinstance(entry, dict) and entry.get("status") == "downloaded"
+
+    def _put_prefer_downloaded(self, table: dict[Any, str], lookup_key: Any, item_key: str) -> None:
+        existing = table.get(lookup_key)
+        if existing is None or (
+            self._is_downloaded(item_key) and not self._is_downloaded(existing)
         ):
-            return candidate
-        if target_url and candidate.get("original_url") == target_url:
-            return candidate
-    return None
+            table[lookup_key] = item_key
+
+    def _put_unique(self, table: dict[Any, str | None], lookup_key: Any, item_key: str) -> None:
+        if lookup_key not in table:
+            table[lookup_key] = item_key
+            return
+        prev = table[lookup_key]
+        if prev is None:
+            return
+        prev_entry = self.items.get(prev) or {}
+        cur_entry = self.items.get(item_key) or {}
+        # Keep unique when pids match; clear to None when distinct slides share one post.
+        if (
+            prev_entry.get("provider_media_id") != cur_entry.get("provider_media_id")
+            and (prev_entry.get("attachment_index") or 0)
+            != (cur_entry.get("attachment_index") or 0)
+        ):
+            table[lookup_key] = None
+        elif self._is_downloaded(item_key) and not self._is_downloaded(prev):
+            table[lookup_key] = item_key
+
+    def match_key(self, item: MediaItem, *, require_global: bool = False) -> str | None:
+        ident = media_identity(item)
+        if ident in self.items:
+            return ident
+
+        target_kind = str(item.media_type)
+        target_pid = item.provider_media_id
+        target_idx = int(item.attachment_index or 0)
+
+        if target_pid and not require_global:
+            hit = self.by_pid_exact.get((target_kind, target_pid, target_idx))
+            if hit:
+                return hit
+
+        candidate_urls = _item_candidate_urls(item)
+        for url in candidate_urls:
+            hit = self.by_url_exact.get(url)
+            if hit:
+                return hit
+
+        for url in candidate_urls:
+            for tok in url_asset_tokens(url):
+                hit = self.by_asset_token.get((target_kind, tok))
+                if hit:
+                    return hit
+
+        post_key = canonical_single_post_key(item.post_url)
+        if post_key:
+            hit = self.by_post_slot.get((target_kind, post_key, target_idx))
+            if hit:
+                return hit
+            if target_idx == 0 or post_key.startswith("fb:photo:"):
+                u_hit = self.by_post_unique.get((target_kind, post_key))
+                if u_hit:
+                    return u_hit
+
+        return None
+
+
+def _find_manifest_entry_key(data: dict[str, Any], item: MediaItem) -> str | None:
+    return _ManifestIndex(data).match_key(item)
+
+
+def _find_manifest_entry(data: dict[str, Any], item: MediaItem) -> dict[str, Any] | None:
+    """Match an item against a manifest by primary identity, asset URL tokens, or post ID."""
+    key = _find_manifest_entry_key(data, item)
+    if key is None:
+        return None
+    entry = (data.get("items") or {}).get(key)
+    return entry if isinstance(entry, dict) else None
+
+
+def _sibling_kind_indexes(
+    directory: Path,
+    index_cache: dict[Path, _ManifestIndex],
+    sibling_cache: dict[tuple[Path, str], list[_ManifestIndex]],
+) -> list[_ManifestIndex]:
+    """Load other user manifests within the same platform and media-kind folder."""
+    kind_name = directory.name.lower()
+    platform_dir = directory.parent.parent
+    cache_key = (platform_dir, kind_name)
+    cached = sibling_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    results: list[_ManifestIndex] = []
+    try:
+        if platform_dir.is_dir():
+            for user_dir in platform_dir.iterdir():
+                if not user_dir.is_dir() or user_dir.name.startswith("."):
+                    continue
+                for sub in user_dir.iterdir():
+                    if (
+                        sub.is_dir()
+                        and sub.name.lower() == kind_name
+                        and sub != directory
+                        and manifest_path(sub).exists()
+                    ):
+                        idx = index_cache.get(sub)
+                        if idx is None:
+                            idx = _ManifestIndex(load_manifest(sub))
+                            index_cache[sub] = idx
+                        if idx.items:
+                            results.append(idx)
+    except OSError:
+        pass
+    sibling_cache[cache_key] = results
+    return results
 
 
 def annotate_items(items: Iterable[MediaItem]) -> None:
     """Attach ``downloaded``/``skipped`` status from the folder manifests."""
     from .layout import destination_directory
 
-    cache: dict[Path, dict[str, Any]] = {}
+    index_cache: dict[Path, _ManifestIndex] = {}
+    sibling_cache: dict[tuple[Path, str], list[_ManifestIndex]] = {}
     for item in items:
         try:
             directory = _resolve_existing_manifest_dir(destination_directory(item))
-            data = cache.get(directory)
-            if data is None:
-                data = load_manifest(directory)
-                cache[directory] = data
-            entry = _find_manifest_entry(data, item)
-            if isinstance(entry, dict):
-                status = entry.get("status")
+            index = index_cache.get(directory)
+            if index is None:
+                index = _ManifestIndex(load_manifest(directory))
+                index_cache[directory] = index
+
+            matched_key = index.match_key(item, require_global=False)
+            matched_entry = index.items.get(matched_key) if matched_key else None
+
+            if matched_entry is None:
+                for sib_index in _sibling_kind_indexes(directory, index_cache, sibling_cache):
+                    sib_key = sib_index.match_key(item, require_global=True)
+                    if sib_key:
+                        matched_entry = sib_index.items.get(sib_key)
+                        break
+
+            if isinstance(matched_entry, dict):
+                status = matched_entry.get("status")
                 if status in {"downloaded", "skipped"}:
                     item.library_status = status
         except Exception as exc:
