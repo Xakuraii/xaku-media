@@ -556,3 +556,100 @@ def test_rescan_matches_rotated_cdn_urls_and_legacy_ids_across_platforms(
     annotate_items([ig_new_img_check])
     assert ig_new_img_check.library_status is None
 
+
+def test_portable_manifest_matches_across_moved_child_folders_and_new_pc(
+    isolated_download_dir: Path,
+) -> None:
+    """Moved/renamed child folders and cross-PC copies must match solely from JSON manifests."""
+    import shutil
+
+    # 1. Record downloaded + skipped items under original default folder layout.
+    dl_vid = MediaItem(
+        id="mv-vid",
+        source_url="https://www.instagram.com/alice/",
+        post_url="https://www.instagram.com/p/MovVid123/",
+        original_url="https://scontent.cdninstagram.com/v/o1/AQMovUnique111.mp4?oe=OLD",
+        media_type=MediaType.VIDEO,
+        author="alice",
+        provider="instagram",
+        provider_media_id="3800000000001111",
+        attachment_index=0,
+        metadata_extra={"extractor": "instagram"},
+    )
+    skip_img = MediaItem(
+        id="mv-img",
+        source_url="https://www.instagram.com/alice/",
+        post_url="https://www.instagram.com/p/MovImg456/",
+        original_url="https://scontent.cdninstagram.com/v/t51/999888777_n.jpg?oe=OLD",
+        media_type=MediaType.IMAGE,
+        author="alice",
+        provider="instagram",
+        provider_media_id="3800000000002222",
+        attachment_index=0,
+        metadata_extra={"extractor": "instagram"},
+    )
+    vid_file = destination_directory(dl_vid) / "alice-vdo-1.mp4"
+    vid_file.parent.mkdir(parents=True, exist_ok=True)
+    vid_file.write_bytes(b"mp4")
+    record_download(dl_vid, vid_file)
+    record_skipped([skip_img])
+
+    # 2. Move the user's folders into nested custom category subfolders (breaking default paths).
+    moved_root = isolated_download_dir / "Archive" / "Favorites" / "alice_renamed"
+    moved_root.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(destination_directory(dl_vid)), str(moved_root / "ClipDump"))
+    shutil.move(str(destination_directory(skip_img)), str(moved_root / "PicDump"))
+
+    # 3. Simulate rescan on a new PC with expired CDN URLs (only JSON manifest in child folders).
+    rescan_vid = MediaItem(
+        id="new-pc-vid",
+        source_url="https://www.instagram.com/alice/",
+        post_url="https://www.instagram.com/p/MovVid123/",
+        original_url="https://instagram.xx99.fbcdn.net/v/o1/AQMovUnique111.mp4?oe=NEW_PC",
+        media_type=MediaType.VIDEO,
+        author="alice",
+        provider="instagram",
+        provider_media_id="3800000000001111",
+        attachment_index=0,
+        metadata_extra={"extractor": "instagram"},
+    )
+    rescan_img = MediaItem(
+        id="new-pc-img",
+        source_url="https://www.instagram.com/alice/",
+        post_url="https://www.instagram.com/p/MovImg456/",
+        original_url="https://instagram.xx99.fbcdn.net/v/t51/completely_different.jpg?oe=NEW",
+        media_type=MediaType.IMAGE,
+        author="alice",
+        provider="instagram",
+        provider_media_id="3800000000002222",
+        attachment_index=0,
+        metadata_extra={"extractor": "instagram"},
+    )
+    fresh_img = MediaItem(
+        id="new-pc-fresh",
+        source_url="https://www.instagram.com/alice/",
+        post_url="https://www.instagram.com/p/BrandNew789/",
+        original_url="https://instagram.xx99.fbcdn.net/v/t51/brand_new_999.jpg",
+        media_type=MediaType.IMAGE,
+        author="alice",
+        provider="instagram",
+        provider_media_id="3800000000009999",
+        attachment_index=0,
+        metadata_extra={"extractor": "instagram"},
+    )
+
+    from xakumedia.downloader.library import status_for, unskip_items
+
+    annotate_items([rescan_vid, rescan_img, fresh_img])
+    assert rescan_vid.library_status == "downloaded"
+    assert rescan_img.library_status == "skipped"
+    assert fresh_img.library_status is None
+    assert status_for(rescan_vid) == "downloaded"
+    assert status_for(rescan_img) == "skipped"
+
+    # Unskipping must find and update the moved child-folder manifest too.
+    removed = unskip_items([rescan_img])
+    assert len(removed) == 1
+    assert status_for(rescan_img) is None
+
+

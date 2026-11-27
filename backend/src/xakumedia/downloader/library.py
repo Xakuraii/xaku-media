@@ -322,8 +322,9 @@ def unskip_items(items: Iterable[MediaItem]) -> list[str]:
     """Remove ``skipped`` manifest entries so items show as new again."""
     from .layout import destination_directory
 
+    item_list = list(items)
     by_directory: dict[Path, list[MediaItem]] = {}
-    for item in items:
+    for item in item_list:
         try:
             directory = _resolve_existing_manifest_dir(destination_directory(item))
             by_directory.setdefault(directory, []).append(item)
@@ -331,6 +332,7 @@ def unskip_items(items: Iterable[MediaItem]) -> list[str]:
             logger.warning(f"Could not resolve destination for unskip media: {exc}")
 
     removed: list[str] = []
+    unmatched: list[MediaItem] = []
     for directory, dir_items in by_directory.items():
         try:
             with _LOCK:
@@ -339,6 +341,7 @@ def unskip_items(items: Iterable[MediaItem]) -> list[str]:
                 for item in dir_items:
                     matched_key = _find_manifest_entry_key(data, item)
                     if matched_key is None:
+                        unmatched.append(item)
                         continue
                     entry = data["items"].get(matched_key)
                     if isinstance(entry, dict) and entry.get("status") == "skipped":
@@ -349,6 +352,34 @@ def unskip_items(items: Iterable[MediaItem]) -> list[str]:
                     _write_manifest(directory, data)
         except Exception as exc:
             logger.warning(f"Could not unskip media in library manifest: {exc}")
+
+    if unmatched:
+        # Also remove skipped records stored inside moved/nested child-folder manifests.
+        checked_dirs = set(by_directory.keys())
+        for folder in _discover_manifest_dirs(default_config.download_dir):
+            if folder in checked_dirs or not unmatched:
+                continue
+            try:
+                with _LOCK:
+                    data = load_manifest(folder)
+                    index = _ManifestIndex(data)
+                    still_unmatched: list[MediaItem] = []
+                    changed = False
+                    for item in unmatched:
+                        matched_key = index.match_key(item, require_global=True)
+                        if matched_key is None:
+                            still_unmatched.append(item)
+                            continue
+                        entry = data["items"].get(matched_key)
+                        if isinstance(entry, dict) and entry.get("status") == "skipped":
+                            data["items"].pop(matched_key, None)
+                            removed.append(matched_key)
+                            changed = True
+                    if changed:
+                        _write_manifest(folder, data)
+                    unmatched = still_unmatched
+            except Exception as exc:
+                logger.warning(f"Could not unskip media in child library manifest: {exc}")
     return removed
 
 
@@ -372,12 +403,27 @@ def _resolve_existing_manifest_dir(directory: Path) -> Path:
     return directory
 
 
+def _entry_platform_tag(entry: dict[str, Any]) -> str | None:
+    """Infer a canonical platform tag (``instagram``, ``facebook``...) for a manifest entry."""
+    from .layout import _host_platform, _normalize_platform
+
+    for raw_url in (entry.get("post_url"), entry.get("source_url"), entry.get("original_url")):
+        tag = _host_platform(raw_url if isinstance(raw_url, str) else None)
+        if tag:
+            return tag
+    return _normalize_platform(
+        str(entry.get("provider")) if isinstance(entry.get("provider"), str) else None
+    )
+
+
 class _ManifestIndex:
     """Fast O(1) lookup index over one folder's ``xakumedia-library.json``."""
 
     def __init__(self, data: dict[str, Any]) -> None:
         self.items: dict[str, dict[str, Any]] = {}
         self.by_pid_exact: dict[tuple[str, str, int], str] = {}
+        self.by_provider_pid_exact: dict[tuple[str, str, str, int], str] = {}
+        self.by_platform_pid_exact: dict[tuple[str, str, str, int], str] = {}
         self.by_url_exact: dict[str, str] = {}
         self.by_asset_token: dict[tuple[str, str], str] = {}
         self.by_post_slot: dict[tuple[str, str, int], str] = {}
@@ -393,10 +439,20 @@ class _ManifestIndex:
             self.items[key] = entry
             kind = str(entry.get("media_type") or "")
             idx = int(entry.get("attachment_index") or 0)
+            provider_low = str(entry.get("provider") or "").lower()
+            platform_tag = _entry_platform_tag(entry)
 
             pid = entry.get("provider_media_id")
             if isinstance(pid, str) and pid:
                 self._put_prefer_downloaded(self.by_pid_exact, (kind, pid, idx), key)
+                if provider_low:
+                    self._put_prefer_downloaded(
+                        self.by_provider_pid_exact, (provider_low, kind, pid, idx), key
+                    )
+                if platform_tag:
+                    self._put_prefer_downloaded(
+                        self.by_platform_pid_exact, (platform_tag, kind, pid, idx), key
+                    )
                 base = _pid_base(pid)
                 if (
                     base
@@ -458,10 +514,28 @@ class _ManifestIndex:
         target_pid = item.provider_media_id
         target_idx = int(item.attachment_index or 0)
 
-        if target_pid and not require_global:
-            hit = self.by_pid_exact.get((target_kind, target_pid, target_idx))
-            if hit:
-                return hit
+        if target_pid:
+            if require_global:
+                provider_low = (item.provider or "").lower()
+                if provider_low:
+                    hit = self.by_provider_pid_exact.get(
+                        (provider_low, target_kind, target_pid, target_idx)
+                    )
+                    if hit:
+                        return hit
+                from .layout import platform_key
+
+                plat = platform_key(item)
+                if plat and plat != "other":
+                    hit = self.by_platform_pid_exact.get(
+                        (plat, target_kind, target_pid, target_idx)
+                    )
+                    if hit:
+                        return hit
+            else:
+                hit = self.by_pid_exact.get((target_kind, target_pid, target_idx))
+                if hit:
+                    return hit
 
         candidate_urls = _item_candidate_urls(item)
         for url in candidate_urls:
@@ -539,30 +613,79 @@ def _sibling_kind_indexes(
     return results
 
 
-def annotate_items(items: Iterable[MediaItem]) -> None:
-    """Attach ``downloaded``/``skipped`` status from the folder manifests."""
+def _discover_manifest_dirs(base_dir: Path | str | None = None) -> list[Path]:
+    """Walk ``base_dir`` and return every directory containing ``xakumedia-library.json``."""
+    root = Path(base_dir) if base_dir else default_config.download_dir
+    if not root.is_dir():
+        return []
+    discovered: list[Path] = []
+    skip_dirs = {"node_modules", "__pycache__"}
+    try:
+        for cur, dirs, files in os.walk(root):
+            dirs[:] = sorted(
+                d for d in dirs if not d.startswith(".") and d not in skip_dirs
+            )
+            if MANIFEST_FILENAME in files:
+                discovered.append(Path(cur))
+    except OSError:
+        pass
+    return discovered
+
+
+def _lookup_manifest_entry(
+    item: MediaItem,
+    index_cache: dict[Path, _ManifestIndex],
+    sibling_cache: dict[tuple[Path, str], list[_ManifestIndex]],
+    root_dirs_cache: list[Path] | None,
+) -> tuple[dict[str, Any] | None, list[Path]]:
+    """Find a matching manifest entry across primary, sibling, and any child folders."""
     from .layout import destination_directory
 
+    directory = _resolve_existing_manifest_dir(destination_directory(item))
+    index = index_cache.get(directory)
+    if index is None:
+        index = _ManifestIndex(load_manifest(directory))
+        index_cache[directory] = index
+
+    matched_key = index.match_key(item, require_global=False)
+    if matched_key:
+        return index.items.get(matched_key), root_dirs_cache
+
+    checked = {directory}
+    for sib_index in _sibling_kind_indexes(directory, index_cache, sibling_cache):
+        sib_key = sib_index.match_key(item, require_global=True)
+        if sib_key:
+            return sib_index.items.get(sib_key), root_dirs_cache
+
+    if root_dirs_cache is None:
+        root_dirs_cache = _discover_manifest_dirs(default_config.download_dir)
+
+    for folder in root_dirs_cache:
+        if folder in checked:
+            continue
+        f_index = index_cache.get(folder)
+        if f_index is None:
+            f_index = _ManifestIndex(load_manifest(folder))
+            index_cache[folder] = f_index
+        if not f_index.items:
+            continue
+        r_key = f_index.match_key(item, require_global=True)
+        if r_key:
+            return f_index.items.get(r_key), root_dirs_cache
+
+    return None, root_dirs_cache
+
+
+def annotate_items(items: Iterable[MediaItem]) -> None:
+    """Attach ``downloaded``/``skipped`` status from folder and moved child-folder manifests."""
     index_cache: dict[Path, _ManifestIndex] = {}
     sibling_cache: dict[tuple[Path, str], list[_ManifestIndex]] = {}
+    root_dirs_cache: list[Path] | None = None
     for item in items:
         try:
-            directory = _resolve_existing_manifest_dir(destination_directory(item))
-            index = index_cache.get(directory)
-            if index is None:
-                index = _ManifestIndex(load_manifest(directory))
-                index_cache[directory] = index
-
-            matched_key = index.match_key(item, require_global=False)
-            matched_entry = index.items.get(matched_key) if matched_key else None
-
-            if matched_entry is None:
-                for sib_index in _sibling_kind_indexes(directory, index_cache, sibling_cache):
-                    sib_key = sib_index.match_key(item, require_global=True)
-                    if sib_key:
-                        matched_entry = sib_index.items.get(sib_key)
-                        break
-
+            matched_entry, root_dirs_cache = _lookup_manifest_entry(
+                item, index_cache, sibling_cache, root_dirs_cache
+            )
             if isinstance(matched_entry, dict):
                 status = matched_entry.get("status")
                 if status in {"downloaded", "skipped"}:
@@ -615,10 +738,7 @@ def apply_renames(renamed: Iterable[tuple[Path, Path]]) -> None:
 
 def status_for(item: MediaItem) -> str | None:
     """Return the manifest status for one item without mutating it."""
-    from .layout import destination_directory
-
-    directory = _resolve_existing_manifest_dir(destination_directory(item))
-    entry = _find_manifest_entry(load_manifest(directory), item)
+    entry, _ = _lookup_manifest_entry(item, {}, {}, None)
     if isinstance(entry, dict):
         status = entry.get("status")
         if status in {"downloaded", "skipped"}:
