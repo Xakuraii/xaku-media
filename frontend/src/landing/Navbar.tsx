@@ -23,13 +23,12 @@ export const Navbar: React.FC = () => {
       <div className="lc-container h-16 flex items-center justify-between">
         {/* Brand logo & name */}
         <a href="#" className="flex items-center space-x-2.5">
-          <span className="grid place-items-center w-7 h-7 rounded-md bg-brand-white">
-            <img
-              src="XakuMedia.svg"
-              alt="XakuMedia logo"
-              className="w-full h-full"
-            />
-          </span>
+          <img
+            src="./XakuMedia.svg"
+            alt="XakuMedia logo"
+            className="w-10 h-10 sm:w-12 sm:h-12 shrink-0 object-contain"
+            draggable={false}
+          />
           <span className="font-display font-semibold text-base tracking-tight text-ink">
             Xaku<span className="text-accent">Media</span>
           </span>

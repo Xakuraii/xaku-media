@@ -79,9 +79,12 @@ export const AppShowcaseWindow: React.FC = () => {
         {/* Titlebar */}
         <div className="flex h-10 items-center justify-between border-b border-hairline bg-band pl-4 pr-2.5">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="grid h-4 w-4 shrink-0 place-items-center rounded-sm bg-brand-white">
-              <img src="XakuMedia.svg" alt="" className="h-full w-full" />
-            </span>
+            <img
+              src="./XakuMedia.svg"
+              alt=""
+              className="h-4 w-4 shrink-0 object-contain"
+              draggable={false}
+            />
             <span className="truncate text-xs font-medium text-muted">
               XakuMedia v{RELEASE_CONFIG.version}
             </span>
@@ -105,9 +108,12 @@ export const AppShowcaseWindow: React.FC = () => {
           <aside className="hidden w-52 shrink-0 flex-col border-r border-hairline bg-band/70 p-2.5 lg:flex">
             <div className="mb-4 overflow-hidden rounded-xl border border-hairline bg-surface/85 px-2.5 py-2.5 shadow-sm">
               <div className="flex items-center gap-2.5">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-hairline bg-brand-white shadow-sm">
-                  <img src="XakuMedia.svg" alt="" className="h-5 w-5" />
-                </div>
+                <img
+                  src="./XakuMedia.svg"
+                  alt=""
+                  className="h-8 w-8 shrink-0 object-contain"
+                  draggable={false}
+                />
                 <div className="min-w-0">
                   <span className="block truncate text-xs font-bold tracking-tight text-ink">
                     Xaku<span className="text-accent">Media</span>
