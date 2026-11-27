@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import threading
+import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import UTC, datetime
@@ -69,13 +70,39 @@ VIDEO_HOSTS = {
     "bilibili.com",
     "www.bilibili.com",
 }
-SAFETY_MAX_POSTS = 5000
+SAFETY_MAX_POSTS = 10000
 HYDRATE_WORKERS = 6
 
-_CHANNEL_PATH = re.compile(r"^/(@[^/]+|channel/[^/]+|c/[^/]+|user/[^/]+)/?$")
+_CHANNEL_ROOT_PATH = re.compile(
+    r"^/(@[^/]+|channel/[^/]+|c/[^/]+|user/[^/]+)(?:/featured)?/?$",
+    re.IGNORECASE,
+)
+_CHANNEL_TAB_PATH = re.compile(
+    r"^/(@[^/]+|channel/[^/]+|c/[^/]+|user/[^/]+)/"
+    r"(videos|shorts|streams|live|playlists|releases|podcasts)/?$",
+    re.IGNORECASE,
+)
+_YT_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+_TRANSIENT_YTDLP_MARKERS = (
+    "timed out",
+    "timeout",
+    "429",
+    "too many requests",
+    "http error 5",
+    "connection reset",
+    "connection aborted",
+    "temporarily unavailable",
+    "remote end closed",
+)
 _CHANNEL_TABS = ("videos", "shorts", "streams")
 _TIKTOK_PROFILE_PATH = re.compile(r"^/@([^/]+)(?:/videos)?/?$")
 _TIKTOK_PHOTO_PATH = re.compile(r"^/(@[^/]+)/photo/(\d+)")
+
+
+def _is_transient_ytdlp_error(error: str) -> bool:
+    """Return True when a yt-dlp failure looks transient and worth retrying."""
+    lower = str(error).lower()
+    return any(marker in lower for marker in _TRANSIENT_YTDLP_MARKERS)
 
 
 def normalize_tiktok_photo_url(url: str) -> str:
@@ -139,9 +166,9 @@ def is_collection_url(url: str) -> bool:
     if host in YOUTUBE_HOSTS and "list" in parse_qs(parts.query):
         return True
     if host in YOUTUBE_HOSTS:
-        if _CHANNEL_PATH.match(parts.path):
+        if _CHANNEL_ROOT_PATH.match(parts.path):
             return True
-        return bool(re.match(r"^/@[^/]+/(videos|shorts|streams|playlists)/?$", parts.path))
+        return bool(_CHANNEL_TAB_PATH.match(parts.path))
     if host in VIDEO_HOSTS:
         return "/playlist" in parts.path or "/channel" in parts.path or "/user" in parts.path
     if host in TIKTOK_HOSTS:
@@ -160,25 +187,28 @@ def enumerate_url(url: str) -> str:
         return url
     if host not in YOUTUBE_HOSTS:
         return url
-    match = _CHANNEL_PATH.match(parts.path)
+    match = _CHANNEL_ROOT_PATH.match(parts.path)
     if match:
-        base = url.split("?", 1)[0].rstrip("/")
-        return f"{base}/videos"
+        scheme = parts.scheme or "https"
+        return f"{scheme}://{parts.netloc}/{match.group(1)}/videos"
     return url
 
 
 def collection_urls(url: str) -> list[str]:
     """Return every tab/URL needed to enumerate a collection completely.
 
-    A bare YouTube channel URL expands to Videos, Shorts, and Streams so a
-    profile scan does not silently miss short-form or live uploads. Explicit
-    tab URLs and playlists are enumerated exactly as given.
+    A bare YouTube channel URL (including ``/featured``) expands to Videos,
+    Shorts, and Streams so a profile scan does not silently miss short-form
+    or live uploads. Explicit tab URLs and playlists are enumerated as given.
     """
     parts = urlsplit(url)
     host = (parts.hostname or "").lower()
-    if host in YOUTUBE_HOSTS and _CHANNEL_PATH.match(parts.path):
-        base = url.split("?", 1)[0].rstrip("/")
-        return [f"{base}/{tab}" for tab in _CHANNEL_TABS]
+    if host in YOUTUBE_HOSTS:
+        match = _CHANNEL_ROOT_PATH.match(parts.path)
+        if match:
+            scheme = parts.scheme or "https"
+            base = f"{scheme}://{parts.netloc}/{match.group(1)}"
+            return [f"{base}/{tab}" for tab in _CHANNEL_TABS]
     return [enumerate_url(url)]
 
 
@@ -221,24 +251,43 @@ class _EntryHydrator:
                 self._instances.append(ydl)
         return ydl
 
-    def hydrate(self, entry: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
+    @staticmethod
+    def _normalize_entry_url(entry: dict[str, Any]) -> str | None:
         entry_url = entry.get("url") or entry.get("webpage_url")
         if not entry_url:
+            return None
+        entry_str = str(entry_url).strip()
+        ie_key = str(entry.get("ie_key") or "").lower()
+        if _YT_VIDEO_ID_RE.fullmatch(entry_str) and (ie_key.startswith("youtube") or not ie_key):
+            return f"https://www.youtube.com/watch?v={entry_str}"
+        return entry_str
+
+    def hydrate(self, entry: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
+        entry_url = self._normalize_entry_url(entry)
+        if not entry_url:
             return None, "entry has no URL"
-        try:
-            info = self._ydl().extract_info(entry_url, download=False)
-        except (DownloadError, ExtractorError) as exc:
-            return None, str(exc)
-        except Exception as exc:  # a single bad entry must not abort the channel
-            return None, str(exc)
-        if not info:
-            return None, "no metadata returned"
-        if info.get("entries"):
-            nested = [item for item in info.get("entries") or [] if item]
-            if not nested:
-                return None, "empty nested collection"
-            info = nested[0]
-        return info, ""
+        last_error = ""
+        for attempt in range(3):
+            try:
+                info = self._ydl().extract_info(entry_url, download=False)
+            except (DownloadError, ExtractorError) as exc:
+                last_error = str(exc)
+            except Exception as exc:  # a single bad entry must not abort the channel
+                last_error = str(exc)
+            else:
+                if not info:
+                    return None, "no metadata returned"
+                if info.get("entries"):
+                    nested = [item for item in info.get("entries") or [] if item]
+                    if not nested:
+                        return None, "empty nested collection"
+                    info = nested[0]
+                return info, ""
+            if attempt < 2 and _is_transient_ytdlp_error(last_error):
+                time.sleep(0.5 if attempt == 0 else 1.5)
+                continue
+            break
+        return None, last_error
 
     def close(self) -> None:
         for ydl in self._instances:
@@ -348,6 +397,18 @@ class YtDlpProvider(BaseProvider):
     def _build_hydrator(self, hydrate_opts: dict[str, Any]) -> _EntryHydrator:
         return _EntryHydrator(hydrate_opts)
 
+    def _enumerate_tab(
+        self,
+        enum_opts: dict[str, Any],
+        enum_url: str,
+    ) -> dict[str, Any] | None:
+        with yt_dlp.YoutubeDL(enum_opts) as enum_ydl:
+            strip_stale_waf_cookies(enum_ydl, enum_url)
+            info = enum_ydl.extract_info(enum_url, download=False)
+            if not info and is_tiktok(enum_url):
+                info = self._resolve_tiktok_profile_via_waf(enum_ydl, enum_url)
+            return info
+
     def _extract_single_info(self, opts: dict[str, Any], safe_url: str) -> Any:
         with yt_dlp.YoutubeDL(opts) as ydl:
             strip_stale_waf_cookies(ydl, safe_url)
@@ -414,6 +475,22 @@ class YtDlpProvider(BaseProvider):
                     except Exception as exc:  # defensive: worker failures are per-entry
                         info, error = None, str(exc)
                     if not info:
+                        if is_tiktok(source_url) and options.include_images:
+                            entry_url = entry.get("url") or entry.get("webpage_url")
+                            if entry_url:
+                                fallback_post = self._tiktok_image_post(
+                                    normalize_tiktok_photo_url(str(entry_url)),
+                                    source_url,
+                                    entry,
+                                    warn,
+                                )
+                                if fallback_post is not None and fallback_post.media_items:
+                                    emitted += 1
+                                    yield fallback_post
+                                    if emitted >= limit:
+                                        return
+                                    submit_next()
+                                    continue
                         label = (
                             entry.get("title")
                             or entry.get("id")
@@ -974,11 +1051,7 @@ class YtDlpProvider(BaseProvider):
                 if cancel_event.is_set():
                     return
                 try:
-                    with yt_dlp.YoutubeDL(enum_opts) as enum_ydl:
-                        strip_stale_waf_cookies(enum_ydl, enum_url)
-                        info = enum_ydl.extract_info(enum_url, download=False)
-                        if not info and is_tiktok(enum_url):
-                            info = self._resolve_tiktok_profile_via_waf(enum_ydl, enum_url)
+                    info = self._enumerate_tab(enum_opts, enum_url)
                 except (DownloadError, ExtractorError) as exc:
                     if is_tiktok(enum_url):
                         try:

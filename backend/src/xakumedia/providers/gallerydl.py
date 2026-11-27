@@ -80,6 +80,7 @@ POST_KEYS = (
 IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "gif", "avif", "bmp", "tiff", "svg"}
 VIDEO_EXTENSIONS = {"mp4", "webm", "mkv", "mov", "avi", "m4v", "ts"}
 AUDIO_EXTENSIONS = {"mp3", "m4a", "aac", "flac", "ogg", "wav", "opus"}
+MANIFEST_EXTENSIONS = {"m3u8", "mpd"}
 AUDIO_CODECS = {
     "mp3": "mp3",
     "m4a": "aac",
@@ -741,6 +742,23 @@ class GalleryDlProvider(BaseProvider):
                     media_url = fallback_url
 
                 ext = _extension(meta, media_url)
+                url_path = media_url.split("?", 1)[0].rsplit("/", 1)[-1]
+                url_ext = url_path.rsplit(".", 1)[-1].lower() if "." in url_path else ""
+                if ext in MANIFEST_EXTENSIONS or url_ext in MANIFEST_EXTENSIONS:
+                    fallback = [
+                        str(candidate)
+                        for candidate in (meta.get("_fallback") or ())
+                        if candidate and _extension(meta, str(candidate)) not in MANIFEST_EXTENSIONS
+                    ]
+                    if fallback:
+                        media_url = fallback[0]
+                        ext = _extension(meta, media_url)
+                    else:
+                        warn(
+                            f"Skipped manifest-only stream ({ext or url_ext}) "
+                            "with no direct media URL."
+                        )
+                        continue
                 if meta.get("type") == "preview":
                     # Twitter/X emits the video's poster image right after the
                     # video file when ``previews`` is enabled. Attach it to the
