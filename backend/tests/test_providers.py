@@ -1305,3 +1305,628 @@ def test_facebook_provider_paginates_all_reels_via_graphql(
         "https://cdn.example.com/t1.jpg",
         "https://cdn.example.com/t2.jpg",
     ]
+
+
+def test_shared_dash_mpd_parses_instagram_and_facebook() -> None:
+    from xakumedia.providers.dash import parse_dash_mpd
+    from xakumedia.providers.platforms.facebook import parse_facebook_dash_mpd
+
+    assert parse_facebook_dash_mpd is parse_dash_mpd
+
+    ig_mpd = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<MPD mediaPresentationDuration="PT15S">\n'
+        '  <Period id="0">\n'
+        '    <AdaptationSet mimeType="video/mp4">\n'
+        '      <Representation id="1" width="720" height="1280" '
+        'codecs="vp09.00.31" bandwidth="1200000">\n'
+        "        <BaseURL>https://ig.cdn/720.mp4</BaseURL>\n"
+        "      </Representation>\n"
+        '      <Representation id="2" width="1080" height="1920" '
+        'codecs="vp09.00.40" bandwidth="1800000">\n'
+        "        <BaseURL>https://ig.cdn/1080.mp4</BaseURL>\n"
+        "      </Representation>\n"
+        "    </AdaptationSet>\n"
+        '    <AdaptationSet mimeType="audio/mp4">\n'
+        '      <Representation id="3" codecs="mp4a.40.5" bandwidth="78000">\n'
+        "        <BaseURL>https://ig.cdn/audio.m4a</BaseURL>\n"
+        "      </Representation>\n"
+        "    </AdaptationSet>\n"
+        "  </Period>\n"
+        "</MPD>"
+    )
+    formats, duration = parse_dash_mpd(ig_mpd)
+    assert duration == 15.0
+    assert [f.format_id for f in formats] == ["1080p-vp9", "720p-vp9", "audio"]
+    assert all(f.requires_merge for f in formats[:-1])
+    assert not formats[-1].requires_merge
+    assert formats[0].url == "https://ig.cdn/1080.mp4"
+
+
+def test_gallerydl_skips_manifest_urls_without_direct_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warnings: list[str] = []
+    items = [
+        (
+            Message.Url,
+            "https://cdn.example.com/stream.m3u8?tag=1",
+            {"post_id": "p1", "id": "v1"},
+        ),
+        (
+            Message.Url,
+            "https://cdn.example.com/stream2.m3u8?tag=1",
+            {
+                "post_id": "p2",
+                "id": "v2",
+                "_fallback": ("https://cdn.example.com/direct.mp4",),
+            },
+        ),
+    ]
+    monkeypatch.setattr(
+        GalleryDlProvider, "_prepare_extractor", lambda self, url: _FakeExtractor(items)
+    )
+    monkeypatch.setattr(gallery_module, "validate_url_security", lambda url: url)
+
+    posts = list(
+        GalleryDlProvider().iter_posts(
+            "https://fake.example/alice",
+            ScanOptions(),
+            threading.Event(),
+            on_warning=warnings.append,
+        )
+    )
+    assert len(posts) == 1
+    assert posts[0].media_items[0].media_type == MediaType.VIDEO
+    assert posts[0].media_items[0].original_url == "https://cdn.example.com/direct.mp4"
+    assert any("manifest-only" in w for w in warnings)
+
+
+def test_instagram_url_parsing_and_profile_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from xakumedia.providers.platforms.instagram import (
+        InstagramProvider,
+        _parse_instagram_url,
+    )
+
+    assert _parse_instagram_url("https://www.instagram.com/alice/").scope == "profile"
+    assert _parse_instagram_url("https://www.instagram.com/alice/posts/").canonical_url == (
+        "https://www.instagram.com/alice/"
+    )
+    assert _parse_instagram_url("https://www.instagram.com/alice/reels/").scope == "reels"
+    assert _parse_instagram_url("https://www.instagram.com/stories/alice/123/").scope == "stories"
+    assert (
+        _parse_instagram_url("https://www.instagram.com/stories/highlights/99/").scope
+        == "highlight"
+    )
+    p_short = _parse_instagram_url("https://instagr.am/p/AbC123/")
+    assert p_short.scope == "post" and p_short.shortcode == "AbC123"
+    r_short = _parse_instagram_url("https://m.instagram.com/reel/XyZ99/")
+    assert r_short.scope == "post" and r_short.shortcode == "XyZ99"
+
+    ig_mpd = (
+        '<MPD mediaPresentationDuration="PT8S"><Period>'
+        '<AdaptationSet mimeType="video/mp4">'
+        '<Representation width="1080" height="1920" codecs="vp09.00.40" bandwidth="1500000">'
+        "<BaseURL>https://ig.cdn/r2_1080.mp4</BaseURL></Representation></AdaptationSet>"
+        '<AdaptationSet mimeType="audio/mp4"><Representation codecs="mp4a.40.5">'
+        "<BaseURL>https://ig.cdn/r2_audio.m4a</BaseURL></Representation></AdaptationSet>"
+        "</Period></MPD>"
+    )
+    hydrated_calls: list[str] = []
+
+    class _FakeIgApi:
+        def user(self, username: str):
+            return {"id": "42", "username": username}
+
+        def user_feed(self, username: str):
+            yield {
+                "pk": "1",
+                "code": "P_PHOTO",
+                "taken_at": 1700000001,
+                "user": {"username": username},
+                "image_versions2": {
+                    "candidates": [{"url": "https://ig.cdn/p1.jpg", "width": 1080, "height": 1080}]
+                },
+            }
+            yield {
+                "pk": "2",
+                "code": "P_CAROUSEL",
+                "taken_at": 1700000002,
+                "user": {"username": username},
+                "carousel_media": [
+                    {
+                        "pk": "201",
+                        "image_versions2": {
+                            "candidates": [
+                                {"url": "https://ig.cdn/c1.jpg", "width": 1080, "height": 1350}
+                            ]
+                        },
+                    },
+                    {
+                        "pk": "202",
+                        "video_versions": [
+                            {"url": "https://ig.cdn/c2.mp4", "width": 720, "height": 1280}
+                        ],
+                        "image_versions2": {
+                            "candidates": [
+                                {"url": "https://ig.cdn/c2.jpg", "width": 720, "height": 1280}
+                            ]
+                        },
+                    },
+                ],
+            }
+            # Static photo backed by music (frameRate="1/1" must stay an image)
+            yield {
+                "pk": "3",
+                "code": "P_STATIC_MUSIC",
+                "taken_at": 1700000003,
+                "user": {"username": username},
+                "video_dash_manifest": '<MPD><Representation frameRate="1/1"/></MPD>',
+                "video_versions": [
+                    {"url": "https://ig.cdn/dummy.mp4", "width": 720, "height": 720}
+                ],
+                "image_versions2": {
+                    "candidates": [
+                        {"url": "https://ig.cdn/static.jpg", "width": 1080, "height": 1080}
+                    ]
+                },
+            }
+            yield {
+                "pk": "4",
+                "code": "REEL_SHARED",
+                "product_type": "clips",
+                "taken_at": 1700000004,
+                "user": {"username": username},
+                "video_versions": [
+                    {"url": "https://ig.cdn/r1_720.mp4", "width": 720, "height": 1280}
+                ],
+                "image_versions2": {
+                    "candidates": [
+                        {"url": "https://ig.cdn/r1.jpg", "width": 720, "height": 1280}
+                    ]
+                },
+            }
+
+        def user_reels(self, username: str):
+            yield {"media": {"pk": "4", "code": "REEL_SHARED"}}
+            yield {"media": {"pk": "5", "code": "REEL_ONLY"}}
+            yield {"media": {"pk": "6", "code": "REEL_BROKEN"}}
+
+        def media(self, code: str):
+            hydrated_calls.append(code)
+            if code == "REEL_BROKEN":
+                raise RuntimeError("transient error")
+            if code == "REEL_ONLY":
+                yield {
+                    "pk": "5",
+                    "code": "REEL_ONLY",
+                    "product_type": "clips",
+                    "taken_at": 1700000005,
+                    "user": {"username": "alice"},
+                    "video_dash_manifest": ig_mpd,
+                    "video_versions": [
+                        {"url": "https://ig.cdn/r2_720.mp4", "width": 720, "height": 1280}
+                    ],
+                    "image_versions2": {
+                        "candidates": [
+                            {"url": "https://ig.cdn/r2.jpg", "width": 720, "height": 1280}
+                        ]
+                    },
+                }
+
+        def highlights_tray(self, username: str):
+            yield {"id": "highlight:777"}
+
+        def reels_media(self, ids: list[str]):
+            if ids == ["42"]:
+                return [
+                    {
+                        "items": [
+                            {
+                                "pk": "70",
+                                "taken_at": 1700000006,
+                                "image_versions2": {
+                                    "candidates": [
+                                        {
+                                            "url": "https://ig.cdn/story.jpg",
+                                            "width": 1080,
+                                            "height": 1920,
+                                        }
+                                    ]
+                                },
+                            }
+                        ]
+                    }
+                ]
+            return [
+                {
+                    "id": "highlight:777",
+                    "title": "Travel",
+                    "items": [
+                        {
+                            "pk": "80",
+                            "taken_at": 1700000007,
+                            "image_versions2": {
+                                "candidates": [
+                                    {
+                                        "url": "https://ig.cdn/hl.jpg",
+                                        "width": 1080,
+                                        "height": 1920,
+                                    }
+                                ]
+                            },
+                        }
+                    ],
+                }
+            ]
+
+    monkeypatch.setattr(
+        InstagramProvider,
+        "_prepare_extractor",
+        lambda self, url: SimpleNamespace(api=_FakeIgApi(), category="instagram"),
+    )
+
+    warnings: list[str] = []
+    posts = list(
+        InstagramProvider().iter_posts(
+            "https://www.instagram.com/alice/posts/",
+            ScanOptions(),
+            threading.Event(),
+            on_warning=warnings.append,
+        )
+    )
+
+    # REEL_SHARED must NOT trigger api.media(), REEL_BROKEN is skipped gracefully
+    assert hydrated_calls == ["REEL_ONLY", "REEL_BROKEN", "REEL_BROKEN"]
+    assert any("REEL_BROKEN" in w for w in warnings)
+    post_ids = [p.provider_post_id for p in posts]
+    assert post_ids == ["1", "2", "3", "4", "5", "70", "80"]
+    # Static 1fps music post stays an IMAGE
+    assert posts[2].media_items[0].media_type == MediaType.IMAGE
+    # Reels-only video exposes 1080p DASH + audio + 720p muxed preview URL
+    reel_only_item = posts[4].media_items[0]
+    assert reel_only_item.media_type == MediaType.VIDEO
+    assert [f.format_id for f in reel_only_item.available_formats] == [
+        "1080p-vp9",
+        "audio",
+        "720p-progressive",
+    ]
+    assert reel_only_item.original_url == "https://ig.cdn/r2_720.mp4"
+
+
+def test_facebook_profile_scans_albums_avatar_and_order_independent_page_info(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+
+    from xakumedia.providers.platforms.facebook import FacebookProvider
+
+    # Note: has_next_page appears BEFORE end_cursor to prove order independence.
+    html_reels = (
+        '"DTSGInitialData",[],{"token":"dtsg"}'
+        '"LSD",[],{"token":"lsd"}'
+        '"aggregated_fb_shorts":{"edges":[],"page_info":'
+        '{"has_next_page":true,"end_cursor":null}},"id":"COL99"}'
+    )
+    mpd = (
+        '<MPD mediaPresentationDuration="PT4S"><Period>'
+        '<AdaptationSet contentType="video"><Representation codecs="avc1" width="720" '
+        'height="1280" FBQualityLabel="720p">'
+        "<BaseURL>https://fb.cdn/r1.mp4</BaseURL></Representation></AdaptationSet>"
+        '<AdaptationSet contentType="audio"><Representation codecs="mp4a.40.5">'
+        "<BaseURL>https://fb.cdn/r1.m4a</BaseURL></Representation></AdaptationSet>"
+        "</Period></MPD>"
+    )
+    gql_page = json.dumps(
+        {
+            "data": {
+                "node": {
+                    "aggregated_fb_shorts": {
+                        "edges": [
+                            {
+                                "profile_reel_node": {
+                                    "node": {
+                                        "attachments": [
+                                            {
+                                                "media": {
+                                                    "id": "501",
+                                                    "permalink_url": "https://www.facebook.com/reel/501/",
+                                                    "videoDeliveryLegacyFields": {
+                                                        "dash_manifest_xml_string": mpd
+                                                    },
+                                                }
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        ],
+                        "page_info": {"has_next_page": False, "end_cursor": None},
+                    }
+                }
+            }
+        }
+    )
+    gql_attempts = 0
+
+    class _FakeExtractor:
+        category = "facebook"
+        subcategory = "user"
+
+        def request(self, url: str, method: str = "GET", fatal: bool = True, **kwargs):
+            nonlocal gql_attempts
+            del fatal
+            if "api/graphql" in url:
+                gql_attempts += 1
+                if gql_attempts == 1:
+                    return SimpleNamespace(status_code=500, text="", url=url)
+                return SimpleNamespace(status_code=200, text=gql_page, url=url)
+            if url.endswith("/reels"):
+                return SimpleNamespace(status_code=200, text=html_reels, url=url)
+            return SimpleNamespace(status_code=200, text="<html></html>", url=url)
+
+    def fake_discover(self, url: str, cancel_event, warn, on_page, state, depth: int):
+        if url.endswith("/photos"):
+            raise MediaUnavailableError("no set_id on photos_by")
+        if url.endswith("/photos_albums"):
+            state.posts_emitted += 1
+            state.media_count += 1
+            yield SimpleNamespace(
+                id="p_alb",
+                provider="gallerydl",
+                provider_post_id="alb1",
+                source_url=url,
+                post_url=url,
+                author="alice",
+                title="Album 1",
+                post_type=MediaType.IMAGE,
+                media_items=[
+                    SimpleNamespace(
+                        provider_media_id="img_shared",
+                        original_url="https://fb.cdn/shared.jpg",
+                    )
+                ],
+            )
+        if url.endswith("/avatar"):
+            # Duplicate img_shared must be deduplicated cleanly against photos_albums.
+            state.posts_emitted += 1
+            state.media_count += 1
+            yield SimpleNamespace(
+                id="p_av",
+                provider="gallerydl",
+                provider_post_id="av1",
+                source_url=url,
+                post_url=url,
+                author="alice",
+                title="Avatar",
+                post_type=MediaType.IMAGE,
+                media_items=[
+                    SimpleNamespace(
+                        provider_media_id="img_shared",
+                        original_url="https://fb.cdn/shared.jpg",
+                    )
+                ],
+            )
+
+    monkeypatch.setattr(FacebookProvider, "_prepare_extractor", lambda self, url: _FakeExtractor())
+    monkeypatch.setattr(GalleryDlProvider, "_discover", fake_discover)
+    monkeypatch.setattr("xakumedia.providers.platforms.facebook.time.sleep", lambda _s: None)
+
+    warnings: list[str] = []
+    posts = list(
+        FacebookProvider().iter_posts(
+            "https://www.facebook.com/alice",
+            ScanOptions(include_videos=True, include_images=True),
+            threading.Event(),
+            on_warning=warnings.append,
+        )
+    )
+    assert gql_attempts == 2
+    assert [p.provider_post_id for p in posts] == ["501", "alb1"]
+    assert any("photos discovery ended early" in w.lower() for w in warnings)
+
+
+def test_x_provider_combines_timelines_filters_authors_and_exposes_mp4_variants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from xakumedia.providers.platforms.x import XProvider, _parse_x_url
+
+    assert _parse_x_url("https://x.com/alice/media").scope == "profile"
+    assert _parse_x_url("https://twitter.com/alice/tweets").canonical_url == "https://x.com/alice"
+    st = _parse_x_url("https://x.com/alice/status/999")
+    assert st.scope == "status" and st.tweet_id == "999"
+
+    def make_tweet(tid: str, screen_name: str, *, video: bool = False, photo: bool = False):
+        media = []
+        if video:
+            media.append(
+                {
+                    "id_str": f"m_{tid}_v",
+                    "type": "video",
+                    "media_url_https": f"https://pbs.twimg.com/{tid}_thumb.jpg",
+                    "original_info": {"width": 1080, "height": 1920},
+                    "video_info": {
+                        "duration_millis": 5200,
+                        "variants": [
+                            {
+                                "content_type": "application/x-mpegURL",
+                                "url": "https://video.twimg.com/a.m3u8",
+                            },
+                            {
+                                "bitrate": 632000,
+                                "content_type": "video/mp4",
+                                "url": "https://video.twimg.com/vid/avc1/320x568/low.mp4",
+                            },
+                            {
+                                "bitrate": 2176000,
+                                "content_type": "video/mp4",
+                                "url": "https://video.twimg.com/vid/avc1/720x1280/hd.mp4",
+                            },
+                        ],
+                    },
+                }
+            )
+        if photo:
+            media.append(
+                {
+                    "id_str": f"m_{tid}_p",
+                    "type": "photo",
+                    "media_url_https": f"https://pbs.twimg.com/media/{tid}.jpg",
+                    "original_info": {"width": 1200, "height": 1600},
+                }
+            )
+        return {
+            "rest_id": tid,
+            "core": {"user_results": {"result": {"core": {"screen_name": screen_name}}}},
+            "legacy": {
+                "id_str": tid,
+                "created_at": "Wed Oct 10 20:19:24 +0000 2024",
+                "full_text": f"Tweet {tid}",
+                "extended_entities": {"media": media},
+            },
+        }
+
+    class _FakeXApi:
+        def user_by_screen_name(self, handle: str):
+            return {"rest_id": "u1", "legacy": {}}
+
+        def user_media(self, handle: str):
+            yield make_tweet("101", "Alice", video=True, photo=True)
+
+        def user_original_timeline(self, handle: str):
+            # 101 is duplicate, 102 is pinned/missed photo by Alice, 103 is another user
+            yield make_tweet("101", "alice", video=True)
+            yield make_tweet("102", "alice", photo=True)
+            yield make_tweet("103", "otheruser", photo=True)
+
+    monkeypatch.setattr(
+        XProvider,
+        "_prepare_extractor",
+        lambda self, url: SimpleNamespace(api=_FakeXApi(), category="twitter"),
+    )
+
+    posts = list(
+        XProvider().iter_posts(
+            "https://x.com/alice/media",
+            ScanOptions(),
+            threading.Event(),
+        )
+    )
+    assert [p.provider_post_id for p in posts] == ["101", "102"]
+    vid_item, photo_item = posts[0].media_items
+    assert vid_item.media_type == MediaType.VIDEO
+    assert [f.format_id for f in vid_item.available_formats] == ["720p", "320p"]
+    assert all(f.container == "mp4" for f in vid_item.available_formats)
+    assert photo_item.original_url == "https://pbs.twimg.com/media/101?format=jpg&name=orig"
+
+
+def test_youtube_featured_url_and_cookieless_tab_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from yt_dlp.utils import ExtractorError
+
+    from xakumedia.providers.platforms import youtube as yt_module
+    from xakumedia.providers.ytdlp import _EntryHydrator, is_collection_url
+
+    assert is_collection_url("https://www.youtube.com/@SomeChannel/featured") is True
+    assert is_collection_url("https://www.youtube.com/channel/UC123/shorts") is True
+    assert collection_urls("https://www.youtube.com/@SomeChannel/featured") == [
+        "https://www.youtube.com/@SomeChannel/videos",
+        "https://www.youtube.com/@SomeChannel/shorts",
+        "https://www.youtube.com/@SomeChannel/streams",
+    ]
+    assert collection_urls("https://www.youtube.com/channel/UC123/shorts") == [
+        "https://www.youtube.com/channel/UC123/shorts"
+    ]
+
+    tab_calls: list[str | None] = []
+
+    class _FakeTabYdl:
+        def __init__(self, opts: dict) -> None:
+            self._cookie = opts.get("cookiefile")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> bool:
+            return False
+
+        def extract_info(self, url: str, download: bool = False):
+            tab_calls.append(self._cookie)
+            if self._cookie:
+                raise ExtractorError("Sign in to confirm you're not a bot")
+            return {"entries": [{"id": "abc12345678", "url": "abc12345678"}]}
+
+    monkeypatch.setattr(ytdlp_module.yt_dlp, "YoutubeDL", _FakeTabYdl)
+    res = yt_module.YouTubeProvider()._enumerate_tab(
+        {"cookiefile": "yt.txt"},
+        "https://www.youtube.com/@SomeChannel/videos",
+    )
+    assert tab_calls == ["yt.txt", None]
+    assert res and len(res["entries"]) == 1
+
+    # Verify bare 11-char YouTube ID normalization and transient timeout retry.
+    hydrate_calls: list[str] = []
+
+    class _FlakyHydrateYdl:
+        def extract_info(self, url: str, download: bool = False):
+            hydrate_calls.append(url)
+            if len(hydrate_calls) == 1:
+                raise ExtractorError("HTTP Error 429: Too Many Requests")
+            return {"id": "abc12345678"}
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(ytdlp_module.time, "sleep", lambda _s: None)
+    hydrator = _EntryHydrator({})
+    hydrator._ydl = lambda: _FlakyHydrateYdl()  # type: ignore[method-assign]
+    info, err = hydrator.hydrate({"url": "abc12345678", "ie_key": "Youtube"})
+    assert err == ""
+    assert info == {"id": "abc12345678"}
+    assert hydrate_calls == [
+        "https://www.youtube.com/watch?v=abc12345678",
+        "https://www.youtube.com/watch?v=abc12345678",
+    ]
+
+
+def test_tiktok_capabilities_and_profile_slideshow_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from xakumedia.providers.platforms.tiktok import TikTokProvider
+    from xakumedia.providers.ytdlp import _EntryHydrator
+
+    provider = TikTokProvider()
+    caps = provider.capabilities_for("https://www.tiktok.com/@creator")
+    assert caps.images is True and caps.videos is True
+
+    monkeypatch.setattr(
+        _EntryHydrator,
+        "hydrate",
+        lambda self, entry: (None, "slideshow extract failed"),
+    )
+    monkeypatch.setattr(
+        provider,
+        "_tiktok_image_post",
+        lambda page_url, source_url, info, warn: SimpleNamespace(
+            media_items=[SimpleNamespace(media_type=MediaType.IMAGE)],
+            page_url=page_url,
+        ),
+    )
+
+    posts = list(
+        provider._hydrate_entries(
+            [{"id": "777", "url": "https://www.tiktok.com/@creator/photo/777"}],
+            {},
+            10,
+            threading.Event(),
+            lambda _m: None,
+            "https://www.tiktok.com/@creator",
+            ScanOptions(include_images=True, include_videos=True),
+        )
+    )
+    assert len(posts) == 1
+    assert posts[0].page_url == "https://www.tiktok.com/@creator/video/777"
+

@@ -13,9 +13,12 @@ from ...extractors.video import strip_stale_waf_cookies
 from ..base import host_of
 from ..ytdlp import YOUTUBE_HOSTS, YtDlpProvider, _EntryHydrator, logger
 
-_FORMAT_UNAVAILABLE_MARKERS = (
+_COOKIE_RETRY_MARKERS = (
     "requested format is not available",
     "no video formats found",
+    "confirm you're not a bot",
+    "confirm you\u2019re not a bot",
+    "sign in to confirm",
 )
 
 
@@ -32,9 +35,9 @@ def detect_js_runtimes() -> dict[str, dict[str, str]]:
 
 
 def is_youtube_format_error(exc: Exception | str) -> bool:
-    """Return True when yt-dlp rejected formats due to session/player-client mismatch."""
+    """Return True when yt-dlp rejected formats or hit a cookie-tied bot check."""
     lower = str(exc).lower()
-    return any(marker in lower for marker in _FORMAT_UNAVAILABLE_MARKERS)
+    return any(marker in lower for marker in _COOKIE_RETRY_MARKERS)
 
 
 class _YouTubeHydrator(_EntryHydrator):
@@ -103,6 +106,22 @@ class YouTubeProvider(YtDlpProvider):
 
     def _build_hydrator(self, hydrate_opts: dict[str, Any]) -> _EntryHydrator:
         return _YouTubeHydrator(hydrate_opts)
+
+    def _enumerate_tab(
+        self,
+        enum_opts: dict[str, Any],
+        enum_url: str,
+    ) -> dict[str, Any] | None:
+        try:
+            return super()._enumerate_tab(enum_opts, enum_url)
+        except (DownloadError, ExtractorError) as exc:
+            if not enum_opts.get("cookiefile") or not is_youtube_format_error(exc):
+                raise
+            logger.debug(
+                f"Retrying YouTube tab enumeration without cookiefile for {enum_url}: {exc}"
+            )
+            retry_opts = {k: v for k, v in enum_opts.items() if k != "cookiefile"}
+            return super()._enumerate_tab(retry_opts, enum_url)
 
     def _extract_single_info(self, opts: dict[str, Any], safe_url: str) -> Any:
         try:

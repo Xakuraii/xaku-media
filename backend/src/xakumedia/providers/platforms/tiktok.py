@@ -8,6 +8,7 @@ challenge solving, ``tiktokuser:<secUid>`` pagination, and embedded
 
 from __future__ import annotations
 
+from ...models.post import ProviderCapabilities
 from ..base import host_of
 from ..ytdlp import TIKTOK_HOSTS, YtDlpProvider
 
@@ -21,3 +22,8 @@ class TikTokProvider(YtDlpProvider):
     @classmethod
     def match(cls, url: str) -> bool:
         return host_of(url) in TIKTOK_HOSTS
+
+    def capabilities_for(self, url: str) -> ProviderCapabilities:
+        caps = super().capabilities_for(url)
+        caps.images = True
+        return caps
