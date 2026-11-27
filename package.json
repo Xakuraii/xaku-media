@@ -1,6 +1,6 @@
 {
   "name": "xakumedia",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Local-first Windows Desktop Bulk Media Downloader",
   "private": true,
   "main": "desktop/dist/main.cjs",

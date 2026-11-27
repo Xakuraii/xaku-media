@@ -4,11 +4,11 @@ import { RELEASE_CONFIG } from "./downloadConfig";
 
 export const ReleaseChangelogSection: React.FC = () => {
   const highlights = [
-    "Full paginated Facebook GraphQL Reels & Videos discovery, XML MPD multi-quality extraction, and muxed audio preview",
-    "Saved Sources platform category tabs (All, FB, IG, TikTok, X, YT, Others) with click-to-preview avatar lightbox",
-    "Per-scan Clear button in Scan History and zero-flicker startup theme persistence before first paint",
-    "Dedicated provider modules for TikTok, YouTube (Shorts & channels), X, Facebook, Instagram, and Other sites",
-    "Oldest-first sequential numbering (#1 on oldest post) & non-destructive Saved Sources rescanning",
+    "Complete Instagram profile discovery across Posts, Reels, Stories, and Highlights with 1080p DASH + progressive formats",
+    "Complete Facebook Reels/Videos GraphQL pagination, XML MPD multi-quality streams, Albums, Avatar, and /videos_by support",
+    "Complete X / Twitter dual-timeline discovery with strict creator filtering, all MP4 resolutions, and :orig images",
+    "YouTube /featured channel expansion, cookieless bot-check retry, and TikTok slideshow hydration fallback",
+    "Refreshed XakuMedia application icon & brand logo alongside Saved Sources filters and zero-flash startup theming",
   ];
 
   return (

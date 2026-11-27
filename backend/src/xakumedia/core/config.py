@@ -13,7 +13,7 @@ class AppConfig(BaseModel):
 
     app_name: str = "XakuMedia"
     app_author: str = "XAKURAII"
-    version: str = "1.3.0"
+    version: str = "1.4.0"
 
     # Base Paths
     data_dir: Path = Field(default_factory=lambda: Path(user_data_dir("XakuMedia", "XAKURAII")))

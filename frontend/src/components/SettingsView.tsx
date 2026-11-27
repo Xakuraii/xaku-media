@@ -1294,7 +1294,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
           <span className="px-2.5 py-0.5 rounded text-xs font-mono bg-page border border-hairline text-ink/80">
-            Installed v{updateInfo?.currentVersion || systemInfo?.version || "1.3.0"}
+            Installed v{updateInfo?.currentVersion || systemInfo?.version || "1.4.0"}
           </span>
         </div>
 

@@ -3400,7 +3400,7 @@ export const App: React.FC = () => {
                       : "XakuMedia Updates"}
                   </h3>
                   <p className="text-xs font-mono text-muted">
-                    Installed version: v{updateInfo?.currentVersion || systemInfo?.version || "1.3.0"}
+                    Installed version: v{updateInfo?.currentVersion || systemInfo?.version || "1.4.0"}
                   </p>
                 </div>
               </div>
