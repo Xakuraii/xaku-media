@@ -1557,7 +1557,31 @@ def test_instagram_url_parsing_and_profile_discovery(
                                     }
                                 ]
                             },
-                        }
+                        },
+                        {
+                            "pk": "81",
+                            "product_type": "story",
+                            "taken_at": 1700000008,
+                            "video_duration": 15.0,
+                            "video_dash_manifest": (
+                                '<MPD><Representation frameRate="16384/16384"/></MPD>'
+                            ),
+                            "video_versions": [
+                                {
+                                    "type": 101,
+                                    "url": "https://ig.cdn/hl_music_story.mp4",
+                                }
+                            ],
+                            "image_versions2": {
+                                "candidates": [
+                                    {
+                                        "url": "https://ig.cdn/hl_music_story.jpg",
+                                        "width": 720,
+                                        "height": 1280,
+                                    }
+                                ]
+                            },
+                        },
                     ],
                 }
             ]
@@ -1582,9 +1606,10 @@ def test_instagram_url_parsing_and_profile_discovery(
     assert hydrated_calls == ["REEL_ONLY", "REEL_BROKEN", "REEL_BROKEN"]
     assert any("REEL_BROKEN" in w for w in warnings)
     post_ids = [p.provider_post_id for p in posts]
-    assert post_ids == ["1", "2", "3", "4", "5", "70", "80"]
-    # Static 1fps music post stays an IMAGE
+    assert post_ids == ["1", "2", "3", "4", "5", "70", "80", "81"]
+    # Static 1fps music feed post stays an IMAGE, while music-backed Highlight stays a VIDEO
     assert posts[2].media_items[0].media_type == MediaType.IMAGE
+    assert posts[7].media_items[0].media_type == MediaType.VIDEO
     # Reels-only video exposes 1080p DASH + audio + 720p muxed preview URL
     reel_only_item = posts[4].media_items[0]
     assert reel_only_item.media_type == MediaType.VIDEO
