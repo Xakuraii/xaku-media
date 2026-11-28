@@ -73,6 +73,7 @@ export function BulkScanView({
   const [savedAvatars, setSavedAvatars] = useState<Map<string, string>>(new Map());
   const [preferredResolution, setPreferredResolution] = useState<string>("1080p");
   const [hideSkipped, setHideSkipped] = useState<boolean>(false);
+  const [showNewOnly, setShowNewOnly] = useState<boolean>(false);
   const [refreshingStats, setRefreshingStats] = useState<boolean>(false);
   const [savingUrls, setSavingUrls] = useState<Set<string>>(new Set());
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -230,7 +231,15 @@ export function BulkScanView({
     clearSelection,
     selectByType,
     invertSelection,
-  } = useScanSelection(allPosts, filteredPosts, filter, downloaded, skipped);
+  } = useScanSelection(
+    allPosts,
+    filteredPosts,
+    filter,
+    downloaded,
+    skipped,
+    showNewOnly,
+    hideSkipped
+  );
 
   const isUsableAvatarCandidate = (candidate?: string | null): candidate is string => {
     if (!candidate) return false;
@@ -750,6 +759,8 @@ export function BulkScanView({
           skipping={skipping}
           hideSkipped={hideSkipped}
           onToggleHideSkipped={() => setHideSkipped((value) => !value)}
+          showNewOnly={showNewOnly}
+          onToggleShowNewOnly={() => setShowNewOnly((value) => !value)}
           onPreviewItem={(item) =>
             onPreviewItem?.(item, {
               isSkipped: isItemSkipped(item, skipped),

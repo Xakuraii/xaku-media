@@ -55,9 +55,25 @@ REELS_PAGINATION_DEFAULT_DOC_ID = "29259931620295125"
 VIDEOS_PAGINATION_QUERY_NAME = "PagesCometChannelTabAllVideosCardImplPaginationQuery"
 VIDEOS_PAGINATION_DEFAULT_DOC_ID = "29643863005208862"
 
+TIMELINE_ROOT_QUERY_NAME = "ProfileCometTimelineListViewRootQuery"
+TIMELINE_ROOT_DEFAULT_DOC_ID = "29875146502090540"
+
+TILES_PAGINATION_QUERY_NAME = "ProfileCometTilesFeedPaginationQuery"
+TILES_PAGINATION_DEFAULT_DOC_ID = "28137111635965845"
+
+HIGHLIGHTS_VIEW_PAGINATION_QUERY_NAME = "ProfileCometFeaturedHighlightsViewPaginationQuery"
+HIGHLIGHTS_VIEW_PAGINATION_DEFAULT_DOC_ID = "28107877335503332"
+
+STORIES_CONTENT_QUERY_NAME = "StoriesSuspenseContentPaneRootWithEntryPointQuery"
+STORIES_CONTENT_DEFAULT_DOC_ID = "29556157090686900"
+
 _DOC_ID_CACHE: dict[str, str] = {
     REELS_PAGINATION_QUERY_NAME: REELS_PAGINATION_DEFAULT_DOC_ID,
     VIDEOS_PAGINATION_QUERY_NAME: VIDEOS_PAGINATION_DEFAULT_DOC_ID,
+    TIMELINE_ROOT_QUERY_NAME: TIMELINE_ROOT_DEFAULT_DOC_ID,
+    TILES_PAGINATION_QUERY_NAME: TILES_PAGINATION_DEFAULT_DOC_ID,
+    HIGHLIGHTS_VIEW_PAGINATION_QUERY_NAME: HIGHLIGHTS_VIEW_PAGINATION_DEFAULT_DOC_ID,
+    STORIES_CONTENT_QUERY_NAME: STORIES_CONTENT_DEFAULT_DOC_ID,
 }
 
 _RE_NON_PROFILE_SEGMENTS = {
@@ -90,7 +106,8 @@ parse_facebook_dash_mpd = parse_dash_mpd
 class FacebookTarget:
     """Normalized representation of a Facebook URL and its requested scope."""
 
-    scope: str  # "profile" | "reels" | "videos" | "photos" | "video" | "gallery"
+    # "profile" | "reels" | "videos" | "photos" | "video" | "stories" | "gallery"
+    scope: str
     profile_base: str | None
     canonical_gallery_url: str
     video_id: str | None = None
@@ -220,6 +237,25 @@ def _parse_facebook_url(url: str) -> FacebookTarget:
         base = f"https://www.facebook.com/{segments[2]}"
         return FacebookTarget(scope="profile", profile_base=base, canonical_gallery_url=base)
 
+    # Story / Highlight bucket URLs: /stories/<bucket_id>[/<story_id>] or /stories/highlights/<id>
+    if (
+        len(segments) >= 2
+        and segments[0].lower() == "stories"
+        and segments[1].lower() not in ("archive", "settings", "create")
+    ):
+        if segments[1].lower() == "highlights":
+            if len(segments) < 3:
+                return FacebookTarget(scope="gallery", profile_base=None, canonical_gallery_url=url)
+            bucket_id = segments[2]
+        else:
+            bucket_id = segments[1]
+        return FacebookTarget(
+            scope="stories",
+            profile_base=None,
+            canonical_gallery_url=f"https://www.facebook.com/stories/{bucket_id}",
+            video_id=bucket_id,
+        )
+
     # Single video/reel/watch/share URLs
     vid_match = _RE_SINGLE_VIDEO_ID.search(url)
     if (
@@ -348,7 +384,8 @@ def _resolve_doc_id_from_bundles(
     )
 
 
-def _parse_ndjson_primary(text: str) -> dict[str, Any] | None:
+def _parse_ndjson_chunks(text: str) -> list[dict[str, Any]]:
+    chunks: list[dict[str, Any]] = []
     for line in text.splitlines():
         line = line.strip()
         if not line:
@@ -357,9 +394,173 @@ def _parse_ndjson_primary(text: str) -> dict[str, Any] | None:
             obj = json.loads(line)
         except Exception:
             continue
-        if isinstance(obj, dict) and "data" in obj:
-            return obj
-    return None
+        if isinstance(obj, dict) and ("data" in obj or "result" in obj):
+            chunks.append(obj)
+    return chunks
+
+
+def _parse_ndjson_primary(text: str) -> dict[str, Any] | None:
+    chunks = _parse_ndjson_chunks(text)
+    return next((c for c in chunks if "data" in c), None)
+
+
+def _extract_highlight_bucket_ids(
+    html_text: str,
+    payloads: list[Any] | None = None,
+    *,
+    exclude_ids: set[str] | None = None,
+) -> list[str]:
+    """Collect Story / Featured Highlight bucket IDs from SSR HTML and GraphQL payloads."""
+    blocked = set(exclude_ids or ())
+    seen: set[str] = set()
+    ordered: list[str] = []
+
+    def _record(candidate: Any) -> None:
+        if not isinstance(candidate, (str, int)):
+            return
+        val = str(candidate).strip()
+        if not val or not val.isdigit() or val in blocked or val in seen:
+            return
+        seen.add(val)
+        ordered.append(val)
+
+    bucket_keys = {
+        "story_bucket",
+        "story_buckets",
+        "featured_highlights",
+        "highlight_units_section",
+        "highlight_units",
+        "highlight_buckets",
+        "profile_intro_card",
+        "bucket",
+        "buckets",
+    }
+
+    non_bucket_typenames = {
+        "Photo",
+        "Video",
+        "User",
+        "Page",
+        "ProfileTileSection",
+        "ProfileTileView",
+        "ProfileTileItem",
+    }
+    skip_descend_keys = {
+        "story_bucket_owner",
+        "owner",
+        "actors",
+        "delegate_page",
+        "cover_card",
+        "first_story_to_show",
+        "attachments",
+        "media",
+        "image",
+        "viewer_image",
+    }
+
+    def _walk_highlight_node(obj: Any, *, inside_bucket: bool, record) -> None:
+        if isinstance(obj, list):
+            for entry in obj:
+                _walk_highlight_node(entry, inside_bucket=inside_bucket, record=record)
+            return
+        if not isinstance(obj, dict):
+            return
+        typename = str(obj.get("__typename") or "")
+        now_inside = (
+            inside_bucket
+            or "__isStoryBucket" in obj
+            or any(tag in typename for tag in ("Bucket", "Highlight", "Featured"))
+        )
+        if now_inside and typename not in non_bucket_typenames:
+            _record(obj.get("id"))
+            _record(obj.get("bucket_id"))
+        raw_url = obj.get("url")
+        if isinstance(raw_url, str):
+            m_url = re.search(r"/stories/(?:highlights/)?(\d+)", raw_url)
+            if m_url:
+                _record(m_url.group(1))
+        for k, v in obj.items():
+            if k in skip_descend_keys:
+                continue
+            _walk_highlight_node(
+                v,
+                inside_bucket=now_inside or (k in bucket_keys),
+                record=record,
+            )
+
+    clean = html_text.replace("\\/", "/") if html_text else ""
+    if clean:
+        for match in re.findall(r'"/stories/(?:highlights/)?(\d+)"', clean):
+            _record(match)
+        for key in ("story_bucket", "featured_highlights", "highlight_units_section"):
+            for m in re.finditer(rf'"{key}":', clean):
+                obj = _extract_json_object_after(clean[m.start() :], key)
+                if obj is not None:
+                    _walk_highlight_node(obj, inside_bucket=True, record=_record)
+
+    for payload in payloads or ():
+        _walk_highlight_node(payload, inside_bucket=False, record=_record)
+
+    return ordered
+
+
+def _collect_story_nodes_from_payloads(
+    payloads: list[Any],
+    *,
+    target_bucket_id: str | None = None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Collect unified story card nodes and bucket owner name from Relay payloads."""
+    stories: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    owner_name: str | None = None
+
+    def _is_other_bucket(obj: dict[str, Any]) -> bool:
+        if not target_bucket_id:
+            return False
+        bid = obj.get("id")
+        if not isinstance(bid, (str, int)) or not str(bid):
+            return False
+        typename = str(obj.get("__typename") or "")
+        is_bucket = (
+            "__isStoryBucket" in obj
+            or "Bucket" in typename
+            or "story_bucket_owner" in obj
+        )
+        return is_bucket and str(bid) != target_bucket_id
+
+    def _walk(obj: Any) -> None:
+        nonlocal owner_name
+        if isinstance(obj, list):
+            for entry in obj:
+                _walk(entry)
+            return
+        if not isinstance(obj, dict) or _is_other_bucket(obj):
+            return
+        bucket_owner = obj.get("story_bucket_owner")
+        if isinstance(bucket_owner, dict) and not owner_name:
+            name = bucket_owner.get("name") or bucket_owner.get("short_name")
+            if isinstance(name, str) and name.strip():
+                owner_name = name.strip()
+
+        for conn_key in ("unified_stories", "unified_stories_with_notes"):
+            conn = obj.get(conn_key)
+            if isinstance(conn, dict):
+                for edge in conn.get("edges") or ():
+                    node = edge.get("node") if isinstance(edge, dict) else None
+                    if not isinstance(node, dict):
+                        continue
+                    nid = str(node.get("id") or len(stories))
+                    if nid in seen_ids:
+                        continue
+                    seen_ids.add(nid)
+                    stories.append(node)
+
+        for v in obj.values():
+            _walk(v)
+
+    for payload in payloads:
+        _walk(payload)
+    return stories, owner_name
 
 
 def _extract_caption_and_timestamp(
@@ -435,6 +636,22 @@ class FacebookProvider(GalleryDlProvider):
     def capabilities_for(self, url: str) -> ProviderCapabilities:
         target = _parse_facebook_url(url)
         has_cookies = super().capabilities_for("https://www.facebook.com/").has_cookies
+        if target.scope == "stories":
+            caps = super().capabilities_for("https://www.facebook.com/")
+            return ProviderCapabilities(
+                provider=self.name,
+                label=self.label,
+                source_type="gallery",
+                profile_bulk=False,
+                individual_posts=True,
+                albums=True,
+                images=True,
+                videos=True,
+                pagination=False,
+                requires_auth=not has_cookies,
+                has_cookies=has_cookies,
+                notes="Facebook Stories and Featured Highlights video/photo extractor.",
+            )
         if target.scope in ("profile", "reels", "videos", "photos"):
             return ProviderCapabilities(
                 provider=self.name,
@@ -450,7 +667,7 @@ class FacebookProvider(GalleryDlProvider):
                 has_cookies=has_cookies,
                 notes=(
                     "Facebook discovery enumerates paginated Reels/Videos via GraphQL "
-                    "alongside profile photos and albums."
+                    "alongside profile Highlights/Stories, photos, and albums."
                 ),
             )
         caps = super().capabilities_for(target.canonical_gallery_url)
@@ -573,7 +790,7 @@ class FacebookProvider(GalleryDlProvider):
             },
         )
 
-    def _graphql_post(
+    def _graphql_post_raw(
         self,
         extractor: Any,
         *,
@@ -583,7 +800,7 @@ class FacebookProvider(GalleryDlProvider):
         doc_id: str,
         variables: dict[str, Any],
         referer: str,
-    ) -> dict[str, Any] | None:
+    ) -> str | None:
         headers = {
             "Content-Type": "application/x-www-form-urlencoded",
             "X-FB-LSD": lsd,
@@ -592,7 +809,9 @@ class FacebookProvider(GalleryDlProvider):
             "Referer": referer,
             "Origin": "https://www.facebook.com",
         }
-        payload = {
+        payload: dict[str, Any] = {
+            "__a": "1",
+            "__comet_req": "15",
             "fb_dtsg": fb_dtsg,
             "lsd": lsd,
             "fb_api_caller_class": "RelayModern",
@@ -601,6 +820,22 @@ class FacebookProvider(GalleryDlProvider):
             "server_timestamps": "true",
             "doc_id": doc_id,
         }
+        cookie_jar = getattr(extractor, "cookies", None)
+        if cookie_jar is not None:
+            try:
+                viewer_uid = next(
+                    (
+                        str(c.value)
+                        for c in cookie_jar
+                        if getattr(c, "name", "") == "c_user" and getattr(c, "value", "")
+                    ),
+                    None,
+                )
+                if viewer_uid:
+                    payload["av"] = viewer_uid
+                    payload["__user"] = viewer_uid
+            except Exception:
+                pass
         for attempt in range(2):
             try:
                 resp = extractor.request(
@@ -621,11 +856,33 @@ class FacebookProvider(GalleryDlProvider):
                 continue
             if status >= 400:
                 return None
-            parsed = _parse_ndjson_primary(getattr(resp, "text", "") or "")
-            if parsed is not None or attempt == 1:
-                return parsed
+            text = getattr(resp, "text", "") or ""
+            if text or attempt == 1:
+                return text
             time.sleep(0.5)
         return None
+
+    def _graphql_post(
+        self,
+        extractor: Any,
+        *,
+        fb_dtsg: str,
+        lsd: str,
+        friendly_name: str,
+        doc_id: str,
+        variables: dict[str, Any],
+        referer: str,
+    ) -> dict[str, Any] | None:
+        raw = self._graphql_post_raw(
+            extractor,
+            fb_dtsg=fb_dtsg,
+            lsd=lsd,
+            friendly_name=friendly_name,
+            doc_id=doc_id,
+            variables=variables,
+            referer=referer,
+        )
+        return _parse_ndjson_primary(raw) if raw else None
 
     def _extract_formats_from_media_dict(
         self,
@@ -1184,6 +1441,542 @@ class FacebookProvider(GalleryDlProvider):
                 state.media_count += len(post.media_items)
                 yield post
 
+    def _build_story_image_post(
+        self,
+        *,
+        photo_id: str,
+        image_url: str,
+        source_url: str,
+        post_url: str,
+        author: str,
+        title: str | None = None,
+        published_ts: float | None = None,
+        width: int | None = None,
+        height: int | None = None,
+    ) -> Post:
+        path = image_url.split("?", 1)[0].rsplit("/", 1)[-1]
+        ext = path.rsplit(".", 1)[-1].lower() if "." in path else "jpg"
+        if ext not in ("jpg", "jpeg", "png", "webp", "gif", "avif"):
+            ext = "jpg"
+        created_at = (
+            datetime.fromtimestamp(published_ts, tz=UTC) if published_ts is not None else None
+        )
+        fmt = MediaFormatInfo(
+            format_id="original",
+            container=ext,
+            resolution=f"{width}x{height}" if width and height else None,
+            width=width,
+            height=height,
+            is_direct_stream=True,
+            url=image_url,
+            requires_merge=False,
+            format_note="original",
+        )
+        item_meta: dict[str, Any] = {
+            "post_key": f"facebook:story:{photo_id}",
+            "extractor": FACEBOOK_CATEGORY,
+        }
+        if published_ts is not None:
+            item_meta["published_timestamp"] = published_ts
+        item = make_media_item(
+            provider=self.name,
+            source_url=source_url,
+            media_url=image_url,
+            media_type=MediaType.IMAGE,
+            post_id="",
+            title=title or f"Facebook Story {photo_id}",
+            author=author or "facebook",
+            thumbnail_url=image_url,
+            width=width,
+            height=height,
+            extension=ext,
+            mime_type=f"image/{ext}",
+            format_info=fmt,
+            provider_media_id=photo_id,
+            post_url=post_url,
+            attachment_index=0,
+            metadata_extra=item_meta,
+        )
+        return make_post(
+            provider=self.name,
+            source_url=source_url,
+            post_key=f"facebook:story:{photo_id}",
+            provider_post_id=photo_id,
+            author=author or "facebook",
+            title=title or f"Facebook Story {photo_id}",
+            media_items=[item],
+            post_url=post_url,
+            created_at=created_at,
+            metadata_extra={
+                "extractor": FACEBOOK_CATEGORY,
+                "group_key": f"facebook:story:{photo_id}",
+            },
+        )
+
+    def _iter_story_bucket_posts(
+        self,
+        bucket_id: str,
+        extractor: Any,
+        *,
+        source_url: str,
+        fallback_author: str,
+        options: ScanOptions,
+        cancel_event: threading.Event,
+        warn: WarningCallback,
+        state: _DiscoveryState,
+        seen_video_ids: set[str],
+        seen_story_photo_ids: set[str],
+    ) -> Iterator[Post]:
+        """Extract all video and image cards from one Facebook Story / Highlight bucket."""
+        story_bucket_url = f"https://www.facebook.com/stories/{bucket_id}"
+        try:
+            resp = extractor.request(story_bucket_url, fatal=False)
+        except Exception as exc:
+            warn(f"Could not open Facebook story highlight {bucket_id}: {exc}")
+            return
+        if getattr(resp, "status_code", 200) >= 400:
+            return
+
+        html_text = getattr(resp, "text", "") or ""
+        clean = html_text.replace("\\/", "/")
+        dtsg, lsd, _ = _extract_tokens_and_preload_vars(clean)
+        payloads: list[Any] = []
+
+        # Collect preloaded Relay JSON embedded directly inside /stories/<bucket_id> HTML.
+        for script_body in re.findall(
+            r'<script[^>]+type="application/json"[^>]*>(.*?)</script>',
+            html_text,
+            re.DOTALL,
+        ):
+            if "unified_stories" not in script_body and "story_bucket_owner" not in script_body:
+                continue
+            try:
+                payloads.append(json.loads(script_body))
+            except Exception:
+                continue
+
+        # Fetch full Stories bucket payload if SSR HTML lacked attachments or had only nav stubs.
+        initial_stories, bucket_owner = _collect_story_nodes_from_payloads(
+            payloads, target_bucket_id=bucket_id
+        )
+        needs_gql = not initial_stories or any(
+            not (s.get("attachments") or s.get("media")) for s in initial_stories
+        )
+        if needs_gql and dtsg and lsd:
+            m_pre = re.search(
+                r'"adp_StoriesSuspenseContentPaneRootWithEntryPointQueryRelayPreloader_[^"]+",'
+                r'"queryID":"(\d+)","variables":(\{.*?\}),'
+                r'"queryName":"StoriesSuspenseContentPaneRootWithEntryPointQuery"',
+                clean,
+            )
+            if m_pre:
+                doc_id = m_pre.group(1)
+                try:
+                    variables = json.loads(m_pre.group(2))
+                except Exception:
+                    variables = {}
+            else:
+                doc_id = _resolve_doc_id_from_bundles(clean, STORIES_CONTENT_QUERY_NAME)
+                variables = {
+                    "blur": 10,
+                    "bucketID": bucket_id,
+                    "feedbackSource": 65,
+                    "feedLocation": "COMET_MEDIA_VIEWER",
+                    "focusCommentID": None,
+                    "initialBucketID": bucket_id,
+                    "initialLoad": True,
+                    "isFbNotesIncluded": True,
+                    "isStoriesArchive": False,
+                    "scale": 1,
+                    "shouldDeferLoad": False,
+                    "shouldEnableArmadilloStoryReply": True,
+                    "shouldEnableLiveInStories": True,
+                }
+            raw_gql = self._graphql_post_raw(
+                extractor,
+                fb_dtsg=dtsg,
+                lsd=lsd,
+                friendly_name=STORIES_CONTENT_QUERY_NAME,
+                doc_id=doc_id,
+                variables=variables,
+                referer=story_bucket_url,
+            )
+            if raw_gql:
+                payloads.extend(_parse_ndjson_chunks(raw_gql))
+            initial_stories, owner_after = _collect_story_nodes_from_payloads(
+                payloads, target_bucket_id=bucket_id
+            )
+            bucket_owner = bucket_owner or owner_after
+
+        author = bucket_owner or fallback_author
+        for story in initial_stories:
+            if cancel_event.is_set() or state.limit_reached():
+                return
+            story_id = str(story.get("id") or "")
+            attachments = story.get("attachments") or []
+            media_candidates: list[dict[str, Any]] = []
+            for att in attachments:
+                if isinstance(att, dict) and isinstance(att.get("media"), dict):
+                    media_candidates.append(att["media"])
+            if not media_candidates and isinstance(story.get("media"), dict):
+                media_candidates.append(story["media"])
+
+            for media in media_candidates:
+                if cancel_event.is_set() or state.limit_reached():
+                    return
+                typename = str(media.get("__typename") or "")
+                formats, duration = self._extract_formats_from_media_dict(media)
+                is_video = bool(formats) or typename == "Video"
+                caption, pub_ts = _extract_caption_and_timestamp(story, media)
+                thumb = _extract_thumbnail_from_media(media)
+                owner_name = _extract_owner_name(story, media, author)
+
+                if is_video:
+                    if not options.include_videos:
+                        continue
+                    vid = str(media.get("id") or story_id)
+                    if not vid or vid in seen_video_ids:
+                        continue
+                    seen_video_ids.add(vid)
+                    card_url = str(
+                        media.get("permalink_url")
+                        or f"https://www.facebook.com/stories/{bucket_id}/{vid}"
+                    )
+                    post = None
+                    if formats:
+                        post = self._build_video_post_from_formats(
+                            video_id=vid,
+                            source_url=source_url,
+                            post_url=card_url,
+                            author=owner_name,
+                            title=caption,
+                            thumbnail_url=thumb,
+                            formats=formats,
+                            duration_seconds=duration,
+                            published_ts=pub_ts,
+                            width=media.get("width")
+                            if isinstance(media.get("width"), int)
+                            else None,
+                            height=media.get("height")
+                            if isinstance(media.get("height"), int)
+                            else None,
+                        )
+                    if post is None and vid.isdigit():
+                        fallback_posts = self._extract_single_facebook_video(
+                            f"https://www.facebook.com/watch/?v={vid}",
+                            extractor,
+                            fallback_author=owner_name,
+                            warn=warn,
+                        )
+                        if fallback_posts:
+                            post = fallback_posts[0]
+                    if post is not None:
+                        state.posts_emitted += 1
+                        state.media_count += len(post.media_items)
+                        yield post
+                elif options.include_images:
+                    img_url = None
+                    img_w = None
+                    img_h = None
+                    for key in ("image", "photo_image", "previewImage", "large_share_image"):
+                        val = media.get(key)
+                        if isinstance(val, dict) and isinstance(val.get("uri"), str):
+                            img_url = val["uri"]
+                            img_w = val.get("width") if isinstance(val.get("width"), int) else None
+                            img_h = (
+                                val.get("height") if isinstance(val.get("height"), int) else None
+                            )
+                            break
+                        if isinstance(val, str) and val.startswith("http"):
+                            img_url = val
+                            break
+                    if not img_url:
+                        img_url = thumb
+                    pid = str(media.get("id") or story_id)
+                    if not img_url or not pid or pid in seen_story_photo_ids:
+                        continue
+                    seen_story_photo_ids.add(pid)
+                    card_url = f"https://www.facebook.com/stories/{bucket_id}/{pid}"
+                    post = self._build_story_image_post(
+                        photo_id=pid,
+                        image_url=img_url,
+                        source_url=source_url,
+                        post_url=card_url,
+                        author=owner_name,
+                        title=caption,
+                        published_ts=pub_ts,
+                        width=img_w,
+                        height=img_h,
+                    )
+                    state.posts_emitted += 1
+                    state.media_count += len(post.media_items)
+                    yield post
+
+    def _iter_profile_highlights(
+        self,
+        profile_base: str,
+        extractor: Any,
+        *,
+        options: ScanOptions,
+        cancel_event: threading.Event,
+        warn: WarningCallback,
+        on_page: PageCallback | None,
+        state: _DiscoveryState,
+        seen_video_ids: set[str],
+    ) -> Iterator[Post]:
+        """Discover Facebook profile Featured Highlights and active Story buckets."""
+        try:
+            resp = extractor.request(profile_base, fatal=False)
+        except Exception:
+            return
+        if getattr(resp, "status_code", 200) >= 400:
+            return
+
+        html_text = getattr(resp, "text", "") or ""
+        clean = html_text.replace("\\/", "/")
+        dtsg, lsd, _ = _extract_tokens_and_preload_vars(clean)
+
+        author_fallback = profile_base.rsplit("/", 1)[-1]
+        m_title = re.search(r"<title>([^<|]+)", html_text)
+        if m_title:
+            candidate = html_lib.unescape(m_title.group(1)).strip()
+            if candidate and candidate.lower() != "facebook":
+                author_fallback = candidate
+
+        exclude_ids: set[str] = set()
+        if author_fallback.isdigit():
+            exclude_ids.add(author_fallback)
+        tail_seg = profile_base.rsplit("/", 1)[-1]
+        if tail_seg.isdigit():
+            exclude_ids.add(tail_seg)
+        id_pat = r'"(?:userID|delegate_page)":\s*(?:\{"[^}]*"id":)?\s*"(\d+)"'
+        for m_uid in re.findall(id_pat, clean):
+            exclude_ids.add(m_uid)
+
+        payloads: list[Any] = []
+        for script_body in re.findall(
+            r'<script[^>]+type="application/json"[^>]*>(.*?)</script>',
+            html_text,
+            re.DOTALL,
+        ):
+            if not any(
+                k in script_body
+                for k in (
+                    "profile_tile_sections",
+                    "highlight_units_section",
+                    "StoryHighlightContainer",
+                    "ProfileTileViewFeaturedHighlightsRenderer",
+                )
+            ):
+                continue
+            try:
+                payloads.append(json.loads(script_body))
+            except Exception:
+                continue
+
+        def _find_tile_page_info(objs: list[Any]) -> tuple[bool, str | None, str | None]:
+            found_has = False
+            found_cur: str | None = None
+            found_uid: str | None = None
+
+            def _walk(node: Any) -> None:
+                nonlocal found_has, found_cur, found_uid
+                if isinstance(node, list):
+                    for item in node:
+                        _walk(item)
+                    return
+                if not isinstance(node, dict):
+                    return
+                pts = node.get("profile_tile_sections")
+                if isinstance(pts, dict):
+                    pinfo = pts.get("page_info")
+                    if isinstance(pinfo, dict) and pinfo.get("end_cursor"):
+                        found_has = bool(pinfo.get("has_next_page"))
+                        found_cur = str(pinfo.get("end_cursor"))
+                        uid_cand = node.get("id")
+                        if isinstance(uid_cand, str) and uid_cand.isdigit():
+                            found_uid = uid_cand
+                for val in node.values():
+                    _walk(val)
+
+            _walk(objs)
+            return found_has, found_cur, found_uid
+
+        def _find_highlight_hscroll_views(objs: list[Any]) -> list[tuple[str, str]]:
+            views: list[tuple[str, str]] = []
+
+            def _walk(node: Any) -> None:
+                if isinstance(node, list):
+                    for item in node:
+                        _walk(item)
+                    return
+                if not isinstance(node, dict):
+                    return
+                if node.get("__typename") == "ProfileTileViewFeaturedHighlightsRenderer":
+                    view = node.get("view")
+                    if isinstance(view, dict):
+                        vid = view.get("id")
+                        pti = view.get("profile_tile_items")
+                        pinfo = pti.get("page_info") if isinstance(pti, dict) else None
+                        if (
+                            isinstance(vid, str)
+                            and isinstance(pinfo, dict)
+                            and pinfo.get("has_next_page")
+                            and isinstance(pinfo.get("end_cursor"), str)
+                        ):
+                            views.append((vid, pinfo["end_cursor"]))
+                for val in node.values():
+                    _walk(val)
+
+            _walk(objs)
+            return views
+
+        m_pre = re.search(
+            r'"adp_ProfileCometTimelineListViewRootQueryRelayPreloader_[^"]+",'
+            r'"queryID":"(\d+)","variables":(\{.*?\}),'
+            r'"queryName":"ProfileCometTimelineListViewRootQuery"',
+            clean,
+        )
+        if dtsg and lsd:
+            try:
+                variables = json.loads(m_pre.group(2)) if m_pre else {}
+                target_uid = str(variables.get("userID") or "")
+                has_next, cursor, ssr_uid = _find_tile_page_info(payloads)
+                target_uid = ssr_uid or target_uid
+
+                if not cursor and m_pre:
+                    raw_gql = self._graphql_post_raw(
+                        extractor,
+                        fb_dtsg=dtsg,
+                        lsd=lsd,
+                        friendly_name=TIMELINE_ROOT_QUERY_NAME,
+                        doc_id=m_pre.group(1),
+                        variables=variables,
+                        referer=profile_base,
+                    )
+                    if raw_gql:
+                        tl_chunks = _parse_ndjson_chunks(raw_gql)
+                        payloads.extend(tl_chunks)
+                        has_next, cursor, found_uid = _find_tile_page_info(tl_chunks)
+                        target_uid = found_uid or target_uid
+
+                gk_key = (
+                    "__relay_internal__pv__"
+                    "ProfileCometFeaturedHighlightsPortraitAspectRatioGKrelayprovider"
+                )
+                tiles_doc_id = _resolve_doc_id_from_bundles(clean, TILES_PAGINATION_QUERY_NAME)
+                for _ in range(8):
+                    if not has_next or not cursor or not target_uid or cancel_event.is_set():
+                        break
+                    tile_raw = self._graphql_post_raw(
+                        extractor,
+                        fb_dtsg=dtsg,
+                        lsd=lsd,
+                        friendly_name=TILES_PAGINATION_QUERY_NAME,
+                        doc_id=tiles_doc_id,
+                        variables={
+                            "count": 4,
+                            "cursor": cursor,
+                            "id": target_uid,
+                            "previousProfileId": None,
+                            "renderLocation": None,
+                            "scale": 1,
+                            gk_key: False,
+                        },
+                        referer=profile_base,
+                    )
+                    if not tile_raw:
+                        break
+                    tile_chunks = _parse_ndjson_chunks(tile_raw)
+                    payloads.extend(tile_chunks)
+                    next_has, next_cursor, _ = _find_tile_page_info(tile_chunks)
+                    if not next_cursor or next_cursor == cursor:
+                        break
+                    cursor = next_cursor
+                    has_next = next_has
+
+                # Paginate horizontal Featured Highlights carousel when >3 highlights exist.
+                hscroll_doc_id = _resolve_doc_id_from_bundles(
+                    clean, HIGHLIGHTS_VIEW_PAGINATION_QUERY_NAME
+                )
+                for view_id, h_cursor in _find_highlight_hscroll_views(payloads):
+                    cur_h: str | None = h_cursor
+                    for _ in range(5):
+                        if not cur_h or cancel_event.is_set():
+                            break
+                        h_raw = self._graphql_post_raw(
+                            extractor,
+                            fb_dtsg=dtsg,
+                            lsd=lsd,
+                            friendly_name=HIGHLIGHTS_VIEW_PAGINATION_QUERY_NAME,
+                            doc_id=hscroll_doc_id,
+                            variables={
+                                "count": 10,
+                                "cursor": cur_h,
+                                "id": view_id,
+                                "scale": 1,
+                                gk_key: False,
+                            },
+                            referer=profile_base,
+                        )
+                        if not h_raw:
+                            break
+                        h_chunks = _parse_ndjson_chunks(h_raw)
+                        payloads.extend(h_chunks)
+                        next_h: str | None = None
+                        for hc in h_chunks:
+                            node = (
+                                (hc.get("data") or {}).get("node")
+                                if isinstance(hc, dict)
+                                else None
+                            )
+                            pti = (
+                                node.get("profile_tile_items")
+                                if isinstance(node, dict)
+                                else None
+                            )
+                            pinfo = pti.get("page_info") if isinstance(pti, dict) else None
+                            if (
+                                isinstance(pinfo, dict)
+                                and pinfo.get("has_next_page")
+                                and isinstance(pinfo.get("end_cursor"), str)
+                            ):
+                                next_h = pinfo["end_cursor"]
+                                break
+                        if not next_h or next_h == cur_h:
+                            break
+                        cur_h = next_h
+            except Exception:
+                pass
+
+        bucket_ids = _extract_highlight_bucket_ids(
+            html_text,
+            payloads,
+            exclude_ids=exclude_ids,
+        )
+        if not bucket_ids:
+            return
+
+        seen_story_photo_ids: set[str] = set()
+        for idx, bucket_id in enumerate(bucket_ids, 1):
+            if cancel_event.is_set() or state.limit_reached():
+                return
+            if on_page is not None:
+                on_page(idx, len(bucket_ids))
+                state.page_reported = True
+            yield from self._iter_story_bucket_posts(
+                bucket_id,
+                extractor,
+                source_url=profile_base,
+                fallback_author=author_fallback,
+                options=options,
+                cancel_event=cancel_event,
+                warn=warn,
+                state=state,
+                seen_video_ids=seen_video_ids,
+                seen_story_photo_ids=seen_story_photo_ids,
+            )
+
     def _iter_profile_photos_and_albums(
         self,
         profile_base: str,
@@ -1268,6 +2061,25 @@ class FacebookProvider(GalleryDlProvider):
                 yield post
             return
 
+        if target.scope == "stories" and target.video_id:
+            extractor = self._prepare_extractor("https://www.facebook.com/reel/0")
+            seen_story_photo_ids: set[str] = set()
+            yield from self._iter_story_bucket_posts(
+                target.video_id,
+                extractor,
+                source_url=safe_url,
+                fallback_author="facebook",
+                options=options,
+                cancel_event=cancel_event,
+                warn=warn,
+                state=state,
+                seen_video_ids=seen_video_ids,
+                seen_story_photo_ids=seen_story_photo_ids,
+            )
+            if state.posts_emitted == 0:
+                raise self._no_media_error(safe_url)
+            return
+
         if target.scope in ("reels", "videos", "profile") and target.profile_base:
             extractor = self._warm_facebook_session(target.profile_base)
 
@@ -1292,6 +2104,25 @@ class FacebookProvider(GalleryDlProvider):
                         state,
                         seen_video_ids,
                     )
+
+            if (
+                target.scope == "profile"
+                and not cancel_event.is_set()
+                and not state.limit_reached()
+            ):
+                try:
+                    yield from self._iter_profile_highlights(
+                        target.profile_base,
+                        extractor,
+                        options=options,
+                        cancel_event=cancel_event,
+                        warn=warn,
+                        on_page=on_page,
+                        state=state,
+                        seen_video_ids=seen_video_ids,
+                    )
+                except Exception as exc:
+                    logger.debug("Facebook highlights skipped for %s: %s", target.profile_base, exc)
 
             if target.scope == "profile" and options.include_images and not state.limit_reached():
                 yield from self._iter_profile_photos_and_albums(

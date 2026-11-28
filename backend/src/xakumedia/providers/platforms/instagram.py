@@ -217,8 +217,10 @@ def _best_instagram_image(item: dict[str, Any]) -> tuple[str | None, int | None,
     return best_url, best_w, best_h
 
 
-def _is_static_music_photo(item: dict[str, Any]) -> bool:
-    """Return True when a 1fps music-backed image wears a dummy video manifest."""
+def _is_static_music_photo(item: dict[str, Any], *, is_story: bool = False) -> bool:
+    """Return True when a 1fps music-backed feed photo wears a dummy video manifest."""
+    if is_story or str(item.get("product_type") or "").lower() == "story":
+        return False
     manifest = item.get("video_dash_manifest")
     if not isinstance(manifest, str) or not manifest:
         return False
@@ -230,9 +232,11 @@ def _is_static_music_photo(item: dict[str, Any]) -> bool:
 
 def _extract_instagram_video_formats(
     item: dict[str, Any],
+    *,
+    is_story: bool = False,
 ) -> tuple[list[MediaFormatInfo], float | None]:
     """Return all DASH (up to 1080p) and progressive MP4 streams for one IG video slide."""
-    if _is_static_music_photo(item):
+    if _is_static_music_photo(item, is_story=is_story):
         return [], None
 
     formats: list[MediaFormatInfo] = []
@@ -375,6 +379,7 @@ class InstagramProvider(GalleryDlProvider):
         options: ScanOptions,
         post_url_override: str | None = None,
         title_fallback: str | None = None,
+        is_story: bool = False,
     ) -> Post | None:
         raw_pk = str(post_dict.get("pk") or post_dict.get("id") or "")
         post_pk = raw_pk.split("_", 1)[0]
@@ -430,7 +435,10 @@ class InstagramProvider(GalleryDlProvider):
                 else pub_ts
             )
             thumb_url, thumb_w, thumb_h = _best_instagram_image(slide)
-            video_formats, duration = _extract_instagram_video_formats(slide)
+            slide_is_story = is_story or product_type.lower() == "story"
+            video_formats, duration = _extract_instagram_video_formats(
+                slide, is_story=slide_is_story
+            )
 
             if video_formats:
                 if not options.include_videos:
@@ -731,6 +739,7 @@ class InstagramProvider(GalleryDlProvider):
                     fallback_author=username,
                     options=options,
                     post_url_override=f"https://www.instagram.com/stories/{username}/{pk}/",
+                    is_story=True,
                 )
                 if post is None:
                     continue
@@ -793,6 +802,7 @@ class InstagramProvider(GalleryDlProvider):
                         options=options,
                         post_url_override=hl_url,
                         title_fallback=hl_title,
+                        is_story=True,
                     )
                     if post is None:
                         continue

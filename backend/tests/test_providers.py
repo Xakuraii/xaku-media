@@ -1557,7 +1557,31 @@ def test_instagram_url_parsing_and_profile_discovery(
                                     }
                                 ]
                             },
-                        }
+                        },
+                        {
+                            "pk": "81",
+                            "product_type": "story",
+                            "taken_at": 1700000008,
+                            "video_duration": 15.0,
+                            "video_dash_manifest": (
+                                '<MPD><Representation frameRate="16384/16384"/></MPD>'
+                            ),
+                            "video_versions": [
+                                {
+                                    "type": 101,
+                                    "url": "https://ig.cdn/hl_music_story.mp4",
+                                }
+                            ],
+                            "image_versions2": {
+                                "candidates": [
+                                    {
+                                        "url": "https://ig.cdn/hl_music_story.jpg",
+                                        "width": 720,
+                                        "height": 1280,
+                                    }
+                                ]
+                            },
+                        },
                     ],
                 }
             ]
@@ -1582,9 +1606,10 @@ def test_instagram_url_parsing_and_profile_discovery(
     assert hydrated_calls == ["REEL_ONLY", "REEL_BROKEN", "REEL_BROKEN"]
     assert any("REEL_BROKEN" in w for w in warnings)
     post_ids = [p.provider_post_id for p in posts]
-    assert post_ids == ["1", "2", "3", "4", "5", "70", "80"]
-    # Static 1fps music post stays an IMAGE
+    assert post_ids == ["1", "2", "3", "4", "5", "70", "80", "81"]
+    # Static 1fps music feed post stays an IMAGE, while music-backed Highlight stays a VIDEO
     assert posts[2].media_items[0].media_type == MediaType.IMAGE
+    assert posts[7].media_items[0].media_type == MediaType.VIDEO
     # Reels-only video exposes 1080p DASH + audio + 720p muxed preview URL
     reel_only_item = posts[4].media_items[0]
     assert reel_only_item.media_type == MediaType.VIDEO
@@ -1929,4 +1954,213 @@ def test_tiktok_capabilities_and_profile_slideshow_fallback(
     )
     assert len(posts) == 1
     assert posts[0].page_url == "https://www.tiktok.com/@creator/video/777"
+
+
+def test_facebook_story_highlights_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+
+    from xakumedia.providers.platforms.facebook import (
+        FacebookProvider,
+        _extract_highlight_bucket_ids,
+        _parse_facebook_url,
+    )
+
+    st_target = _parse_facebook_url("https://www.facebook.com/stories/9876543210/")
+    assert st_target.scope == "stories" and st_target.video_id == "9876543210"
+
+    profile_html = (
+        '"DTSGInitialData",[],{"token":"dtsg"}'
+        '"LSD",[],{"token":"lsd"}'
+        '"userID":"61580886670213"'
+        '"adp_ProfileCometTimelineListViewRootQueryRelayPreloader_123",'
+        '"queryID":"29875146502090540","variables":{"userID":"61580886670213","scale":1},'
+        '"queryName":"ProfileCometTimelineListViewRootQuery"'
+        '"story_bucket":{"nodes":[{"id":"111222333"}]}'
+    )
+    timeline_payload = {
+        "data": {
+            "user": {
+                "id": "61580886670213",
+                "highlight_units_section": {
+                    "featured_highlights": {
+                        "edges": [
+                            {"node": {"__typename": "HighlightStoryBucket", "id": "444555666"}}
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    bucket_ids = _extract_highlight_bucket_ids(
+        profile_html, [timeline_payload], exclude_ids={"61580886670213"}
+    )
+    assert bucket_ids == ["111222333", "444555666"]
+
+    # StoryHighlightContainer inside ProfileTileViewFeaturedHighlightsRenderer must not leak
+    # its cover_card media ID as a fake bucket ID.
+    featured_tile_payload = {
+        "__typename": "ProfileTileViewFeaturedHighlightsRenderer",
+        "view": {
+            "profile_tile_items": {
+                "edges": [
+                    {
+                        "node": {
+                            "__typename": "ProfileTileItem",
+                            "node": {
+                                "__typename": "StoryHighlightContainer",
+                                "id": "2288669021575524",
+                                "cover_card": {
+                                    "attachments": [
+                                        {
+                                            "media": {
+                                                "__typename": "Photo",
+                                                "id": "801871782241475",
+                                            }
+                                        }
+                                    ]
+                                },
+                            },
+                        }
+                    }
+                ]
+            }
+        },
+    }
+    assert _extract_highlight_bucket_ids("", [featured_tile_payload]) == ["2288669021575524"]
+
+    mpd_hl = (
+        '<MPD mediaPresentationDuration="PT6S"><Period>'
+        '<AdaptationSet contentType="video"><Representation codecs="avc1" width="720" '
+        'height="1280" FBQualityLabel="720p">'
+        "<BaseURL>https://fb.cdn/hl_vid.mp4</BaseURL></Representation></AdaptationSet>"
+        '<AdaptationSet contentType="audio"><Representation codecs="mp4a.40.5">'
+        "<BaseURL>https://fb.cdn/hl_vid.m4a</BaseURL></Representation></AdaptationSet>"
+        "</Period></MPD>"
+    )
+    bucket_story_payload = json.dumps(
+        {
+            "data": {
+                "bucket": {
+                    "id": "444555666",
+                    "story_bucket_owner": {"id": "61580886670213", "name": "AliceFB"},
+                    "unified_stories": {
+                        "edges": [
+                            {
+                                "node": {
+                                    "id": "story_v1",
+                                    "attachments": [
+                                        {
+                                            "media": {
+                                                "__typename": "Video",
+                                                "id": "99001122",
+                                                "videoDeliveryLegacyFields": {
+                                                    "dash_manifest_xml_string": mpd_hl
+                                                },
+                                            }
+                                        }
+                                    ],
+                                }
+                            },
+                            {
+                                "node": {
+                                    "id": "story_p1",
+                                    "attachments": [
+                                        {
+                                            "media": {
+                                                "__typename": "Photo",
+                                                "id": "88007766",
+                                                "image": {
+                                                    "uri": "https://fb.cdn/hl_pic.jpg",
+                                                    "width": 1080,
+                                                    "height": 1920,
+                                                },
+                                            }
+                                        }
+                                    ],
+                                }
+                            },
+                        ]
+                    },
+                }
+            }
+        }
+    )
+
+    class _FakeFbExtractor:
+        def request(self, url: str, method: str = "GET", fatal: bool = True, **kwargs):
+            del fatal
+            if "api/graphql" in url:
+                friendly = (kwargs.get("data") or {}).get("fb_api_req_friendly_name")
+                if friendly == "ProfileCometTimelineListViewRootQuery":
+                    return SimpleNamespace(
+                        status_code=200, text=json.dumps(timeline_payload), url=url
+                    )
+                if friendly == "StoriesSuspenseContentPaneRootWithEntryPointQuery":
+                    return SimpleNamespace(
+                        status_code=200, text=bucket_story_payload, url=url
+                    )
+            if url == "https://www.facebook.com/61580886670213":
+                return SimpleNamespace(status_code=200, text=profile_html, url=url)
+            if url.startswith("https://www.facebook.com/stories/"):
+                return SimpleNamespace(
+                    status_code=200,
+                    text='"DTSGInitialData",[],{"token":"dtsg"}"LSD",[],{"token":"lsd"}',
+                    url=url,
+                )
+            return SimpleNamespace(status_code=200, text="<html></html>", url=url)
+
+    monkeypatch.setattr(FacebookProvider, "_prepare_extractor", lambda self, u: _FakeFbExtractor())
+    monkeypatch.setattr(
+        FacebookProvider, "_iter_paginated_reels", lambda *a, **kw: iter(())
+    )
+    monkeypatch.setattr(
+        FacebookProvider, "_iter_paginated_videos", lambda *a, **kw: iter(())
+    )
+    monkeypatch.setattr(
+        FacebookProvider, "_iter_profile_photos_and_albums", lambda *a, **kw: iter(())
+    )
+
+    posts = list(
+        FacebookProvider().iter_posts(
+            "https://www.facebook.com/61580886670213",
+            ScanOptions(include_images=True, include_videos=True),
+            threading.Event(),
+        )
+    )
+    assert [p.provider_post_id for p in posts] == ["99001122", "88007766"]
+    assert posts[0].media_items[0].media_type == MediaType.VIDEO
+    assert posts[1].media_items[0].media_type == MediaType.IMAGE
+    assert posts[0].author == "AliceFB"
+
+    # /stories/highlights/<id> URLs must target the highlight bucket ID, not "highlights",
+    # and unrelated buckets in the navigation tray must not leak into results.
+    from xakumedia.providers.platforms.facebook import _collect_story_nodes_from_payloads
+
+    hl_target = _parse_facebook_url("https://www.facebook.com/stories/highlights/444555666")
+    assert hl_target.scope == "stories"
+    assert hl_target.video_id == "444555666"
+
+    nav_tray = {
+        "data": {
+            "other_bucket": {
+                "__isStoryBucket": "DirectMessageThreadBucket",
+                "id": "999999999",
+                "story_bucket_owner": {"id": "777", "name": "Stranger"},
+                "unified_stories": {"edges": [{"node": {"id": "other_card"}}]},
+            },
+            "target_bucket": {
+                "__isStoryBucket": "DirectMessageThreadBucket",
+                "id": "444555666",
+                "story_bucket_owner": {"id": "61580886670213", "name": "AliceFB"},
+                "unified_stories": {"edges": [{"node": {"id": "target_card"}}]},
+            },
+        }
+    }
+    filtered_nodes, filtered_owner = _collect_story_nodes_from_payloads(
+        [nav_tray], target_bucket_id="444555666"
+    )
+    assert [n["id"] for n in filtered_nodes] == ["target_card"]
+    assert filtered_owner == "AliceFB"
+
+
 

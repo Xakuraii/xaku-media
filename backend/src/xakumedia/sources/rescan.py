@@ -14,6 +14,7 @@ from ..core.logging import get_logger
 from ..db import default_repository
 from ..db.connection import get_db_session
 from ..db.repository import MediaRepository
+from ..downloader.library import canonical_single_post_key, url_asset_tokens
 from ..exceptions.base import (
     MediaUnavailableError,
     NetworkTimeoutError,
@@ -346,14 +347,26 @@ def incremental_rescan_source(
     new_items: list[MediaItem] = []
     existing_items: list[MediaItem] = []
 
+    known_tokens: set[str] = set()
+    known_post_keys: set[str] = set()
+    for known in known_urls:
+        known_tokens.update(url_asset_tokens(known))
+        pk = canonical_single_post_key(known)
+        if pk:
+            known_post_keys.add(pk)
+
     source_root = source.url.rstrip("/")
     for item in discovered_items:
         item_source = (item.source_url or "").rstrip("/")
         item_post = (item.post_url or "").rstrip("/")
+        item_tokens = url_asset_tokens(item.original_url)
+        item_pk = canonical_single_post_key(item.post_url)
         is_known = (
             item.original_url in known_urls
             or (bool(item_source) and item_source != source_root and item.source_url in known_urls)
             or (bool(item_post) and item_post != source_root and item.post_url in known_urls)
+            or bool(item_tokens & known_tokens)
+            or (item_pk is not None and item_pk in known_post_keys)
             or item.library_status in ("downloaded", "skipped")
         )
         if is_known:

@@ -348,3 +348,308 @@ def test_scan_download_library_and_actions(isolated_download_dir: Path) -> None:
         )
     )
     assert bad_del.error is not None
+
+
+def test_rescan_matches_rotated_cdn_urls_and_legacy_ids_across_platforms(
+    isolated_download_dir: Path,
+) -> None:
+    """Items downloaded/skipped before must match even when CDN tokens or provider IDs shift."""
+    # 1. Instagram legacy gallery-dl manifest (filename stem pid + expired query + /p/ vs /reel/)
+    ig_legacy_img = MediaItem(
+        id="old-ig-img",
+        source_url="https://www.instagram.com/alice/posts/",
+        post_url="https://www.instagram.com/p/DfRc1F8kxHr/",
+        original_url=(
+            "https://instagram.fpnh11-2.fna.fbcdn.net/v/t51.82787-15/"
+            "876406269_18237574276322020_2732296661468882050_n.jpg?stp=dst&_nc_ohc=OLD1&oe=AAA"
+        ),
+        media_type=MediaType.IMAGE,
+        author="alice",
+        provider="gallerydl",
+        provider_media_id="876406269_18237574276322020_2732296661468882050_n:4",
+        attachment_index=3,
+        metadata_extra={"extractor": "instagram"},
+    )
+    ig_legacy_vid = MediaItem(
+        id="old-ig-vid",
+        source_url="https://www.instagram.com/alice/posts/",
+        post_url="https://www.instagram.com/reel/DY4nfaDBtdO/",
+        original_url=(
+            "https://instagram.fpnh11-1.fna.fbcdn.net/o1/v/t2/f2/m86/"
+            "AQOy_WmEA5IGZ_C0Bhvod2dc_LEGACY_TOKEN.mp4?efg=OLD&_nc_ht=1"
+        ),
+        media_type=MediaType.VIDEO,
+        author="alice",
+        provider="gallerydl",
+        provider_media_id="AQOy_WmEA5IGZ_C0Bhvod2dc_LEGACY_TOKEN:1",
+        attachment_index=0,
+        metadata_extra={"extractor": "instagram"},
+    )
+    record_skipped([ig_legacy_img])
+    vid_path = destination_directory(ig_legacy_vid) / "alice-vdo-1.mp4"
+    vid_path.parent.mkdir(parents=True, exist_ok=True)
+    vid_path.write_bytes(b"mp4")
+    record_download(ig_legacy_vid, vid_path)
+
+    # New v1.4.0 scan returns Instagram PK IDs, rotated CDN edge/query, and 1080p DASH primary URL.
+    from xakumedia.models.media import MediaFormatInfo
+
+    ig_new_img = MediaItem(
+        id="new-ig-img",
+        source_url="https://www.instagram.com/alice/",
+        post_url="https://www.instagram.com/p/DfRc1F8kxHr/",
+        original_url=(
+            "https://instagram.fpnh11-9.fna.fbcdn.net/v/t51.82787-15/"
+            "876406269_18237574276322020_2732296661468882050_n.jpg?stp=dst&_nc_ohc=NEW9&oe=ZZZ"
+        ),
+        media_type=MediaType.IMAGE,
+        author="alice",
+        provider="gallerydl",
+        provider_media_id="4023039570807342430",
+        attachment_index=0,
+        metadata_extra={"extractor": "instagram"},
+    )
+    ig_new_vid = MediaItem(
+        id="new-ig-vid",
+        source_url="https://www.instagram.com/alice/",
+        post_url="https://www.instagram.com/p/DY4nfaDBtdO/",
+        original_url="https://instagram.fpnh11-9.fna.fbcdn.net/v/t16/DASH_1080.mp4?oe=ZZZ",
+        media_type=MediaType.VIDEO,
+        author="alice",
+        provider="gallerydl",
+        provider_media_id="3999999999999999999",
+        attachment_index=0,
+        available_formats=[
+            MediaFormatInfo(
+                format_id="1080p-vp9",
+                url="https://instagram.fpnh11-9.fna.fbcdn.net/v/t16/DASH_1080.mp4?oe=ZZZ",
+                video_codec="vp9",
+                requires_merge=True,
+            ),
+            MediaFormatInfo(
+                format_id="720p-progressive",
+                url=(
+                    "https://instagram.fpnh11-9.fna.fbcdn.net/o1/v/t2/f2/m86/"
+                    "AQOy_WmEA5IGZ_C0Bhvod2dc_LEGACY_TOKEN.mp4?efg=NEW"
+                ),
+                video_codec="h264",
+                audio_codec="aac",
+            ),
+        ],
+        metadata_extra={"extractor": "instagram"},
+    )
+
+    # 2. Facebook album vs photos_by re-index (:7 vs :1 on same unique fbid)
+    fb_old = MediaItem(
+        id="fb-old",
+        source_url="https://www.facebook.com/page1",
+        post_url="https://www.facebook.com/photo/?fbid=122098891323029555&set=pb.615",
+        original_url="https://scontent.fpnh11-1.fna.fbcdn.net/v/t39/550091612_ABC.jpg?oe=OLD",
+        media_type=MediaType.IMAGE,
+        author="page1",
+        provider="gallerydl",
+        provider_media_id="122098891323029555:7",
+        attachment_index=6,
+        metadata_extra={"extractor": "facebook"},
+    )
+    fb_file = destination_directory(fb_old) / "page1-img-1.jpg"
+    fb_file.parent.mkdir(parents=True, exist_ok=True)
+    fb_file.write_bytes(b"jpg")
+    record_download(fb_old, fb_file)
+
+    fb_new = MediaItem(
+        id="fb-new",
+        source_url="https://www.facebook.com/page1",
+        post_url="https://www.facebook.com/photo/?fbid=122098891323029555&set=a.999",
+        original_url="https://scontent.fpnh11-3.fna.fbcdn.net/v/t39/550091612_ABC.jpg?oe=NEW",
+        media_type=MediaType.IMAGE,
+        author="page1",
+        provider="gallerydl",
+        provider_media_id="122098891323029555:1",
+        attachment_index=0,
+        metadata_extra={"extractor": "facebook"},
+    )
+
+    # 3. X legacy filename stem -> XProvider numeric media_id
+    x_old = MediaItem(
+        id="x-old",
+        source_url="https://x.com/alice/media",
+        post_url="https://x.com/alice/media",
+        original_url="https://pbs.twimg.com/media/HSSkEleaEAAZ1LT?format=jpg&name=orig",
+        media_type=MediaType.IMAGE,
+        author="alice",
+        provider="gallerydl",
+        provider_media_id="HSSkEleaEAAZ1LT:1",
+        attachment_index=0,
+        metadata_extra={"extractor": "twitter"},
+    )
+    record_skipped([x_old])
+    x_new = MediaItem(
+        id="x-new",
+        source_url="https://x.com/alice",
+        post_url="https://x.com/alice/status/2125000000000",
+        original_url="https://pbs.twimg.com/media/HSSkEleaEAAZ1LT?format=jpg&name=orig",
+        media_type=MediaType.IMAGE,
+        author="alice",
+        provider="gallerydl",
+        provider_media_id="2125000000001",
+        attachment_index=0,
+        metadata_extra={"extractor": "twitter"},
+    )
+
+    # 4. TikTok slideshow isolation: skipping slide 0 must NOT mark slide 1!
+    tt_slide_0 = MediaItem(
+        id="tt-0",
+        source_url="https://www.tiktok.com/@creator",
+        post_url="https://www.tiktok.com/@creator/video/7711600766485662994",
+        original_url="https://p16.tiktokcdn.com/tos/slide_unique_zero_0001.jpeg?x-expires=OLD",
+        media_type=MediaType.IMAGE,
+        author="creator",
+        provider="ytdlp",
+        provider_media_id="7711600766485662994:0",
+        attachment_index=0,
+        metadata_extra={"extractor": "TikTok"},
+    )
+    tt_slide_1 = MediaItem(
+        id="tt-1",
+        source_url="https://www.tiktok.com/@creator",
+        post_url="https://www.tiktok.com/@creator/video/7711600766485662994",
+        original_url="https://p16.tiktokcdn.com/tos/slide_unique_one_0002.jpeg?x-expires=OLD",
+        media_type=MediaType.IMAGE,
+        author="creator",
+        provider="ytdlp",
+        provider_media_id="7711600766485662994:1",
+        attachment_index=1,
+        metadata_extra={"extractor": "TikTok"},
+    )
+    record_skipped([tt_slide_0])
+
+    tt_slide_0_rescan = tt_slide_0.model_copy(
+        update={
+            "id": "tt-0-rescan",
+            "original_url": "https://p19.tiktokcdn.com/tos/slide_unique_zero_0001.jpeg?x-expires=NEW",
+        }
+    )
+    tt_slide_1_rescan = tt_slide_1.model_copy(
+        update={
+            "id": "tt-1-rescan",
+            "original_url": "https://p19.tiktokcdn.com/tos/slide_unique_one_0002.jpeg?x-expires=NEW",
+        }
+    )
+
+    all_new = [ig_new_img, ig_new_vid, fb_new, x_new, tt_slide_0_rescan, tt_slide_1_rescan]
+    annotate_items(all_new)
+
+    assert ig_new_img.library_status == "skipped"
+    assert ig_new_vid.library_status == "downloaded"
+    assert fb_new.library_status == "downloaded"
+    assert x_new.library_status == "skipped"
+    assert tt_slide_0_rescan.library_status == "skipped"
+    assert tt_slide_1_rescan.library_status is None
+
+    # Unskipping a legacy entry using the new scan item must clear the legacy skipped record.
+    from xakumedia.downloader.library import unskip_items
+
+    removed = unskip_items([ig_new_img])
+    assert len(removed) == 1
+    ig_new_img_check = ig_new_img.model_copy(update={"library_status": None})
+    annotate_items([ig_new_img_check])
+    assert ig_new_img_check.library_status is None
+
+
+def test_portable_manifest_matches_across_moved_child_folders_and_new_pc(
+    isolated_download_dir: Path,
+) -> None:
+    """Moved/renamed child folders and cross-PC copies must match solely from JSON manifests."""
+    import shutil
+
+    # 1. Record downloaded + skipped items under original default folder layout.
+    dl_vid = MediaItem(
+        id="mv-vid",
+        source_url="https://www.instagram.com/alice/",
+        post_url="https://www.instagram.com/p/MovVid123/",
+        original_url="https://scontent.cdninstagram.com/v/o1/AQMovUnique111.mp4?oe=OLD",
+        media_type=MediaType.VIDEO,
+        author="alice",
+        provider="instagram",
+        provider_media_id="3800000000001111",
+        attachment_index=0,
+        metadata_extra={"extractor": "instagram"},
+    )
+    skip_img = MediaItem(
+        id="mv-img",
+        source_url="https://www.instagram.com/alice/",
+        post_url="https://www.instagram.com/p/MovImg456/",
+        original_url="https://scontent.cdninstagram.com/v/t51/999888777_n.jpg?oe=OLD",
+        media_type=MediaType.IMAGE,
+        author="alice",
+        provider="instagram",
+        provider_media_id="3800000000002222",
+        attachment_index=0,
+        metadata_extra={"extractor": "instagram"},
+    )
+    vid_file = destination_directory(dl_vid) / "alice-vdo-1.mp4"
+    vid_file.parent.mkdir(parents=True, exist_ok=True)
+    vid_file.write_bytes(b"mp4")
+    record_download(dl_vid, vid_file)
+    record_skipped([skip_img])
+
+    # 2. Move the user's folders into nested custom category subfolders (breaking default paths).
+    moved_root = isolated_download_dir / "Archive" / "Favorites" / "alice_renamed"
+    moved_root.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(destination_directory(dl_vid)), str(moved_root / "ClipDump"))
+    shutil.move(str(destination_directory(skip_img)), str(moved_root / "PicDump"))
+
+    # 3. Simulate rescan on a new PC with expired CDN URLs (only JSON manifest in child folders).
+    rescan_vid = MediaItem(
+        id="new-pc-vid",
+        source_url="https://www.instagram.com/alice/",
+        post_url="https://www.instagram.com/p/MovVid123/",
+        original_url="https://instagram.xx99.fbcdn.net/v/o1/AQMovUnique111.mp4?oe=NEW_PC",
+        media_type=MediaType.VIDEO,
+        author="alice",
+        provider="instagram",
+        provider_media_id="3800000000001111",
+        attachment_index=0,
+        metadata_extra={"extractor": "instagram"},
+    )
+    rescan_img = MediaItem(
+        id="new-pc-img",
+        source_url="https://www.instagram.com/alice/",
+        post_url="https://www.instagram.com/p/MovImg456/",
+        original_url="https://instagram.xx99.fbcdn.net/v/t51/completely_different.jpg?oe=NEW",
+        media_type=MediaType.IMAGE,
+        author="alice",
+        provider="instagram",
+        provider_media_id="3800000000002222",
+        attachment_index=0,
+        metadata_extra={"extractor": "instagram"},
+    )
+    fresh_img = MediaItem(
+        id="new-pc-fresh",
+        source_url="https://www.instagram.com/alice/",
+        post_url="https://www.instagram.com/p/BrandNew789/",
+        original_url="https://instagram.xx99.fbcdn.net/v/t51/brand_new_999.jpg",
+        media_type=MediaType.IMAGE,
+        author="alice",
+        provider="instagram",
+        provider_media_id="3800000000009999",
+        attachment_index=0,
+        metadata_extra={"extractor": "instagram"},
+    )
+
+    from xakumedia.downloader.library import status_for, unskip_items
+
+    annotate_items([rescan_vid, rescan_img, fresh_img])
+    assert rescan_vid.library_status == "downloaded"
+    assert rescan_img.library_status == "skipped"
+    assert fresh_img.library_status is None
+    assert status_for(rescan_vid) == "downloaded"
+    assert status_for(rescan_img) == "skipped"
+
+    # Unskipping must find and update the moved child-folder manifest too.
+    removed = unskip_items([rescan_img])
+    assert len(removed) == 1
+    assert status_for(rescan_img) is None
+
+
