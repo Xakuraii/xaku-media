@@ -61,6 +61,9 @@ TIMELINE_ROOT_DEFAULT_DOC_ID = "29875146502090540"
 TILES_PAGINATION_QUERY_NAME = "ProfileCometTilesFeedPaginationQuery"
 TILES_PAGINATION_DEFAULT_DOC_ID = "28137111635965845"
 
+HIGHLIGHTS_VIEW_PAGINATION_QUERY_NAME = "ProfileCometFeaturedHighlightsViewPaginationQuery"
+HIGHLIGHTS_VIEW_PAGINATION_DEFAULT_DOC_ID = "28107877335503332"
+
 STORIES_CONTENT_QUERY_NAME = "StoriesSuspenseContentPaneRootWithEntryPointQuery"
 STORIES_CONTENT_DEFAULT_DOC_ID = "29556157090686900"
 
@@ -69,6 +72,7 @@ _DOC_ID_CACHE: dict[str, str] = {
     VIDEOS_PAGINATION_QUERY_NAME: VIDEOS_PAGINATION_DEFAULT_DOC_ID,
     TIMELINE_ROOT_QUERY_NAME: TIMELINE_ROOT_DEFAULT_DOC_ID,
     TILES_PAGINATION_QUERY_NAME: TILES_PAGINATION_DEFAULT_DOC_ID,
+    HIGHLIGHTS_VIEW_PAGINATION_QUERY_NAME: HIGHLIGHTS_VIEW_PAGINATION_DEFAULT_DOC_ID,
     STORIES_CONTENT_QUERY_NAME: STORIES_CONTENT_DEFAULT_DOC_ID,
 }
 
@@ -432,6 +436,28 @@ def _extract_highlight_bucket_ids(
         "buckets",
     }
 
+    non_bucket_typenames = {
+        "Photo",
+        "Video",
+        "User",
+        "Page",
+        "ProfileTileSection",
+        "ProfileTileView",
+        "ProfileTileItem",
+    }
+    skip_descend_keys = {
+        "story_bucket_owner",
+        "owner",
+        "actors",
+        "delegate_page",
+        "cover_card",
+        "first_story_to_show",
+        "attachments",
+        "media",
+        "image",
+        "viewer_image",
+    }
+
     def _walk_highlight_node(obj: Any, *, inside_bucket: bool, record) -> None:
         if isinstance(obj, list):
             for entry in obj:
@@ -445,7 +471,7 @@ def _extract_highlight_bucket_ids(
             or "__isStoryBucket" in obj
             or any(tag in typename for tag in ("Bucket", "Highlight", "Featured"))
         )
-        if now_inside:
+        if now_inside and typename not in non_bucket_typenames:
             _record(obj.get("id"))
             _record(obj.get("bucket_id"))
         raw_url = obj.get("url")
@@ -454,7 +480,7 @@ def _extract_highlight_bucket_ids(
             if m_url:
                 _record(m_url.group(1))
         for k, v in obj.items():
-            if k in ("story_bucket_owner", "owner", "actors", "delegate_page"):
+            if k in skip_descend_keys:
                 continue
             _walk_highlight_node(
                 v,
@@ -783,7 +809,9 @@ class FacebookProvider(GalleryDlProvider):
             "Referer": referer,
             "Origin": "https://www.facebook.com",
         }
-        payload = {
+        payload: dict[str, Any] = {
+            "__a": "1",
+            "__comet_req": "15",
             "fb_dtsg": fb_dtsg,
             "lsd": lsd,
             "fb_api_caller_class": "RelayModern",
@@ -792,6 +820,22 @@ class FacebookProvider(GalleryDlProvider):
             "server_timestamps": "true",
             "doc_id": doc_id,
         }
+        cookie_jar = getattr(extractor, "cookies", None)
+        if cookie_jar is not None:
+            try:
+                viewer_uid = next(
+                    (
+                        str(c.value)
+                        for c in cookie_jar
+                        if getattr(c, "name", "") == "c_user" and getattr(c, "value", "")
+                    ),
+                    None,
+                )
+                if viewer_uid:
+                    payload["av"] = viewer_uid
+                    payload["__user"] = viewer_uid
+            except Exception:
+                pass
         for attempt in range(2):
             try:
                 resp = extractor.request(
@@ -1710,81 +1754,198 @@ class FacebookProvider(GalleryDlProvider):
             exclude_ids.add(m_uid)
 
         payloads: list[Any] = []
+        for script_body in re.findall(
+            r'<script[^>]+type="application/json"[^>]*>(.*?)</script>',
+            html_text,
+            re.DOTALL,
+        ):
+            if not any(
+                k in script_body
+                for k in (
+                    "profile_tile_sections",
+                    "highlight_units_section",
+                    "StoryHighlightContainer",
+                    "ProfileTileViewFeaturedHighlightsRenderer",
+                )
+            ):
+                continue
+            try:
+                payloads.append(json.loads(script_body))
+            except Exception:
+                continue
+
+        def _find_tile_page_info(objs: list[Any]) -> tuple[bool, str | None, str | None]:
+            found_has = False
+            found_cur: str | None = None
+            found_uid: str | None = None
+
+            def _walk(node: Any) -> None:
+                nonlocal found_has, found_cur, found_uid
+                if isinstance(node, list):
+                    for item in node:
+                        _walk(item)
+                    return
+                if not isinstance(node, dict):
+                    return
+                pts = node.get("profile_tile_sections")
+                if isinstance(pts, dict):
+                    pinfo = pts.get("page_info")
+                    if isinstance(pinfo, dict) and pinfo.get("end_cursor"):
+                        found_has = bool(pinfo.get("has_next_page"))
+                        found_cur = str(pinfo.get("end_cursor"))
+                        uid_cand = node.get("id")
+                        if isinstance(uid_cand, str) and uid_cand.isdigit():
+                            found_uid = uid_cand
+                for val in node.values():
+                    _walk(val)
+
+            _walk(objs)
+            return found_has, found_cur, found_uid
+
+        def _find_highlight_hscroll_views(objs: list[Any]) -> list[tuple[str, str]]:
+            views: list[tuple[str, str]] = []
+
+            def _walk(node: Any) -> None:
+                if isinstance(node, list):
+                    for item in node:
+                        _walk(item)
+                    return
+                if not isinstance(node, dict):
+                    return
+                if node.get("__typename") == "ProfileTileViewFeaturedHighlightsRenderer":
+                    view = node.get("view")
+                    if isinstance(view, dict):
+                        vid = view.get("id")
+                        pti = view.get("profile_tile_items")
+                        pinfo = pti.get("page_info") if isinstance(pti, dict) else None
+                        if (
+                            isinstance(vid, str)
+                            and isinstance(pinfo, dict)
+                            and pinfo.get("has_next_page")
+                            and isinstance(pinfo.get("end_cursor"), str)
+                        ):
+                            views.append((vid, pinfo["end_cursor"]))
+                for val in node.values():
+                    _walk(val)
+
+            _walk(objs)
+            return views
+
         m_pre = re.search(
             r'"adp_ProfileCometTimelineListViewRootQueryRelayPreloader_[^"]+",'
             r'"queryID":"(\d+)","variables":(\{.*?\}),'
             r'"queryName":"ProfileCometTimelineListViewRootQuery"',
             clean,
         )
-        if m_pre and dtsg and lsd:
+        if dtsg and lsd:
             try:
-                variables = json.loads(m_pre.group(2))
-                raw_gql = self._graphql_post_raw(
-                    extractor,
-                    fb_dtsg=dtsg,
-                    lsd=lsd,
-                    friendly_name=TIMELINE_ROOT_QUERY_NAME,
-                    doc_id=m_pre.group(1),
-                    variables=variables,
-                    referer=profile_base,
+                variables = json.loads(m_pre.group(2)) if m_pre else {}
+                target_uid = str(variables.get("userID") or "")
+                has_next, cursor, ssr_uid = _find_tile_page_info(payloads)
+                target_uid = ssr_uid or target_uid
+
+                if not cursor and m_pre:
+                    raw_gql = self._graphql_post_raw(
+                        extractor,
+                        fb_dtsg=dtsg,
+                        lsd=lsd,
+                        friendly_name=TIMELINE_ROOT_QUERY_NAME,
+                        doc_id=m_pre.group(1),
+                        variables=variables,
+                        referer=profile_base,
+                    )
+                    if raw_gql:
+                        tl_chunks = _parse_ndjson_chunks(raw_gql)
+                        payloads.extend(tl_chunks)
+                        has_next, cursor, found_uid = _find_tile_page_info(tl_chunks)
+                        target_uid = found_uid or target_uid
+
+                gk_key = (
+                    "__relay_internal__pv__"
+                    "ProfileCometFeaturedHighlightsPortraitAspectRatioGKrelayprovider"
                 )
-                if raw_gql:
-                    tl_chunks = _parse_ndjson_chunks(raw_gql)
-                    payloads.extend(tl_chunks)
-                    # Paginate profile_tile_sections when Featured Highlights sit past tile 2.
-                    target_uid = str(variables.get("userID") or "")
+                tiles_doc_id = _resolve_doc_id_from_bundles(clean, TILES_PAGINATION_QUERY_NAME)
+                for _ in range(8):
+                    if not has_next or not cursor or not target_uid or cancel_event.is_set():
+                        break
+                    tile_raw = self._graphql_post_raw(
+                        extractor,
+                        fb_dtsg=dtsg,
+                        lsd=lsd,
+                        friendly_name=TILES_PAGINATION_QUERY_NAME,
+                        doc_id=tiles_doc_id,
+                        variables={
+                            "count": 4,
+                            "cursor": cursor,
+                            "id": target_uid,
+                            "previousProfileId": None,
+                            "renderLocation": None,
+                            "scale": 1,
+                            gk_key: False,
+                        },
+                        referer=profile_base,
+                    )
+                    if not tile_raw:
+                        break
+                    tile_chunks = _parse_ndjson_chunks(tile_raw)
+                    payloads.extend(tile_chunks)
+                    next_has, next_cursor, _ = _find_tile_page_info(tile_chunks)
+                    if not next_cursor or next_cursor == cursor:
+                        break
+                    cursor = next_cursor
+                    has_next = next_has
 
-                    def _tile_page_info(
-                        chunks: list[Any], root_key: str
-                    ) -> tuple[bool, str | None, str | None]:
-                        for ch in chunks:
-                            if not isinstance(ch, dict):
-                                continue
-                            holder = (ch.get("data") or {}).get(root_key)
-                            if not isinstance(holder, dict):
-                                continue
-                            pts = holder.get("profile_tile_sections")
-                            pinfo = pts.get("page_info") if isinstance(pts, dict) else None
-                            if isinstance(pinfo, dict):
-                                hid = str(holder.get("id") or "") or None
-                                return (
-                                    bool(pinfo.get("has_next_page")),
-                                    pinfo.get("end_cursor"),
-                                    hid,
-                                )
-                        return False, None, None
-
-                    has_next, cursor, found_uid = _tile_page_info(tl_chunks, "user")
-                    target_uid = found_uid or target_uid
-                    tiles_doc_id = _resolve_doc_id_from_bundles(clean, TILES_PAGINATION_QUERY_NAME)
-                    for _ in range(6):
-                        if not has_next or not cursor or not target_uid or cancel_event.is_set():
+                # Paginate horizontal Featured Highlights carousel when >3 highlights exist.
+                hscroll_doc_id = _resolve_doc_id_from_bundles(
+                    clean, HIGHLIGHTS_VIEW_PAGINATION_QUERY_NAME
+                )
+                for view_id, h_cursor in _find_highlight_hscroll_views(payloads):
+                    cur_h: str | None = h_cursor
+                    for _ in range(5):
+                        if not cur_h or cancel_event.is_set():
                             break
-                        tile_raw = self._graphql_post_raw(
+                        h_raw = self._graphql_post_raw(
                             extractor,
                             fb_dtsg=dtsg,
                             lsd=lsd,
-                            friendly_name=TILES_PAGINATION_QUERY_NAME,
-                            doc_id=tiles_doc_id,
+                            friendly_name=HIGHLIGHTS_VIEW_PAGINATION_QUERY_NAME,
+                            doc_id=hscroll_doc_id,
                             variables={
-                                "count": 4,
-                                "cursor": cursor,
-                                "id": target_uid,
-                                "previousProfileId": None,
-                                "renderLocation": "timeline",
+                                "count": 10,
+                                "cursor": cur_h,
+                                "id": view_id,
                                 "scale": 1,
+                                gk_key: False,
                             },
                             referer=profile_base,
                         )
-                        if not tile_raw:
+                        if not h_raw:
                             break
-                        tile_chunks = _parse_ndjson_chunks(tile_raw)
-                        payloads.extend(tile_chunks)
-                        next_has, next_cursor, _ = _tile_page_info(tile_chunks, "node")
-                        if not next_cursor or next_cursor == cursor:
+                        h_chunks = _parse_ndjson_chunks(h_raw)
+                        payloads.extend(h_chunks)
+                        next_h: str | None = None
+                        for hc in h_chunks:
+                            node = (
+                                (hc.get("data") or {}).get("node")
+                                if isinstance(hc, dict)
+                                else None
+                            )
+                            pti = (
+                                node.get("profile_tile_items")
+                                if isinstance(node, dict)
+                                else None
+                            )
+                            pinfo = pti.get("page_info") if isinstance(pti, dict) else None
+                            if (
+                                isinstance(pinfo, dict)
+                                and pinfo.get("has_next_page")
+                                and isinstance(pinfo.get("end_cursor"), str)
+                            ):
+                                next_h = pinfo["end_cursor"]
+                                break
+                        if not next_h or next_h == cur_h:
                             break
-                        cursor = next_cursor
-                        has_next = next_has
+                        cur_h = next_h
             except Exception:
                 pass
 

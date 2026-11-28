@@ -1996,6 +1996,38 @@ def test_facebook_story_highlights_discovery(monkeypatch: pytest.MonkeyPatch) ->
     )
     assert bucket_ids == ["111222333", "444555666"]
 
+    # StoryHighlightContainer inside ProfileTileViewFeaturedHighlightsRenderer must not leak
+    # its cover_card media ID as a fake bucket ID.
+    featured_tile_payload = {
+        "__typename": "ProfileTileViewFeaturedHighlightsRenderer",
+        "view": {
+            "profile_tile_items": {
+                "edges": [
+                    {
+                        "node": {
+                            "__typename": "ProfileTileItem",
+                            "node": {
+                                "__typename": "StoryHighlightContainer",
+                                "id": "2288669021575524",
+                                "cover_card": {
+                                    "attachments": [
+                                        {
+                                            "media": {
+                                                "__typename": "Photo",
+                                                "id": "801871782241475",
+                                            }
+                                        }
+                                    ]
+                                },
+                            },
+                        }
+                    }
+                ]
+            }
+        },
+    }
+    assert _extract_highlight_bucket_ids("", [featured_tile_payload]) == ["2288669021575524"]
+
     mpd_hl = (
         '<MPD mediaPresentationDuration="PT6S"><Period>'
         '<AdaptationSet contentType="video"><Representation codecs="avc1" width="720" '
