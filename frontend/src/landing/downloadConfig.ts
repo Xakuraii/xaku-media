@@ -33,14 +33,14 @@ export const RELEASE_CONFIG: ReleaseAssetInfo = {
   installer: {
     filename: "XakuMedia-Setup-1.5.0.exe",
     sizeFormatted: "171 MB",
-    sizeBytes: 179675405,
+    sizeBytes: 179690580,
     downloadUrl:
       "https://github.com/Xakuraii/xaku-media/releases/download/v1.5.0/XakuMedia-Setup-1.5.0.exe",
   },
   portable: {
     filename: "XakuMedia-Portable-1.5.0.exe",
     sizeFormatted: "151 MB",
-    sizeBytes: 158797410,
+    sizeBytes: 158798832,
     downloadUrl:
       "https://github.com/Xakuraii/xaku-media/releases/download/v1.5.0/XakuMedia-Portable-1.5.0.exe",
   },
